@@ -1,0 +1,85 @@
+<h2>Секция дизайна: Интеграция с Bitrix24</h2>
+<p class="subtitle">Локальное OAuth-приложение. Методы сверены с официальной документацией.</p>
+
+<div class="mockup">
+  <div class="mockup-header">Реальные методы Bitrix24 REST API, которые будем использовать</div>
+  <div class="mockup-body" style="padding:20px;font-family:monospace;font-size:13px;line-height:1.7;background:#1a1a1a;color:#e0e0e0;">
+<pre style="margin:0;white-space:pre;overflow-x:auto;">
+<span style="color:#7cbb5b;">// Создание сущностей (универсальный метод, не устаревший)</span>
+crm.item.add          → {entityTypeId: 1=Лид, 2=Сделка, 3=Контакт, 4=Компания}
+
+<span style="color:#7cbb5b;">// Запись переписки в таймлайн карточки (преимущество над Wazzup!)</span>
+crm.timeline.comment.add  → {ENTITY_TYPE:"deal", ENTITY_ID:123, COMMENT:"текст",
+                              FILES:[["name.jpg","base64..."]]}
+
+<span style="color:#7cbb5b;">// Подписка на события CRM</span>
+event.bind            → {event:"onCrmDealAdd", handler:"https://наш-домен/webhook/b24"}
+
+<span style="color:#7cbb5b;">// Поиск существующего клиента по номеру/имени</span>
+crm.duplicate.findbyComm  → поиск по телефону/email
+crm.contact.list / crm.deal.list
+
+<span style="color:#7cbb5b;">// Уведомления менеджеру (чат-бот Bitrix24)</span>
+im.message.add        → отправка в чат с менеджером
+
+<span style="color:#7cbb5b;">// OAuth-приложение</span>
+<input .../oauth/authorize>  → код → обмен на access_token + refresh_token
+                            → refresh каждые ~30 дней автоматически
+</pre>
+  </div>
+</div>
+
+<div style="margin-top:20px;">
+  <h3>Что даёт локальное OAuth-приложение</h3>
+  <div class="pros-cons">
+    <div class="pros"><h4>Получаем</h4><ul>
+      <li><strong>Placement</strong> — вкладка/виджет в карточке сделки и контакта (iFrame нашего Web UI)</li>
+      <li><strong>event.bind</strong> — сервер сам шлёт нам события (создание сделки и т.д.)</li>
+      <li><strong>Чат-бот</strong> — уведомления менеджерам в мессенджер Bitrix24</li>
+      <li>REST-вызовы от имени приложения (не конкретного юзера)</li>
+      <li>Скоупы прав (crm, im, placement)</li>
+    </ul></div>
+    <div class="cons"><h4>Что нужно реализовать</h4><ul>
+      <li>OAuth flow (authorize → token → refresh)</li>
+      <li>Хранение/обновление токенов в БД</li>
+      <li>Placement handler (URL, который Bitrix24 открывает в iFrame)</li>
+      <li>Установка требует прав администратора B24</li>
+    </ul></div>
+  </div>
+</div>
+
+<div style="margin-top:20px;">
+  <h3>Два режима встраивания чата в карточку</h3>
+  <div class="split">
+    <div class="mockup">
+      <div class="mockup-header">Вариант A: Вкладка в карточке сделки (Placement)</div>
+      <div class="mockup-body" style="padding:16px;background:#222;">
+        <div style="background:#333;padding:8px;border-radius:4px;margin-bottom:8px;font-size:12px;">Сделка #123 — Иван Петров</div>
+        <div style="display:flex;gap:4px;margin-bottom:12px;font-size:11px;">
+          <span style="background:#444;padding:4px 8px;border-radius:3px;">Детали</span>
+          <span style="background:#2d5a2d;padding:4px 8px;border-radius:3px;color:#7cbb5b;">💬 Telegram</span>
+          <span style="background:#444;padding:4px 8px;border-radius:3px;">Документы</span>
+        </div>
+        <div style="background:#1a1a1a;border-radius:4px;padding:10px;height:140px;font-size:11px;display:flex;flex-direction:column;justify-content:flex-end;">
+          <div style="margin-bottom:6px;">👤 Когда отправите заказ?</div>
+          <div style="margin-bottom:6px;text-align:right;color:#7cbb5b;">Завтра до 14:00 ✓</div>
+          <div style="background:#333;border-radius:6px;padding:4px 8px;">Введите сообщение...</div>
+        </div>
+      </div>
+    </div>
+    <div class="mockup">
+      <div class="mockup-header">Вариант B: Кнопка → открытие Web UI</div>
+      <div class="mockup-body" style="padding:16px;background:#222;">
+        <div style="background:#333;padding:8px;border-radius:4px;margin-bottom:8px;font-size:12px;">Сделка #123 — Иван Петров</div>
+        <div style="background:#1a1a1a;border-radius:4px;padding:10px;height:140px;font-size:11px;display:flex;align-items:center;justify-content:center;">
+          <button style="background:#2d5a2d;color:#7cbb5b;border:none;padding:10px 16px;border-radius:6px;cursor:pointer;font-size:13px;">💬 Открыть чат Telegram</button>
+        </div>
+        <p style="font-size:10px;color:#888;text-align:center;margin-top:8px;">Откроется отдельное окно/вкладка нашего Web UI с этим диалогом</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p style="margin-top:20px;padding:14px;background:var(--bg-secondary);border-radius:8px;font-size:14px;">
+  <strong>Рекомендую Вариант A (вкладка-Placement).</strong> Менеджер не покидает карточку сделки — чат встроен как iFrame. Это максимально повторяет UX Wazzup и удобнее. Вариант B проще, но требует переключения контекста.
+</p>

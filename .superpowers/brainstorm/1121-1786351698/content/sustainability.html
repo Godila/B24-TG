@@ -1,0 +1,79 @@
+<h2>F sustainability-анализ: где реально узкое место?</h2>
+<p class="subtitle">Честная оценка нагрузки и единственного слабого места архитектуры.</p>
+
+<div class="mockup">
+  <div class="mockup-header">Где реальная нагрузка vs пропускная способность</div>
+  <div class="mockup-body" style="padding:20px;font-family:monospace;font-size:12px;line-height:1.8;background:#1a1a1a;color:#e0e0e0;">
+<pre style="margin:0;white-space:pre;overflow-x:auto;">
+УЗКОЕ МЕСТО              ПРОПУСКНАЯ СПОСОБНОСТЬ     РЕАЛЬНАЯ НАГРУЗКА
+─────────────────────────────────────────────────────────────────────
+FastAPI (HTTP)           ~5 000–25 000 RPS/ядро    &lt; 50 RPS  ✓✓✓ запас x100
+Postgres                 тысячи TX/сек              десятки/сек ✓✓✓
+Redis                    ~100k ops/сек              десятки/сек ✓✓✓
+Telethon (MTProto)       1 аккаунт = ~30 сооб/сек   depends     ✓
+  └─ <span style="color:#e0a04b;">это и есть реальный потолок системы</span>
+</pre>
+  </div>
+</div>
+
+<h3 style="margin-top:24px;">Единственное спорное решение: всё в одном процессе</h3>
+<p class="subtitle">Telethon + FastAPI + outbox-воркер в одном контейнере/процессе. Работает, но...<br>Сравните два варианта:</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">Как сейчас: 1 процесс (co-located)</div>
+    <div class="mockup-body" style="padding:16px;font-family:monospace;font-size:11px;line-height:1.7;background:#1a1a1a;color:#e0e0e0;">
+<pre style="margin:0;white-space:pre;overflow-x:auto;">
+┌─────────────────────────────────┐
+│  app (один asyncio event loop)   │
+│                                  │
+│  ┌─────────┐  ┌──────────────┐   │
+│  │ FastAPI │  │   Telethon   │   │
+│  │  HTTP   │  │  MTProto sess│   │
+│  └─────────┘  └──────────────┘   │
+│  ┌────────────────────────────┐  │
+│  │  outbox воркер (throttle)  │  │
+│  └────────────────────────────┘  │
+│                                  │
+│  <span style="color:#e0a04b;">общий event loop</span>                │
+└──────────────────────────────────┘
+
+<span style="color:#7cbb5b;">+ проще деплой (1 контейнер)</span>
+<span style="color:#7cbb5b;">+ проще отладка</span>
+<span style="color:#e0a04b;">− блокировка event loop = падает всё</span>
+<span style="color:#e0a04b;">− краш Telethon = краш API</span>
+<span style="color:#e0a04b;">− рост памяти в одном процессе</span>
+</pre>
+    </div>
+  </div>
+  <div class="mockup">
+    <div class="mockup-header">Рекомендация: 2 процесса (isolated)</div>
+    <div class="mockup-body" style="padding:16px;font-family:monospace;font-size:11px;line-height:1.7;background:#1a1a1a;color:#e0e0e0;">
+<pre style="margin:0;white-space:pre;overflow-x-auto;">
+┌────────────────────┐  ┌────────────────────┐
+│  web (FastAPI)     │  │  bridge (Telethon) │
+│  • HTTP + placement│  │  • MTProto сессия  │
+│  • REST API        │  │  • outbox воркер   │
+│  • Web UI          │  │  • throttle        │
+└─────────┬──────────┘  └─────────┬──────────┘
+          │                       │
+          └───────────┬───────────┘
+                      ▼
+            ┌──────────────────┐
+            │  Postgres + Redis│
+            │  (общее хранилище)│
+            └──────────────────┘
+
+<span style="color:#7cbb5b;">+ изоляция сбоев (краш TG ≠ крах UI)</span>
+<span style="color:#7cbb5b;">+ независимый рестарт моста</span>
+<span style="color:#7cbb5b;">+ можно масштабировать web отдельно</span>
+<span style="color:#e0a04b;">− 2 контейнера вместо 1</span>
+<span style="color:#888;">  (всё ещё один docker-compose)</span>
+</pre>
+    </div>
+  </div>
+</div>
+
+<p style="margin-top:20px;padding:16px;background:var(--bg-secondary);border-radius:8px;font-size:14px;">
+  <strong>Вердикт:</strong> FastAPI нагрузку <strong>100% вывезет</strong> — это не вопрос, запас огромный. Реальная уязвимость — <strong>co-location Telethon с API в одном процессе</strong>. Рекомендую разделить на <code>web</code> + <code>bridge</code> (2 контейнера, общий compose) — это даёт изоляцию сбоев почти бесплатно.
+</p>

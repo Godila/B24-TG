@@ -1,0 +1,126 @@
+<h2>Секция дизайна: Деплой и эксплуатация</h2>
+<p class="subtitle">VPS + Docker Compose. Один хост, изолированные контейнеры.</p>
+
+<div class="mockup">
+  <div class="mockup-header">Топология на одном VPS (Ubuntu 22.04)</div>
+  <div class="mockup-body" style="padding:20px;font-family:monospace;font-size:12px;line-height:1.7;background:#1a1a1a;color:#e0e0e0;">
+<pre style="margin:0;white-space:pre;overflow-x:auto;">
+                   интернет
+                      │
+        ┌─────────────┴─────────────┐
+        │  :443  Nginx (reverse proxy)│  ← TLS (Let's Encrypt), статика Web UI
+        │  http→https редирект       │
+        └─────────────┬─────────────┘
+                      │
+         ┌────────────┴────────────┐
+         ▼                         ▼
+  ┌──────────────┐        ┌───────────────────┐
+  │  app (FastAPI)│        │ /webhook/b24      │  ← Bitrix24 шлёт сюда события
+  │  uvicorn:8000 │        │ /placement/card   │  ← iFrame в карточке сделки
+  │               │        │  (отдаёт Web UI)   │
+  │  • REST API   │        └───────────────────┘
+  │  • Telethon   │◀── сессия MTProto держится в этом контейнере
+  │  • outbox     │
+  │  • B24 sync   │
+  └──────┬────────┘
+         │
+   ┌─────┴──────┐
+   ▼            ▼
+┌──────┐  ┌──────────────┐
+│redis │  │  postgres    │
+│:6379 │  │  :5432       │
+│      │  │  + volume    │
+│очередь│  └──────────────┘
+│кэш   │
+└──────┘
+
+  ┌─────────────────────────────────────────┐
+  │  volumes (persistent):                  │
+  │  • pg_data/      — БД                   │
+  │  • tg_session/   — .session файл ⚠      │
+  │  • attachments/  — медиа                │
+  │  • certs/        — TLS сертификаты      │
+  └─────────────────────────────────────────┘
+</pre>
+  </div>
+</div>
+
+<div style="margin-top:20px;">
+  <h3>Структура docker-compose</h3>
+  <div class="mockup">
+    <div class="mockup-header">4 сервиса</div>
+    <div class="mockup-body" style="padding:16px;font-family:monospace;font-size:12px;line-height:1.7;background:#1a1a1a;color:#e0e0e0;">
+<pre style="margin:0;white-space:pre;overflow-x:auto;">
+services:
+  <span style="color:#7cbb5b;">app</span>          # FastAPI + Telethon + outbox-воркер (один контейнер)
+  <span style="color:#7cbb5b;">postgres</span>     # БД
+  <span style="color:#7cbb5b;">redis</span>        # очередь outbox + кэш throttler + rate-limit
+  <span style="color:#7cbb5b;">nginx</span>        # TLS-терминация + reverse proxy + статика
+</pre>
+    </div>
+  </div>
+</div>
+
+<h3 style="margin-top:20px;">Конфигурация окружения (.env)</h3>
+<div class="mockup">
+  <div class="mockup-header">Секреты и параметры — всё через env, не в коде</div>
+  <div class="mockup-body" style="padding:16px;font-family:monospace;font-size:12px;line-height:1.7;background:#1a1a1a;color:#e0e0e0;">
+<pre style="margin:0;white-space:pre;overflow-x:auto;">
+<span style="color:#888;"># Telegram (MTProto)</span>
+TG_API_ID=...               <span style="color:#888;"># с my.telegram.org</span>
+TG_API_HASH=...             <span style="color:#888;"># с my.telegram.org</span>
+TG_SESSION_PATH=/data/tg/session.session
+TG_PHONE=+7...              <span style="color:#888"># только для первого входа</span>
+
+<span style="color:#888;"># Bitrix24 OAuth</span>
+B24_PORTAL=https://xxx.bitrix24.ru
+B24_CLIENT_ID=...
+B24_CLIENT_SECRET=...
+B24_OAUTH_REDIRECT=https://наш-домен/oauth/callback
+B24_WEBHOOK_SECRET=...      <span style="color:#888"># проверка подписи входящих вебхуков</span>
+
+<span style="color:#888;"># Throttling (защита от бана)</span>
+THROTTLE_INIT_MAX=10        <span style="color:#888"># инициаций за окно</span>
+THROTTLE_INIT_WINDOW=180    <span style="color:#888"># окно в сек (3 мин)</span>
+THROTTLE_INIT_MIN_INTERVAL=5
+
+<span style="color:#888;"># Инфра</span>
+DATABASE_URL=postgresql+asyncpg://...
+REDIS_URL=redis://redis:6379/0
+SENTRY_DSN=...              <span style="color:#888"># ошибки</span>
+</pre>
+  </div>
+</div>
+
+<h3 style="margin-top:20px;">Два режима запуска Telethon-сессии</h3>
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">Первый вход (разовый)</div>
+    <div class="mockup-body" style="padding:14px;background:#1a1a1a;color:#d0d0d0;font-size:12px;line-height:1.6;">
+      <p style="margin:0 0 6px;">Запускаем CLI-команду на сервере:</p>
+      <pre style="margin:0;color:#7cbb5b;">docker compose run --rm app python -m app.auth_login</pre>
+      <p style="margin:6px 0;">Вводим код из TG → пароль 2FA → <code>.session</code> сохраняется в volume.</p>
+      <p style="margin:0;color:#e0a04b;">⚠ Только один раз. Далее сессия живёт в volume.</p>
+    </div>
+  </div>
+  <div class="mockup">
+    <div class="mockup-header">Боевая работа</div>
+    <div class="mockup-body" style="padding:14px;background:#1a1a1a;color:#d0d0d0;font-size:12px;line-height:1.6;">
+      <p style="margin:0 0 6px;">Telethon стартует как часть <code>app</code>, читает готовый <code>.session</code>:</p>
+      <pre style="margin:0;color:#7cbb5b;">docker compose up -d</pre>
+      <p style="margin:6px 0;">FastAPI + Telethon + outbox-воркер — один процесс. Restart: always.</p>
+      <p style="margin:0;color:#888;">Healthcheck → Nginx 503 если сессия упала.</p>
+    </div>
+  </div>
+</div>
+
+<h3 style="margin-top:20px;">Мониторинг и алерты</h3>
+<div class="section" style="font-size:13px;">
+  <p style="margin:4px 0;">📡 <strong>Health endpoint</strong> <code>/health</code>: статус Telethon-сессии, БД, Redis → Nginx/uptime-чекам</p>
+  <p style="margin:4px 0;">🚨 <strong>Sentry</strong> — все исключения приложения</p>
+  <p style="margin:4px 0;">📢 <strong>Критичные алерты админу</strong> (в Telegram или на email):</p>
+  <p style="margin:4px 0;padding-left:20px;color:#e0a04b;">• сессия упала / <code>.session</code> невалиден</p>
+  <p style="margin:4px 0;padding-left:20px;color:#e0a04b;">• FloodWait &gt; 1 часа</p>
+  <p style="margin:4px 0;padding-left:20px;color:#e0a04b;">• аккаунт в бане (UserBanned/SpamBot)</p>
+  <p style="margin:4px 0;padding-left:20px;color:#e0a04b;">• OAuth Bitrix24 требует re-authorize</p>
+</div>

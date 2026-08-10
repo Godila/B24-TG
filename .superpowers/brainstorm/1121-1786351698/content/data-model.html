@@ -1,0 +1,78 @@
+<h2>Секция дизайна: Модель данных (Postgres)</h2>
+<p class="subtitle">Сущности и связи. Жирным — первичные ключи, курсивом — внешние.</p>
+
+<div class="mockup">
+  <div class="mockup-header">ER-диаграмма</div>
+  <div class="mockup-body" style="padding:20px;font-family:monospace;font-size:12px;line-height:1.6;background:#1a1a1a;color:#e0e0e0;">
+<pre style="margin:0;white-space:pre;overflow-x:auto;">
+┌─────────────────────────────┐       ┌──────────────────────────────────┐
+│        <span style="color:#7cbb5b;">contacts</span>            │       │            <span style="color:#7cbb5b;">dialogs</span>                   │
+├─────────────────────────────┤       ├──────────────────────────────────┤
+│ <b>id</b>              int PK     │◀──────│ <b>id</b>                  int PK        │
+│ tg_user_id       bigint  UQ │       │ <i>contact_id</i>         int FK       │
+│ phone            text        │       │ <i>messenger</i>  enum(tg, max)│
+│ username         text        │       │ external_chat_id  text          │
+│ name             text        │       │ <i>crm_deal_id</i>      int NULL◀─── ссылка на сделку
+│ <i>crm_contact_id</i>    int NULL◀──┐│ <i>crm_entity_type</i>  text        │
+│ created_at       timestamp   ││      │ title             text           │
+│ updated_at       timestamp   ││      │ assigned_user_id  int NULL       │
+└─────────────────────────────┘│      │ status   enum(active, archived)  │
+                                │      │ last_msg_at      timestamp       │
+                                │      │ created_at       timestamp       │
+                                │      └──────────────────────────────────┘
+                                │                     │ 1
+                                │                     │
+                                │                     │ N
+                                │                     ▼
+┌─────────────────────────────┐│      ┌──────────────────────────────────┐
+│      <span style="color:#7cbb5b;">messages</span>               ││      │        <span style="color:#7cbb5b;">attachments</span>              │
+├─────────────────────────────┤│      ├──────────────────────────────────┤
+│ <b>id</b>              bigint PK  │└──────│ <b>id</b>                  int PK        │
+│ <i>dialog_id</i>       int FK      │       │ <i>message_id</i>      bigint FK     │
+│ direction   enum(in, out)    │◀──────│ type  enum(photo,file,video,     │
+│ tg_message_id    bigint      │       │                  voice, sticker) │
+│ text            text         │       │ file_path / blob_url  text       │
+│ status  enum(sent,delivered, │       │ mime_type         text           │
+│         read, error, pending)│       │ size             bigint          │
+│ sent_at         timestamp    │       └──────────────────────────────────┘
+│ author_user_id   int NULL    │
+│   (для out — кто из менедж.) │       ┌──────────────────────────────────┐
+│ timeline_comment_id int NULL◀─────── │ привязка к комментарию в B24     │
+│ created_at      timestamp    │       └──────────────────────────────────┘
+└─────────────────────────────┘
+
+┌─────────────────────────────┐       ┌──────────────────────────────────┐
+│        <span style="color:#7cbb5b;">managers</span>               │       │      <span style="color:#7cbb5b;">templates</span> (быстрые ответы)      │
+├─────────────────────────────┤       ├──────────────────────────────────┤
+│ <b>id</b>              int PK     │       │ <b>id</b>                  int PK        │
+│ name            text        │       │ title             text           │
+│ <i>b24_user_id</i>     int UNIQUE  │       │ body              text           │
+│ role  enum(manager,superv.) │       │ category          text           │
+│ is_active       bool        │       │ created_by        int FK         │
+│ created_at      timestamp   │       │ created_at       timestamp       │
+└─────────────────────────────┘       └──────────────────────────────────┘
+
+┌─────────────────────────────┐
+│   <span style="color:#7cbb5b;">outbox</span> (очередь отправки)    │  <span style="color:#e0a04b;">throttle + retry от банов</span>
+├─────────────────────────────┤
+│ <b>id</b>             bigint PK   │
+│ <i>dialog_id</i>      int FK     │
+│ text / attachment_id         │
+│ status enum(queued,sending,  │
+│         sent,failed,retrying)│
+│ attempts       int           │
+│ next_attempt_at timestamp    │
+│ created_at      timestamp    │
+└─────────────────────────────┘
+</pre>
+  </div>
+</div>
+
+<h3 style="margin-top:20px;">Ключевые решения</h3>
+<div class="section">
+  <p><strong>1. <code>contacts.tg_user_id</code> — связь через Telegram ID,</strong> не номер телефона. В Telegram ID постоянный, номер может меняться. Поиск клиента по <code>tg_user_id</code> → быстрый lookup.</p>
+  <p><strong>2. <code>dialogs</code> — связующее звено.</strong> Один контакт может иметь несколько диалогов (через TG, позже через MAX). Диалог привязан к <code>crm_deal_id</code> — это и есть «якорь» к CRM.</p>
+  <p><strong>3. <code>messages.timeline_comment_id</code></strong> — храним ID комментария в таймлайне Bitrix24. Позволяет обновлять/удалять комментарий при редактировании сообщения и избежать дублей.</p>
+  <p><strong>4. <code>outbox</code> отделён от <code>messages</code>.</strong> Очередь отправки живёт отдельно — так throttle-воркер читает только pending-задачи, не сканируя всю переписку. Защита от бана изолирована.</p>
+  <p><strong>5. <code>messenger</code> enum уже сейчас.</strong> Хотя работаем только с TG, поле готово под MAX — не придётся мигрировать схему позже.</p>
+</div>

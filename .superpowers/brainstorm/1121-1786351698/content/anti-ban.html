@@ -1,0 +1,120 @@
+<h2>Секция дизайна: Anti-ban и надёжность MTProto</h2>
+<p class="subtitle">Личный аккаунт через MTProto банится за рассылки. Это главный технический риск.</p>
+
+<div class="mockup">
+  <div class="mockup-header">Лимиты Telegram (по данным Wazzup, проверено эмпирически)</div>
+  <div class="mockup-body" style="padding:20px;font-family:monospace;font-size:13px;line-height:1.7;background:#1a1a1a;color:#e0e0e0;">
+<pre style="margin:0;white-space:pre;overflow-x:auto;">
+<span style="color:#e0a04b;">⚠ ЖЁСТКИЙ БАН:</span> создание > 14 новых чатов по номеру за 3 мин
+            → блокировка инициации диалогов на НЕДЕЛЮ
+
+<span style="color:#7cbb5b;">✓ БЕЗОПАСНО:</span> отвечать на входящие (без лимита)
+<span style="color:#7cbb5b;">✓ БЕЗОПАСНО:</span> писать по @username (нет бана)
+<span style="color:#7cbb5b;">✓ БЕЗОПАСНО:</span> &lt; 14 новых чатов / 3 мин с задержками
+
+<span style="color:#888;">рекомендация Wazzup: писать по номеру не чаще 1 раза / 3 минуты</span>
+</pre>
+  </div>
+</div>
+
+<h3 style="margin-top:24px;">Многоуровневая защита (4 слоя)</h3>
+
+<div class="mockup" style="margin-top:12px;">
+  <div class="mockup-header">Слой 1: Throttler (token bucket) — на отправку</div>
+  <div class="mockup-body" style="padding:16px;font-family:monospace;font-size:12px;line-height:1.7;background:#1a1a1a;color:#e0e0e0;">
+<pre style="margin:0;white-space:pre;overflow-x:auto;">
+            ОТВЕТЫ (входящий→ответ)     ИНИЦИАЦИЯ (новый чат по номеру)
+                      │                              │
+                      ▼                              ▼
+        ┌────────────────────────┐   ┌──────────────────────────────┐
+        │ отдельная очередь,     │   │ ЖЁСТКИЙ throttle:            │
+        │ высокий приоритет,     │   │ • макс 10 инициаций / 3 мин  │
+        │ макс 20 сооб/мин       │   │   (запас от красной линии 14)│
+        │ (answers почти не банят)│  │ • мин 5 сек между инициациями│
+        └────────────────────────┘   └──────────────────────────────┘
+                      │                              │
+                      └──────────┬───────────────────┘
+                                 ▼
+                    ┌─────────────────────────┐
+                    │  Глобальный rate limiter │
+                    │  (общий потолокTG API)   │
+                    └─────────────────────────┘
+                                 ▼
+                          Telethon send()
+</pre>
+  </div>
+</div>
+
+<div class="mockup" style="margin-top:12px;">
+  <div class="mockup-header">Слой 2: Outbox-воркер с retry и backoff</div>
+  <div class="mockup-body" style="padding:16px;font-family:monospace;font-size:12px;line-height:1.7;background:#1a1a1a;color:#e0e0e0;">
+<pre style="margin:0;white-space:pre;overflow-x:auto;">
+outbox воркер (каждые N сек):
+  1. Берёт oldest queued + due (next_attempt_at <= now)
+  2. Проверяет throttler → если лимит исчерпан, ждёт
+  3. Telethon.send_message()
+     ├─ успех → status=sent, обновляем tg_message_id
+     └─ ошибка:
+        ├─ FloodWait (TG просит подождать X сек) → next_attempt_at += X
+        ├─ UserBanned → alert админу, pause очередь инициаций
+        └─ сеть/таймаут → экспоненциальный backoff (30с, 2м, 8м, ...)
+
+  max_attempts=5 → после помечаем failed, уведомляем менеджера
+</pre>
+  </div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;">
+  <div class="mockup">
+    <div class="mockup-header">Слой 3: Health-чек сессии</div>
+    <div class="mockup-body" style="padding:14px;background:#1a1a1a;color:#d0d0d0;font-size:12px;line-height:1.6;">
+      <p style="margin:0 0 8px;">Раз в 5 мин проверяем:</p>
+      <ul style="margin:0;padding-left:18px;">
+        <li>Telethon <code>client.is_connected()</code></li>
+        <li>Авторизован ли аккаунт</li>
+        <li>Получили ли <code>FloodWait</code> / <code>AuthKeyError</code></li>
+      </ul>
+      <p style="margin:8px 0 0;color:#e0a04b;">→ алерт админу если сессия упала</p>
+    </div>
+  </div>
+  <div class="mockup">
+    <div class="mockup-header">Слой 4: Защита .session файла</div>
+    <div class="mockup-body" style="padding:14px;background:#1a1a1a;color:#d0d0d0;font-size:12px;line-height:1.6;">
+      <p style="margin:0 0 8px;"><code>.session</code> = ключ к аккаунту:</p>
+      <ul style="margin:0;padding-left:18px;">
+        <li>Persistent volume (не терять)</li>
+        <li>Бэкап + шифрование at rest</li>
+        <li>Один процесс = одна сессия</li>
+        <li>Если 2 процесса → TG кикнет одну</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<h3 style="margin-top:20px;">Сценарий «аккаунт в бане»</h3>
+<div class="mockup">
+  <div class="mockup-header">State machine сессии</div>
+  <div class="mockup-body" style="padding:20px;font-family:monospace;font-size:12px;line-height:1.7;background:#1a1a1a;color:#e0e0e0;">
+<pre style="margin:0;white-space:pre;overflow-x:auto;">
+  ┌──────────┐  входящее   ┌───────────────┐
+  │  ACTIVE  │◀────сооб────│ (всегда можем │
+  │  (норм)  │             │  принимать)   │
+  └────┬─────┘             └───────────────┘
+       │ FloodWait / признаки бана
+       ▼
+  ┌──────────────┐   таймаут прошёл   ┌──────────┐
+  │  THROTTLED   │───────────────────▶│  ACTIVE  │
+  │ (приёмのみ)  │                    └──────────┘
+  └──────┬───────┘
+         │持续的FloodWait / SpamBot блок
+         ▼
+  ┌──────────────┐   алерт админу:      ┌──────────┐
+  │   BANNED     │──требуется ручное──▶│  MANUAL  │
+  │ (приёмのみ)  │   разблокирование    │          │
+  └──────────────┘                      └──────────┘
+
+<span style="color:#888;">Важно: даже в бане приём входящих работает — отвечать можно.
+Блокируется только ИНИЦИАЦИЯ новых диалогов по номеру.</span>
+</pre>
+  </div>
+</div>

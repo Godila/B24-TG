@@ -1,0 +1,80 @@
+<h2>Архитектура: Модульный монолит с провайдерами</h2>
+<p class="subtitle">Компоненты и потоки данных. Жёлтые блоки — наши, серые — внешние системы.</p>
+
+<div class="mockup">
+  <div class="mockup-header">Схема компонентов</div>
+  <div class="mockup-body" style="padding:24px;font-family:monospace;font-size:13px;line-height:1.7;background:#1a1a1a;color:#e0e0e0;">
+<pre style="margin:0;white-space:pre;overflow-x:auto;">
+┌─────────────────────────────────────────────────────────────────┐
+│                     НАШ PYTHON-СЕРВИС (FastAPI)                  │
+│                                                                  │
+│  ┌──────────────┐   ┌──────────────┐   ┌──────────────────────┐  │
+│  │   Web UI     │   │  REST API    │   │  Bitrix24 Webhook    │  │
+│  │ (chat front) │   │ (менеджеры)  │   │   endpoint (входящие)│  │
+│  │  + iFrame    │   │              │   │                      │  │
+│  └──────┬───────┘   └──────┬───────┘   └──────────┬───────────┘  │
+│         │                  │                      │              │
+│         └──────────────┬───┴──────────────────────┘              │
+│                        ▼                                         │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │              💬 Chat Service (доменный слой)                 │ │
+│  │   • сообщения  • диалоги  • привязка к CRM  • ответы        │ │
+│  └────┬───────────────────────────────┬─────────────────┬──────┘ │
+│       │                               │                 │        │
+│       ▼                               ▼                 ▼        │
+│ ┌───────────┐                ┌────────────────┐  ┌────────────┐  │
+│ │ Messenger │◀── interface ──│ Bitrix24Sync   │  │  Task      │  │
+│ │ Provider  │                │ • создание     │  │  Queue     │  │
+│ │ (abstract)│                │   контакта/    │  │ (throttle  │  │
+│ └─────┬─────┘                │   сделки       │  │  + retry)  │  │
+│       │                      │ • timeline     │  └────────────┘  │
+│       │                      │ • вебхуки      │                  │
+│       ▼                      └───────┬────────┘                  │
+│ ┌───────────────┐                  │                            │
+│ │TelegramProvider│   (позже)        │                  ┌────────┐│
+│ │  • Telethon   │◀── MaxProvider ──┤                  │Postgres││
+│ │  • send/recv  │                  └─────────────────▶│  (БД)  ││
+│ │  • .session   │                                     └────────┘│
+│ └───────┬───────┘                                               │
+└─────────┼───────────────────────────────────────────────────────┘
+          │ MTProto (long-poll)
+          ▼
+   ╔═══════════════╗         ╔═══════════════════╗
+   ║   TELEGRAM    ║         ║    BITRIX24       ║
+   ║   (серверы)   ║         ║    (облако)       ║
+   ║               ║         ║ • REST API        ║
+   ║  ◀ входящие   ║         ║ • webhook → нам   ║
+   ║  ▶ исходящие  ║         ║ • timeline/сделки ║
+   ╚═══════════════╝         ║ • Маркетплейс app ║
+                             ╚═══════════════════╝
+</pre>
+  </div>
+</div>
+
+<div style="margin-top:20px;">
+  <h3>Поток входящего сообщения</h3>
+  <div class="mockup">
+    <div class="mockup-header">Клиент пишет в Telegram → появляется в Bitrix24</div>
+    <div class="mockup-body" style="padding:20px;font-family:monospace;font-size:13px;line-height:1.8;background:#1a1a1a;color:#e0e0e0;">
+<pre style="margin:0;white-space:pre;overflow-x:auto;">
+1. Клиент пишет в TG
+2. Telethon (TelegramProvider) получает событие NewMessage
+3. Сохраняем в Postgres (messages + dialogs)
+4. Chat Service решает: новый диалог?
+   ├─ ДА → Bitrix24Sync создаёт Контакт + Сделку
+   │       привязывает TG chatId ↔ CRM dealId
+   └─ НЕТ → находим существующую сделку
+5. Bitrix24Sync пишет текст в timeline сделки (crm.timeline.comment)
+6. Уведомление менеджеру (чат-бот Bitrix24 / push в Web UI)
+7. Менеджер видит в Web UI / виджете карточки
+</pre>
+    </div>
+  </div>
+</div>
+
+<p style="margin-top:20px;padding:14px;background:var(--bg-secondary);border-radius:8px;font-size:14px;">
+  <strong>Ключевые абстракции:</strong><br>
+  • <code>MessengerProvider</code> — интерфейс: <code>send_message()</code>, <code>on_message()</code>, <code>on_status()</code>. Telegram и MAX реализуют его.<br>
+  • <code>Bitrix24Sync</code> — отвечает только за CRM: создание сущностей, timeline, вебхуки.<br>
+  • <code>TaskQueue</code> — throttle отправки (защита от бана) + retry при ошибках.
+</p>

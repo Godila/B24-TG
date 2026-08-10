@@ -1,0 +1,113 @@
+<h2>🚨 Критическое уточнение: мультиаккаунтность</h2>
+<p class="subtitle">У каждого менеджера свой TG-аккаунт → система принципиально другая. Это меняет почти всё.</p>
+
+<div class="mockup">
+  <div class="mockup-header">Как я проектировал vs как реально</div>
+  <div class="mockup-body" style="padding:20px;font-family:monospace;font-size:12px;line-height:1.7;background:#1a1a1a;color:#e0e0e0;">
+<pre style="margin:0;white-space:pre;overflow-x:auto;">
+<span style="color:#e0a04b;">❌ КАК Я ДУМАЛ (один общий аккаунт):</span>
+                   ┌─────────────────┐
+   все клиенты ───▶│  1 аккаунт TG   │──▶ маршрутизация/dialog_assigned
+                   │  (компании)     │    распределение по менеджерам
+                   └─────────────────┘
+
+<span style="color:#7cbb5b;">✅ КАК РЕАЛЬНО (мультиаккаунт):</span>
+   клиенты мен.1 ──▶┌─────────────┐
+                    │ TG акк #1   │──▶ менеджер Иван (userId=1)
+   клиенты мен.2 ──▶│ (его симка) │    b24_user_id=15
+                    └─────────────┘
+   клиенты мен.3 ──▶┌─────────────┐
+                    │ TG акк #2   │──▶ менеджер Петр (userId=2)
+                    │ (его симка) │    b24_user_id=23
+                    └─────────────┘
+                    ┌─────────────┐
+                    │ TG акк #3   │──▶ менеджер Анна (userId=3)
+                    │ (ее симка)  │    b24_user_id=42
+                    └─────────────┘
+
+   <span style="color:#888;">Wazzup передаёт userId → битрикс мэтчит с ответственным</span>
+   <span style="color:#888;">Клиент пишет на акк Ивана → сделка Ивана → карточка по номеру</span>
+</pre>
+  </div>
+</div>
+
+<h3 style="margin-top:20px;">Что меняется в архитектуре</h3>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">Раньше: 1 сессия</div>
+    <div class="mockup-body" style="padding:14px;font-family:monospace;font-size:11px;background:#1a1a1a;color:#d0d0d0;line-height:1.6;">
+<pre style="margin:0;">bridge:
+  1 × Telethon client
+  1 × .session файл
+  1 × throttle queue
+
+просто, но не повторяет Wazzup</pre>
+    </div>
+  </div>
+  <div class="mockup">
+    <div class="mockup-header">Теперь: пул сессий</div>
+    <div class="mockup-body" style="padding:14px;font-family:monospace;font-size:11px;background:#1a1a1a;color:#d0d0d0;line-height:1.6;">
+<pre style="margin:0;">bridge:
+  N × Telethon clients (по менеджеру)
+  N × .session файлов
+  N × независимых throttle
+
+сложнее, но точно как Wazzup</pre>
+    </div>
+  </div>
+</div>
+
+<h3 style="margin-top:20px;">Ключевые изменения в модели</h3>
+<div class="mockup">
+  <div class="mockup-header">Новая таблица tg_accounts (привязка аккаунт ↔ менеджер)</div>
+  <div class="mockup-body" style="padding:16px;font-family:monospace;font-size:12px;line-height:1.7;background:#1a1a1a;color:#e0e0e0;">
+<pre style="margin:0;white-space:pre;overflow-x:auto;">
+<span style="color:#7cbb5b;">tg_accounts</span>                          <span style="color:#7cbb5b;">managers</span>
+┌───────────────────────────┐         ┌─────────────────────────┐
+│ <b>id</b>           int PK      │         │ <b>id</b>          int PK       │
+│ phone         text  UQ     │◀────────│ <i>tg_account_id</i> int FK  │
+│ session_path  text         │   1:1   │ <i>b24_user_id</i>   int UQ◀── матчинг
+│ status  enum(active,       │         │ name         text        │
+│         banned,offline)    │         │ role  enum(manager,..)   │
+│ api_id/api_hash (если на   │         └─────────────────────────┘
+│   аккаунт)                 │
+│ <i>manager_id</i>    int FK 1:1 ◀──────┘  каждый аккаунт = один менеджер
+│ last_floodwait_at timestamp│
+└───────────────────────────┘
+
+<span style="color:#888;">Важное упрощение: 1 менеджер = 1 TG-аккаунт = 1 b24_user_id.
+Это жёсткая привязка — не нужно маршрутизировать диалоги.</span>
+</pre>
+  </div>
+</div>
+
+<h3 style="margin-top:20px;">Как работает матчинг (как у Wazzup)</h3>
+<div class="mockup">
+  <div class="mockup-header">Поток: клиент пишет → попадает в правильную карточку</div>
+  <div class="mockup-body" style="padding:18px;font-family:monospace;font-size:12px;line-height:1.8;background:#1a1a1a;color:#e0e0e0;">
+<pre style="margin:0;white-space:pre;overflow-x:auto;">
+1. Клиент (номер +7999...) пишет в TG
+2. Сообщение приходит на аккаунт менеджера Ивана (tg_account #1)
+3. <span style="color:#7cbb5b;">СРАЗУ знаем ответственного</span> → manager_id=1 → b24_user_id=15
+4. По номеру клиента ищем в Bitrix24:
+      crm.duplicate.findbyComm (PHONE, "+7999...")
+      ├─ найден Контакт → привязываем к существующей Сделке Ивана
+      └─ не найден → crm.item.add (Контакт + Сделка, assigned_by_id=15)
+5. Пишем в timeline сделки: crm.timeline.comment.add
+6. Уведомление Ивану (через im.message.add)
+
+<span style="color:#888;">userId Wazzup ≈ manager_id у нас — это и есть "ключ маршрутизации"
+который Wazzup передаёт в Bitrix24. У нас это implicit (из аккаунта).</span>
+</pre>
+  </div>
+</div>
+
+<div style="margin-top:20px;padding:16px;background:#2a2218;border-left:4px solid #e0a04b;border-radius:6px;font-size:14px;">
+  <strong>⚠ Что нужно уточнить у заказчика/менеджера:</strong>
+  <ol style="margin:8px 0 0;padding-left:20px;">
+    <li>Сколько примерно менеджеров? (5? 50? 500?) — это определяет архитектуру пула сессий</li>
+    <li>Менеджер уволился — что происходит с его аккаунтом/диалогами?</li>
+    <li>Клиент написал менеджеру Петру, а ответственный в CRM — Иван. Что должно случиться?</li>
+  </ol>
+</div>

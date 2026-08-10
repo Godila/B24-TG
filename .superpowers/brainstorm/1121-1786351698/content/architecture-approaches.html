@@ -1,0 +1,61 @@
+<h2>Три подхода к архитектуре</h2>
+<p class="subtitle">Как организовать Python-сервис: TG-клиент (Telethon) + Bitrix24 + Web UI + будущий MAX. Нажмите на вариант, чтобы выбрать.</p>
+
+<div class="options">
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>① Модульный монолит с провайдерами <span class="label" style="color:var(--accent);">рекомендую</span></h3>
+      <p><strong>Один Python-процесс</strong> (FastAPI + Telethon), но с чёткими слоями: <em>TelegramProvider</em>, (позже) <em>MaxProvider</em>, <em>Bitrix24Sync</em>, <em>ChatAPI</em>, <em>WebUI</em>. Все общаются через внутренний интерфейс <code>MessengerProvider</code>.</p>
+      <div class="pros-cons" style="margin-top:12px;">
+        <div class="pros"><h4>Плюсы</h4><ul>
+          <li>Расширяемость под MAX — добавили класс, готово</li>
+          <li>Один деплой, простая эксплуатация</li>
+          <li>Чистые границы = легко тестировать</li>
+          <li>Не перегружен, как микросервисы</li>
+        </ul></div>
+        <div class="cons"><h4>Минусы</h4><ul>
+          <li>Чуть больше изначальной структуры</li>
+          <li>MTProto-сессия и web в одном процессе</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>② Простой монолит</h3>
+      <p>Всё в одном <em>без</em> разделения на провайдеры. Telethon, FastAPI, Bitrix24-вызовы, шаблоны UI — в общем коде. Самый быстрый старт.</p>
+      <div class="pros-cons" style="margin-top:12px;">
+        <div class="pros"><h4>Плюсы</h4><ul><li>Минимум изначальной структуры</li><li>Самый быстрый старт MVP</li></ul></div>
+        <div class="cons"><h4>Минусы</h4><ul>
+          <li><strong>Под MAX придётся переписывать</strong></li>
+          <li>Код спагетти через 2 итерации</li>
+          <li>Сложно тестировать изоляцию</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>③ Микросервисы</h3>
+      <p>Отдельные сервисы: <em>tg-bridge</em> (Telethon), <em>api-gateway</em>, <em>bitrix24-sync</em>, <em>web-frontend</em>. Связь через очередь (Redis/RabbitMQ).</p>
+      <div class="pros-cons" style="margin-top:12px;">
+        <div class="pros"><h4>Плюсы</h4><ul><li>Независимое масштабирование</li><li>Изоляция сессий TG</li></ul></div>
+        <div class="cons"><h4>Минусы</h4><ul>
+          <li><strong>Оверинжиниринг для одного канала</strong></li>
+          <li>Сложный деплой (Docker Compose, оркестрация)</li>
+          <li>Сетевая задержка между сервисами</li>
+          <li>Больше инфраструктуры с самого начала</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p style="margin-top:24px; padding:16px; background:var(--bg-secondary); border-radius:8px; font-size:14px;">
+  <strong>Моя рекомендация — ① Модульный монолит.</strong> Вы получите расширяемость под MAX без оверинжиниринга микросервисов. Когда нагрузка вырастет, конкретный слой (например, TG-bridge) можно вынести в отдельный сервис без переписывания — границы уже будут.
+</p>
