@@ -47,10 +47,22 @@ async def test_refresh_when_expired():
     }
     mock_refresh_resp.raise_for_status = lambda: None
 
+    persisted = B24Token(
+        id=1,
+        member_id="m1",
+        access_token="new_access",
+        refresh_token="new_refresh",
+        client_endpoint="https://portal.bitrix24.ru/rest/",
+        portal="",
+        user_id=0,
+        scope="",
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
     with patch("app.b24.token_manager.httpx.get", return_value=mock_refresh_resp):
-        tm._save_to_db = AsyncMock()
+        tm._save_to_db = AsyncMock(return_value=persisted)
         token = await tm.get_token()
 
+    assert token is persisted
     assert token.access_token == "new_access"
     assert token.refresh_token == "new_refresh"
     tm._save_to_db.assert_awaited_once()

@@ -55,24 +55,8 @@ class TokenManager:
         )
         resp.raise_for_status()
         data = resp.json()
-        # Персистим обновлённые значения; возвращаем свежий объект, построенный
-        # из ответа OAuth, чтобы вызывающему не зависеть от состояния сессии.
-        await self._save_to_db(data)
-        return self._token_from_data(data)
-
-    @staticmethod
-    def _token_from_data(data: dict) -> B24Token:
-        return B24Token(
-            member_id=data["member_id"],
-            access_token=data["access_token"],
-            refresh_token=data["refresh_token"],
-            client_endpoint=data.get("client_endpoint", ""),
-            portal=data.get("domain", ""),
-            user_id=data.get("user_id", 0),
-            scope=data.get("scope", ""),
-            expires_at=datetime.now(UTC)
-            + timedelta(seconds=data.get("expires_in", 3600)),
-        )
+        # Персистим и возвращаем сохранённый объект (с реальным id из БД).
+        return await self._save_to_db(data)
 
     async def _save_to_db(self, data: dict) -> B24Token:
         async with async_session() as session:
