@@ -40,7 +40,11 @@ class CrmService:
     async def find_contact_by_phone(
         self, auth_token: str, phone: str
     ) -> ContactInfo | None:
-        """Поиск контакта по номеру телефона через crm.duplicate.findbyComm."""
+        """Поиск контакта по номеру телефона через crm.duplicate.findbyComm.
+
+        Реальный ответ findbyComm — dict вида ``{"CONTACT": [ids], "LEAD": [...], ...}``.
+        Для тестов допускается также список (контактов или ID).
+        """
         result = await self._client.call(
             "crm.duplicate.findbyComm",
             auth_token=auth_token,
@@ -48,20 +52,35 @@ class CrmService:
         )
         if not result:
             return None
-        # Нормализуем: result может быть списком контактов (ID/NAME)
-        # или списком ID (ответ findbyComm).
-        first = result[0]
-        if isinstance(first, dict):
-            contact_id = int(first.get("ID") or first.get("id") or 0)
-            name = (first.get("NAME", "") + " " + first.get("LAST_NAME", "")).strip() or None
-            return ContactInfo(id=contact_id, name=name)
-        # first — это ID (строка/число); достаём детали контакта.
-        contact_id = int(first)
+
+        contact_id = self._extract_contact_id(result)
+        if not contact_id:
+            return None
+
+        # Достаём имя контакта через crm.contact.get.
         detail = await self._client.call(
             "crm.contact.get", auth_token=auth_token, params={"id": contact_id},
         )
+        if detail is None:
+            return ContactInfo(id=contact_id)
         name = (detail.get("NAME", "") + " " + detail.get("LAST_NAME", "")).strip() or None
         return ContactInfo(id=contact_id, name=name)
+
+    @staticmethod
+    def _extract_contact_id(result: Any) -> int | None:
+        """Извлечь ID контакта из ответа findbyComm произвольной формы."""
+        # Реальная форма: {"CONTACT": [275, 2297], "LEAD": [...]}
+        if isinstance(result, dict):
+            ids = result.get("CONTACT") or result.get("contact") or []
+            return int(ids[0]) if ids else None
+        # Тестовая/legacy форма: список контактов с полями ID/NAME.
+        if isinstance(result, list) and result:
+            first = result[0]
+            if isinstance(first, dict):
+                raw = first.get("ID") or first.get("id") or 0
+                return int(raw) if raw else None
+            return int(first)  # список ID
+        return None
 
     async def create_contact(
         self, auth_token: str, name: str, phone: str,

@@ -16,10 +16,18 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
         self._session = session
 
     async def fetch_due(self, limit: int = 50) -> list[OutboxItem]:
+        # ВАЖНО: выбираем и queued, и retrying. reschedule() ставит статус
+        # retrying; если фильтровать только по queued, отложенные сообщения
+        # навсегда зависнут в очереди (OutboxWorker вызывает reschedule на
+        # каждом нетерминальном исходе: throttle/flood_wait/backoff/no_provider).
         now = datetime.now(UTC)
         stmt = (
             select(OutboxItem)
-            .where(OutboxItem.status == OutboxStatus.queued)
+            .where(
+                OutboxItem.status.in_(
+                    [OutboxStatus.queued, OutboxStatus.retrying]
+                )
+            )
             .where(OutboxItem.next_attempt_at <= now)
             .order_by(OutboxItem.next_attempt_at)
             .limit(limit)

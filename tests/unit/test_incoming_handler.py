@@ -122,3 +122,40 @@ async def test_handle_survives_sync_failure():
 
     db_session.commit.assert_awaited()
     assert db_session.add.call_count >= 3
+
+
+@pytest.mark.asyncio
+async def test_handle_skips_duplicate_message():
+    """Идемпотентность: если сообщение (dialog+tg_message_id) уже сохранено,
+    повторная обработка не создаёт дубль Message."""
+    account = MagicMock()
+    account.id = 7
+    account.manager.b24_user_id = 15
+
+    b24sync = AsyncMock()
+    b24sync.process_inbound = AsyncMock(
+        return_value=SyncResult(
+            contact_id=42, deal_id=100, is_new=False, timeline_comment_id=999,
+        )
+    )
+
+    session = AsyncMock()
+    session.__aenter__.return_value = session
+    # execute вызовы по порядку:
+    # 1) Contact — None (нет → создаст), 2) Dialog — None (нет → создаст),
+    # 3) Message — найден (дубль → пропустим).
+    none_result = MagicMock(scalar_one_or_none=lambda: None)
+    found_msg = MagicMock()
+    found_result = MagicMock(scalar_one_or_none=lambda: found_msg)
+    session.execute.side_effect = [none_result, none_result, found_result]
+
+    handler = IncomingHandler(
+        session_mgr=MagicMock(),
+        b24sync=b24sync,
+        db_session_factory=lambda: session,
+    )
+    await handler.handle(_make_msg(), account=account)
+
+    # Контакт и Диалог добавлены (2 add), но Message НЕ добавлен (дубль).
+    assert session.add.call_count == 2
+    session.commit.assert_awaited()

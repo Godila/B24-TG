@@ -75,6 +75,30 @@ async def test_fetch_due_excludes_non_queued(session):
 
 
 @pytest.mark.asyncio
+async def test_fetch_due_includes_retrying_after_reschedule(session):
+    """Регрессия: reschedule ставит retrying; fetch_due должен повторно
+    доставлять такие элементы, иначе они зависают навсегда."""
+    session.add(
+        OutboxItem(
+            id=1,
+            dialog_id=10,
+            tg_account_id=7,
+            external_chat_id="123",
+            text="retry me",
+            status=OutboxStatus.retrying,
+            attempts=1,
+            next_attempt_at=datetime.now(UTC) - timedelta(seconds=30),
+        )
+    )
+    await session.commit()
+
+    repo = SqlAlchemyOutboxRepository(session)
+    due = await repo.fetch_due(limit=10)
+    assert len(due) == 1
+    assert due[0].id == 1
+
+
+@pytest.mark.asyncio
 async def test_mark_sent_sets_status(session):
     session.add(
         OutboxItem(

@@ -8,18 +8,26 @@ from app.b24.crm import CrmService
 @pytest.mark.asyncio
 async def test_find_contact_by_phone_found():
     client = AsyncMock()
-    client.call = AsyncMock(return_value=[{"ID": "42", "NAME": "Иван"}])
+    # Реальный ответ crm.duplicate.findbyComm: dict по типам сущностей.
+    # Первый call — findbyComm, второй — crm.contact.get для имени.
+    client.call = AsyncMock(
+        side_effect=[
+            {"CONTACT": [42]},  # найден контакт с ID=42
+            {"ID": "42", "NAME": "Иван", "LAST_NAME": "Петров"},
+        ]
+    )
     svc = CrmService(client)
     contact = await svc.find_contact_by_phone(auth_token="t", phone="+79991234567")
     assert contact is not None
     assert contact.id == 42
-    assert contact.name == "Иван"
+    assert contact.name == "Иван Петров"
 
 
 @pytest.mark.asyncio
 async def test_find_contact_by_phone_not_found():
     client = AsyncMock()
-    client.call = AsyncMock(return_value=[])
+    # CONTACT пуст → контакт не найден.
+    client.call = AsyncMock(return_value={"CONTACT": []})
     svc = CrmService(client)
     contact = await svc.find_contact_by_phone(auth_token="t", phone="+79990000000")
     assert contact is None

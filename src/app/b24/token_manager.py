@@ -23,6 +23,10 @@ class TokenManager:
     def __init__(self, client_id: str, client_secret: str):
         self._client_id = client_id
         self._client_secret = client_secret
+        # Битрикс ротейтит refresh_token при каждом refresh: конкурентные
+        # refresh-запросы инвалидируют общий refresh_token и «зашивают»
+        # интеграцию. Лок гарантирует единственный активный refresh.
+        self._refresh_lock = anyio.Lock()
 
     async def get_token(self) -> B24Token | None:
         """Вернуть валидный токен, при необходимости обновив его."""
@@ -30,7 +34,12 @@ class TokenManager:
         if token is None:
             return None
         if datetime.now(UTC) >= token.expires_at - REFRESH_MARGIN:
-            token = await self._refresh(token)
+            async with self._refresh_lock:
+                # Перечитаем токен под локом — возможно, другой корутин уже
+                # обновил его, пока мы ждали.
+                token = await self._load_from_db()
+                if token is not None and datetime.now(UTC) >= token.expires_at - REFRESH_MARGIN:
+                    token = await self._refresh(token)
         return token
 
     async def save_install_data(self, auth_data: dict) -> B24Token:

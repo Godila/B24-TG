@@ -100,7 +100,21 @@ class IncomingHandler:
                 dialog.crm_deal_id = sync_result.deal_id
                 dialog.crm_entity_type = "deal"
 
-            # Сообщение — всегда новое
+            # Идемпотентность: MTProto может дублировать доставку (реботы,
+            # рестарт bridge). Пропускаем уже сохранённое сообщение по
+            # (dialog, tg_message_id), иначе создадим дубль и повторно
+            # пошлём timeline-комментарий и уведомление менеджеру.
+            if msg.external_message_id is not None:
+                existing_msg = await session.execute(
+                    select(Message).where(
+                        Message.dialog_id == dialog.id,
+                        Message.tg_message_id == msg.external_message_id,
+                    )
+                )
+                if existing_msg.scalar_one_or_none() is not None:
+                    await session.commit()
+                    return
+
             message = Message(
                 dialog_id=dialog.id,
                 direction=MessageDirection.inbound,
