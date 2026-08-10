@@ -1,0 +1,10 @@
+# Скопируйте в docker-compose.override.yml (он в .gitignore)
+# и адаптируйте под локальную разработку.
+services:
+  web:
+    volumes:
+      - ./src:/app/src  # hot reload при разработке
+    command: ["uvicorn", "app.web.app:create_app", "--factory", "--reload", "--host", "0.0.0.0", "--port", "8000"]
+  bridge:
+    volumes:
+      - ./src:/app/src
