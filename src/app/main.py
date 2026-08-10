@@ -16,23 +16,6 @@ def main() -> None:
         uvicorn.run(app, host="0.0.0.0", port=8000)
 
     elif mode == "bridge":
-        from app.bridge.session_manager import SessionManager
-        from app.config import get_settings
-
-        async def run_bridge() -> None:
-            settings = get_settings()
-            sm = SessionManager(
-                api_id=settings.tg_api_id,
-                api_hash=settings.tg_api_hash,
-                sessions_dir=settings.tg_sessions_dir,
-            )
-            # В Фазе 1: просто держим процесс. Подгрузка аккаунтов — Фаза 2.
-            print("Bridge started (Фаза 1: session loading в Фазе 2)")
-            try:
-                await asyncio.Event().wait()  # бежим вечно
-            finally:
-                await sm.close_all()
-
         asyncio.run(run_bridge())
 
     elif mode == "auth":
@@ -44,6 +27,58 @@ def main() -> None:
     else:
         print(f"Unknown mode: {mode}. Use: web | bridge | auth")
         sys.exit(1)
+
+
+async def run_bridge() -> None:
+    """Запуск bridge-процесса: пул TG-сессий + интеграция Bitrix24.
+
+    Конструирует полный wiring (TokenManager → Bitrix24Client → CrmService/ImService
+    → Bitrix24Sync → IncomingHandler). Загрузка аккаунтов из БД и регистрация
+    обработчиков событий провайдеров — Фаза 4.
+    """
+    from app.b24.client import Bitrix24Client
+    from app.b24.crm import CrmService
+    from app.b24.im import ImService
+    from app.b24.sync import Bitrix24Sync
+    from app.b24.token_manager import TokenManager
+    from app.bridge.incoming_handler import IncomingHandler
+    from app.bridge.session_manager import SessionManager
+    from app.config import get_settings
+    from app.db import async_session
+
+    settings = get_settings()
+
+    sm = SessionManager(
+        api_id=settings.tg_api_id,
+        api_hash=settings.tg_api_hash,
+        sessions_dir=settings.tg_sessions_dir,
+    )
+
+    # B24 wiring: общий client_endpoint портала (REST-методы доступны с этим URL).
+    endpoint = settings.b24_portal.rstrip("/") + "/rest/"
+    b24_client = Bitrix24Client(client_endpoint=endpoint)
+    crm = CrmService(b24_client)
+    im = ImService(Bitrix24Client(client_endpoint=endpoint))
+    token_mgr = TokenManager(
+        client_id=settings.b24_client_id,
+        client_secret=settings.b24_client_secret,
+    )
+    b24sync = Bitrix24Sync(token_mgr=token_mgr, crm=crm, im=im)
+    handler = IncomingHandler(
+        session_mgr=sm,
+        b24sync=b24sync,
+        db_session_factory=async_session,
+    )
+
+    print(
+        "Bridge started: B24 wiring готов. "
+        "Загрузка TG-аккаунтов и подписка на события — Фаза 4."
+    )
+    try:
+        await asyncio.Event().wait()  # бежим вечно
+    finally:
+        await sm.close_all()
+    _ = handler  # handler готов к использованию в Фазе 4
 
 
 if __name__ == "__main__":
