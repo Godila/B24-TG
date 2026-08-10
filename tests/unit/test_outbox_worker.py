@@ -1,20 +1,20 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
 
 from app.bridge.outbox_worker import OutboxWorker
-from app.models import OutboxItem, OutboxStatus
 from app.messaging.types import SendResult
+from app.models import OutboxItem, OutboxStatus
 
 
 def _make_item(**kw) -> OutboxItem:
-    defaults = dict(
-        id=1, dialog_id=10, tg_account_id=7, text="hi",
-        status=OutboxStatus.queued, attempts=0,
-        next_attempt_at=datetime.now(timezone.utc),
-        last_error=None, is_initiation=False, external_chat_id="12345",
-    )
+    defaults = {
+        "id": 1, "dialog_id": 10, "tg_account_id": 7, "text": "hi",
+        "status": OutboxStatus.queued, "attempts": 0,
+        "next_attempt_at": datetime.now(UTC),
+        "last_error": None, "is_initiation": False, "external_chat_id": "12345",
+    }
     defaults.update(kw)
     return OutboxItem(**defaults)
 

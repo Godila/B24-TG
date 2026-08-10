@@ -25,8 +25,8 @@ from typing import TYPE_CHECKING
 from app.models import OutboxItem
 
 if TYPE_CHECKING:  # pragma: no cover - только для type-checker
-    from app.messaging.provider import MessengerProvider
     from app.bridge.throttler import Throttler
+    from app.messaging.provider import MessengerProvider
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ class OutboxWorker:
         self._poll_interval = poll_interval
         self._batch_size = batch_size
         self._running = False
-        self._throttlers: "dict[int, Throttler]" = {}
+        self._throttlers: dict[int, Throttler] = {}
 
     # ------------------------------------------------------------------ #
     # Throttler pool (per-account)
