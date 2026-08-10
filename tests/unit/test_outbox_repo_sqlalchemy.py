@@ -1,0 +1,152 @@
+from datetime import UTC, datetime, timedelta
+
+import pytest
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from app.bridge.outbox_repo_sqlalchemy import SqlAlchemyOutboxRepository
+from app.models import Base, OutboxItem, OutboxStatus
+
+
+@pytest.fixture
+async def session():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with SessionLocal() as s:
+        yield s
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_fetch_due_returns_only_due_queued(session):
+    session.add(
+        OutboxItem(
+            id=1,
+            dialog_id=10,
+            tg_account_id=7,
+            external_chat_id="123",
+            text="hi",
+            status=OutboxStatus.queued,
+            attempts=0,
+            next_attempt_at=datetime.now(UTC) - timedelta(minutes=1),
+        )
+    )
+    session.add(
+        OutboxItem(
+            id=2,
+            dialog_id=11,
+            tg_account_id=7,
+            external_chat_id="124",
+            text="future",
+            status=OutboxStatus.queued,
+            attempts=0,
+            next_attempt_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+    )
+    await session.commit()
+
+    repo = SqlAlchemyOutboxRepository(session)
+    due = await repo.fetch_due(limit=10)
+    ids = [item.id for item in due]
+    assert 1 in ids
+    assert 2 not in ids
+
+
+@pytest.mark.asyncio
+async def test_fetch_due_excludes_non_queued(session):
+    session.add(
+        OutboxItem(
+            id=1,
+            dialog_id=10,
+            tg_account_id=7,
+            external_chat_id="123",
+            text="done",
+            status=OutboxStatus.sent,  # already sent
+            attempts=0,
+            next_attempt_at=datetime.now(UTC) - timedelta(minutes=5),
+        )
+    )
+    await session.commit()
+
+    repo = SqlAlchemyOutboxRepository(session)
+    due = await repo.fetch_due(limit=10)
+    assert due == []
+
+
+@pytest.mark.asyncio
+async def test_mark_sent_sets_status(session):
+    session.add(
+        OutboxItem(
+            id=1,
+            dialog_id=10,
+            tg_account_id=7,
+            external_chat_id="123",
+            text="hi",
+            status=OutboxStatus.queued,
+            attempts=0,
+            next_attempt_at=datetime.now(UTC) - timedelta(minutes=1),
+        )
+    )
+    await session.commit()
+
+    item = OutboxItem(id=1, dialog_id=10, tg_account_id=7, external_chat_id="123")
+    repo = SqlAlchemyOutboxRepository(session)
+    await repo.mark_sent(item, external_message_id=999)
+
+    await session.reset()
+    refreshed = await session.get(OutboxItem, 1)
+    assert refreshed.status == OutboxStatus.sent
+
+
+@pytest.mark.asyncio
+async def test_mark_failed_sets_status_and_error(session):
+    session.add(
+        OutboxItem(
+            id=1,
+            dialog_id=10,
+            tg_account_id=7,
+            external_chat_id="123",
+            text="hi",
+            status=OutboxStatus.queued,
+            attempts=0,
+            next_attempt_at=datetime.now(UTC) - timedelta(minutes=1),
+        )
+    )
+    await session.commit()
+
+    item = OutboxItem(id=1, dialog_id=10, tg_account_id=7, external_chat_id="123")
+    repo = SqlAlchemyOutboxRepository(session)
+    await repo.mark_failed(item, error="boom")
+
+    await session.reset()
+    refreshed = await session.get(OutboxItem, 1)
+    assert refreshed.status == OutboxStatus.failed
+    assert refreshed.last_error == "boom"
+
+
+@pytest.mark.asyncio
+async def test_reschedule_increments_attempts_and_sets_retrying(session):
+    session.add(
+        OutboxItem(
+            id=1,
+            dialog_id=10,
+            tg_account_id=7,
+            external_chat_id="123",
+            text="hi",
+            status=OutboxStatus.queued,
+            attempts=0,
+            next_attempt_at=datetime.now(UTC) - timedelta(minutes=1),
+        )
+    )
+    await session.commit()
+
+    item = await session.get(OutboxItem, 1)
+    repo = SqlAlchemyOutboxRepository(session)
+    await repo.reschedule(item, delay_seconds=60, error="retry")
+
+    await session.reset()
+    refreshed = await session.get(OutboxItem, 1)
+    assert refreshed.status == OutboxStatus.retrying
+    assert refreshed.attempts == 1
+    assert refreshed.last_error == "retry"
