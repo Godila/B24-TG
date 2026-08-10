@@ -7,6 +7,7 @@ SQLAlchemy смог разрешить строковые forward-refs в ``rela
 """
 
 from app.models.attachment import Attachment, AttachmentType
+from app.models.b24_token import B24Token
 from app.models.base import Base, TimestampMixin
 from app.models.contact import Contact
 from app.models.dialog import Dialog, DialogStatus, Messenger
@@ -19,6 +20,7 @@ from app.models.tg_account import TgAccount, TgAccountStatus
 __all__ = [
     "Attachment",
     "AttachmentType",
+    "B24Token",
     "Base",
     "Contact",
     "Dialog",
