@@ -1,0 +1,33 @@
+# Secrets — никогда в git
+.env
+.env.*
+*.session
+*.session-journal
+tg_sessions/
+secrets/
+
+# Brainstorming artefacts (временные)
+.superpowers/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Docker
+docker-compose.override.yml
+
+# IDE/OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
