@@ -1,11 +1,15 @@
 """Модель менеджера (пользователь Bitrix24, ведущий диалоги)."""
 
 import enum
+from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, Enum, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Enum, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.tg_account import TgAccount
 
 
 class ManagerRole(str, enum.Enum):

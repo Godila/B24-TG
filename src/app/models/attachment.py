@@ -1,11 +1,15 @@
 """Вложение к сообщению (фото/файл/видео/голос/стикер)."""
 
 import enum
+from typing import TYPE_CHECKING
 
 from sqlalchemy import BigInteger, Enum, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.message import Message
 
 
 class AttachmentType(str, enum.Enum):

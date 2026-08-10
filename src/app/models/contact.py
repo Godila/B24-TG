@@ -1,9 +1,14 @@
 """Контакт — клиент/собеседник в мессенджере, связанный с Bitrix24 CRM."""
 
+from typing import TYPE_CHECKING
+
 from sqlalchemy import BigInteger, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.dialog import Dialog
 
 
 class Contact(Base, TimestampMixin):

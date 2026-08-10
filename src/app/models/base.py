@@ -13,7 +13,6 @@ class Base(DeclarativeBase):
     и ``create_all`` в тестах используют именно его.
     """
 
-    pass
 
 
 class TimestampMixin:

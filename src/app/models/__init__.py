@@ -13,26 +13,26 @@ from app.models.dialog import Dialog, DialogStatus, Messenger
 from app.models.manager import Manager, ManagerRole
 from app.models.message import Message, MessageDirection, MessageStatus
 from app.models.outbox import OutboxItem, OutboxStatus
-from app.models.tg_account import TgAccount, TgAccountStatus
 from app.models.template import Template
+from app.models.tg_account import TgAccount, TgAccountStatus
 
 __all__ = [
+    "Attachment",
+    "AttachmentType",
     "Base",
-    "TimestampMixin",
-    "Manager",
-    "ManagerRole",
-    "TgAccount",
-    "TgAccountStatus",
     "Contact",
     "Dialog",
     "DialogStatus",
-    "Messenger",
+    "Manager",
+    "ManagerRole",
     "Message",
     "MessageDirection",
     "MessageStatus",
-    "Attachment",
-    "AttachmentType",
+    "Messenger",
     "OutboxItem",
     "OutboxStatus",
     "Template",
+    "TgAccount",
+    "TgAccountStatus",
+    "TimestampMixin",
 ]

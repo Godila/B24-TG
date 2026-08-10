@@ -2,11 +2,16 @@
 
 import enum
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Integer, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.attachment import Attachment
+    from app.models.dialog import Dialog
 
 
 class MessageDirection(str, enum.Enum):

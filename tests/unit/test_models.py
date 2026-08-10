@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from app.models import Base, TgAccount, Manager, Dialog, Message, OutboxItem
+from app.models import Base, OutboxItem, TgAccount
 
 
 @pytest.mark.asyncio
