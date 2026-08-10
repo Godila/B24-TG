@@ -1,6 +1,7 @@
 # Secrets — никогда в git
 .env
 .env.*
+!.env.example
 *.session
 *.session-journal
 tg_sessions/
