@@ -35,7 +35,11 @@ class Message(Base, TimestampMixin):
         ForeignKey("dialogs.id"), nullable=False, index=True
     )
     direction: Mapped[MessageDirection] = mapped_column(
-        Enum(MessageDirection), nullable=False
+        Enum(
+            MessageDirection,
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        nullable=False,
     )
     tg_message_id: Mapped[int | None] = mapped_column(
         BigInteger, nullable=True, index=True
