@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     throttle_init_min_interval: int = Field(5)    # сек между инициациями
     throttle_reply_max: int = Field(20)           # ответов в минуту
 
+    # Web / UI
+    # HMAC-ключ для сессионных кук Web UI (длинная случайная строка).
+    # Обязателен в production — без него приложение не запустится.
+    session_secret: str = Field(...)
+    # dev-режим: упрощённый auth без B24 (для локальной разработки).
+    dev_mode: bool = Field(False)
+
     # Инфра
     database_url: str = Field(...)
     redis_url: str = Field(...)
