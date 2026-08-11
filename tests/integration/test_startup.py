@@ -1,9 +1,21 @@
+from unittest.mock import AsyncMock
+
 import pytest
 
 
 @pytest.mark.asyncio
 async def test_run_bridge_wires_b24_components(monkeypatch):
-    """run_bridge создаёт IncomingHandler и держит процесс через asyncio.Event."""
+    """run_bridge создаёт IncomingHandler и держит процесс через asyncio.Event.
+
+    После Фазы 5 run_bridge также грузит аккаунты из БД и запускает фоновые
+    задачи (outbox/health/incoming). Чтобы тест остался сфокусированным на
+    wiring B24-компонентов и не зависел от реальной БД/сетевых циклов:
+      - ``load_active_accounts`` патчится на ``[]`` (нет аккаунтов → нет
+        регистрации и подписок на incoming);
+      - ``OutboxWorker.run``/``HealthChecker.run`` — AsyncMock (не запускают
+        реальный цикл);
+      - ``asyncio.Event`` сразу set — run_bridge выходит из ``.wait()``.
+    """
     monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
     monkeypatch.setenv("TG_API_ID", "1")
     monkeypatch.setenv("TG_API_HASH", "x")
@@ -37,6 +49,22 @@ async def test_run_bridge_wires_b24_components(monkeypatch):
             constructed.update(kwargs)
 
     monkeypatch.setattr("app.bridge.incoming_handler.IncomingHandler", FakeHandler)
+
+    # Нет аккаунтов → нет регистрации/forwarding; БД не нужна.
+    monkeypatch.setattr(
+        "app.bridge.bootstrap.load_active_accounts",
+        AsyncMock(return_value=[]),
+    )
+
+    # OutboxWorker/HealthChecker: реальный run() циклит вечно — подменяем.
+    import app.bridge.health_checker as hc_mod
+    import app.bridge.outbox_worker as ow_mod
+    monkeypatch.setattr(
+        ow_mod.OutboxWorker, "run", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        hc_mod.HealthChecker, "run", AsyncMock(return_value=None)
+    )
 
     await main_mod.run_bridge()
 
