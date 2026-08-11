@@ -30,7 +30,13 @@ class MessageStatus(str, enum.Enum):
 class Message(Base, TimestampMixin):
     __tablename__ = "messages"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    # BigInteger на Postgres; на SQLite автоинкремент работает только для
+    # INTEGER PRIMARY KEY, поэтому через variant используем Integer.
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
     dialog_id: Mapped[int] = mapped_column(
         ForeignKey("dialogs.id"), nullable=False, index=True
     )

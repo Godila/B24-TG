@@ -15,6 +15,35 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
     def __init__(self, session: AsyncSession):
         self._session = session
 
+    async def enqueue(
+        self,
+        *,
+        dialog_id: int,
+        tg_account_id: int,
+        external_chat_id: str,
+        text: str,
+        is_initiation: bool = False,
+    ) -> OutboxItem:
+        """Поставить новое сообщение в очередь отправки (status=queued).
+
+        Внимание: метод НЕ коммитит сам — это делает вызывающий (route),
+        чтобы вставка Message и OutboxItem прошла в одной транзакции
+        (атомарность: либо обе записи, либо ни одной).
+        """
+        item = OutboxItem(
+            dialog_id=dialog_id,
+            tg_account_id=tg_account_id,
+            external_chat_id=external_chat_id,
+            text=text,
+            is_initiation=is_initiation,
+            status=OutboxStatus.queued,
+            attempts=0,
+            next_attempt_at=datetime.now(UTC),
+        )
+        self._session.add(item)
+        await self._session.flush()
+        return item
+
     async def fetch_due(self, limit: int = 50) -> list[OutboxItem]:
         # ВАЖНО: выбираем и queued, и retrying. reschedule() ставит статус
         # retrying; если фильтровать только по queued, отложенные сообщения
