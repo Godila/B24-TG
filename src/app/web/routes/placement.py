@@ -12,6 +12,7 @@ Handler ставит сессионную куку и отдаёт HTML чат-�
 
 import json
 import logging
+from pathlib import Path
 
 from fastapi import APIRouter, Form, Query
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -27,21 +28,43 @@ _PLACEMENT_CODE = "CRM_DEAL_DETAIL_TAB"
 
 
 def _chat_html() -> str:
-    """Отдать HTML чат-страницы. В Фазе 3 это статика static/placement.html;
-    пока возвращаем минимальную заглушку-редирект на статику."""
-    # TODO(Фаза 3 Task 7): отдавать реальную placement.html из static/.
-    return """<!DOCTYPE html>
-<html lang="ru"><head><meta charset="utf-8"><title>Bitrix-TG Чат</title></head>
-<body><div id="chat">Загрузка чата…</div></body></html>"""
+    """Прочитать static/placement.html с диска. Если файла нет — заглушка."""
+    settings = get_settings()
+    html_path = Path(settings.static_dir) / "placement.html"
+    if html_path.is_file():
+        return html_path.read_text(encoding="utf-8")
+    logger.warning("placement.html not found at %s — returning stub", html_path)
+    return (
+        '<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">'
+        "<title>Bitrix-TG Чат</title></head>"
+        '<body><div id="chat">Чат недоступен: static/placement.html не найден.</div>'
+        "</body></html>"
+    )
 
 
-def _set_session_and_respond(b24_user_id: int, deal_id: int | None) -> HTMLResponse:
-    """Поставить сессионную куку и вернуть HTML чат-страницы."""
+def _set_session_and_respond(
+    b24_user_id: int, deal_id: int | None
+) -> HTMLResponse | JSONResponse:
+    """Поставить сессионную куку и вернуть HTML чат-страницы.
+
+    Кука ставится в том же ответе, что и HTML — важно для iFrame (редирект
+    на /static/ внутри iFrame мог бы потерять SameSite-контекст).
+    """
     settings = get_settings()
     cookie_params = create_session_cookie_params(
         b24_user_id=b24_user_id, deal_id=deal_id, secret=settings.session_secret,
     )
-    resp = HTMLResponse(content=_chat_html())
+    # deal_id добавляем в URL как query — фронт читает его для фильтра диалогов.
+    body = _chat_html()
+    if deal_id is not None:
+        # Внедряем deal_id через <base> не нужно; фронт читает window.location.
+        # Но placement.html отдаётся как есть — фронт берёт ?deal_id= из URL.
+        # Здесь мы отдаём HTML напрямую (не через redirect), поэтому добавим
+        # deal_id как data-атрибут, который app.js прочтёт.
+        marker = "<body>"
+        inject = f'<body data-deal-id="{deal_id}">'
+        body = body.replace(marker, inject, 1)
+    resp = HTMLResponse(content=body)
     resp.set_cookie(**cookie_params)
     return resp
 

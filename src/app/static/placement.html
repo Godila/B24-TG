@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bitrix-TG Чат</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <!-- Alpine.js (~15KB) для реактивности без сборщика. -->
+  <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+</head>
+<body>
+  <div id="chat" x-data="chatApp()" x-init="init()">
+    <!-- Шапка: информация о клиенте/диалоге -->
+    <header class="chat-header">
+      <div class="contact" x-show="dialog">
+        <span class="contact-name" x-text="dialog?.contact_name || 'Неизвестный'"></span>
+        <span class="contact-meta" x-text="dialog?.external_chat_id"></span>
+      </div>
+      <div class="status" x-show="!dialog && !loading">
+        <span>Нет активного диалога для этой сделки</span>
+      </div>
+      <div class="status" x-show="loading">
+        <span>Загрузка…</span>
+      </div>
+    </header>
+
+    <!-- Лента сообщений -->
+    <main class="messages" x-ref="messages">
+      <template x-for="msg in messages" :key="msg.id">
+        <div class="bubble" :class="msg.direction === 'out' ? 'bubble-out' : 'bubble-in'">
+          <p class="bubble-text" x-text="msg.text"></p>
+          <span class="bubble-meta">
+            <span x-text="formatTime(msg.created_at)"></span>
+            <span class="status-badge" x-text="statusLabel(msg.direction, msg.status)"></span>
+          </span>
+        </div>
+      </template>
+      <div class="empty" x-show="dialog && messages.length === 0 && !loading">
+        <span>Сообщений пока нет — напишите первым</span>
+      </div>
+    </main>
+
+    <!-- Панель шаблонов (быстрые ответы) -->
+    <div class="templates" x-show="templates.length > 0" x-data="{ open: false }">
+      <button class="templates-toggle" @click="open = !open" type="button">
+        <span x-text="open ? '▾' : '▸'"></span> Шаблоны (<span x-text="templates.length"></span>)
+      </button>
+      <ul class="templates-list" x-show="open">
+        <template x-for="tpl in templates" :key="tpl.id">
+          <li>
+            <button type="button" @click="useTemplate(tpl.body)" x-text="tpl.title" :title="tpl.body"></button>
+          </li>
+        </template>
+      </ul>
+    </div>
+
+    <!-- Поле ввода + отправка -->
+    <footer class="composer">
+      <textarea
+        x-model="draft"
+        @keydown.enter.prevent="send()"
+        placeholder="Напишите сообщение… (Enter — отправить, Shift+Enter — перенос строки)"
+        rows="2"
+        :disabled="!dialog || sending"></textarea>
+      <button class="send-btn" @click="send()" :disabled="!dialog || !draft.trim() || sending" type="button">
+        <span x-text="sending ? '…' : 'Отправить'"></span>
+      </button>
+    </footer>
+
+    <!-- Баннер ошибок -->
+    <div class="error-banner" x-show="error" x-text="error" @click="error = ''"></div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
