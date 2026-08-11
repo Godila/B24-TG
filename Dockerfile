@@ -16,6 +16,7 @@ RUN pip install --upgrade pip && pip install .
 
 COPY alembic.ini ./
 COPY alembic/ ./alembic/
+COPY scripts/ ./scripts/
 
 ENV PYTHONPATH=/app/src
 
