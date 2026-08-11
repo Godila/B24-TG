@@ -5,6 +5,7 @@ description = "Замена Wazzup: Telegram ↔ Bitrix24 CRM"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.110",
+    "python-multipart>=0.0.9",
     "uvicorn[standard]>=0.29",
     "sqlalchemy[asyncio]>=2.0",
     "asyncpg>=0.29",

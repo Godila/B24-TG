@@ -1,0 +1,75 @@
+import json
+
+from fastapi.testclient import TestClient
+
+from app.web.app import create_app
+
+
+def test_placement_deal_sets_cookie_and_returns_html(monkeypatch):
+    monkeypatch.setenv("SESSION_SECRET", "test-secret-123")
+    from app.config import get_settings
+    get_settings.cache_clear()
+
+    app = create_app()
+    client = TestClient(app)
+
+    form_data = {
+        "PLACEMENT": "CRM_DEAL_DETAIL_TAB",
+        "PLACEMENT_OPTIONS": json.dumps({"ID": "42"}),
+        "AUTH": json.dumps(
+            {
+                "access_token": "tok",
+                "user_id": "15",
+                "member_id": "abc",
+                "domain": "b24-x.bitrix24.ru",
+                "client_endpoint": "https://b24-x.bitrix24.ru/rest/",
+                "scope": "crm,im,placement",
+                "expires_in": "3600",
+            }
+        ),
+    }
+    r = client.post("/placement/deal", data=form_data)
+
+    assert r.status_code == 200
+    # Session cookie set.
+    cookie_header = r.headers.get("set-cookie", "")
+    assert "btg_sess=" in cookie_header
+    assert "HttpOnly" in cookie_header
+    # HTML returned (chat page).
+    assert "text/html" in r.headers.get("content-type", "")
+    assert "<html" in r.text.lower()
+
+
+def test_placement_deal_wrong_placement_returns_400(monkeypatch):
+    monkeypatch.setenv("SESSION_SECRET", "test-secret-123")
+    from app.config import get_settings
+    get_settings.cache_clear()
+
+    app = create_app()
+    client = TestClient(app)
+
+    form_data = {
+        "PLACEMENT": "SOME_OTHER_PLACEMENT",
+        "PLACEMENT_OPTIONS": json.dumps({"ID": "42"}),
+        "AUTH": json.dumps({"user_id": "15"}),
+    }
+    r = client.post("/placement/deal", data=form_data)
+    assert r.status_code == 400
+
+
+def test_placement_deal_dev_mode_works_without_auth(monkeypatch):
+    """В dev-режиме можно открыть placement без реального B24 POST."""
+    monkeypatch.setenv("SESSION_SECRET", "test-secret-123")
+    monkeypatch.setenv("DEV_MODE", "true")
+    from app.config import get_settings
+    get_settings.cache_clear()
+
+    app = create_app()
+    client = TestClient(app)
+
+    # GET без form-data — dev-режим должен позволить вход (для локальной разработки).
+    r = client.get("/placement/deal", params={"deal_id": "42", "b24_user_id": "1"})
+
+    assert r.status_code == 200
+    cookie_header = r.headers.get("set-cookie", "")
+    assert "btg_sess=" in cookie_header
