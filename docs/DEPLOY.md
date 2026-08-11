@@ -38,17 +38,24 @@ docker compose exec web alembic upgrade head
 docker compose restart nginx
 ```
 
-## Что ещё нужно подключить (не сделано в Phase 4)
+## Что ещё нужно подключить (не сделано в Phase 4-5)
 
 ### 1. Реальный Telegram-аккаунт (отправка/приём сообщений)
-Сейчас `TG_API_ID=12345`, `TG_API_HASH=placeholder` — bridge не может подключиться к MTProto. Подключение:
+Сейчас `TG_API_ID=12345`, `TG_API_HASH=placeholder`, а seeded `TgAccount` имеет `status=offline` → bridge видит 0 активных аккаунтов и не подключается к MTProto. Подключение:
 1. Получить `api_id` + `api_hash` на https://my.telegram.org (один набор на команду).
 2. Обновить `.env`: `TG_API_ID`, `TG_API_HASH`.
-3. Заменить placeholder-номер в БД на реальный и пройти первый вход (CLI auth):
+3. Обновить seeded-аккаунт на реальный номер и пройти первый вход (CLI auth):
    ```bash
    docker compose exec web python -m app.main auth
    ```
    (ввести номер менеджера → код из SMS/Telegram → 2FA если есть). `.session` сохранится в volume `tg_sessions`.
+4. **Перевести аккаунт в `active`** (без этого bridge его не подхватит — `load_active_accounts` фильтрует по `status=active`):
+   ```sql
+   -- docker compose exec postgres psql -U bitrix_tg -d bitrix_tg
+   UPDATE tg_accounts SET status='active', phone='<реальный_номер>' WHERE id=1;
+   ```
+5. `docker compose restart bridge` → в логах должно появиться `Registered session for account_id=1` и `Bridge started: 1 account(s) registered`.
+6. Отправить тестовое сообщение в виджете карточки сделки → клиенту в Telegram.
 4. `docker compose restart bridge`.
 
 ### 2. Смена B24-пароля (рекомендация безопасности)
