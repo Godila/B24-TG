@@ -8,6 +8,12 @@ logger = logging.getLogger(__name__)
 
 
 def main() -> None:
+    # Настроим корневой логгер — без этого logger.info/error модулей
+    # (bridge, b24, ...) никуда не выводятся. Формат с временем + уровнем.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
     mode = sys.argv[1] if len(sys.argv) > 1 else "web"
 
     if mode == "web":
