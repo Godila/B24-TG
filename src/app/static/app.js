@@ -89,9 +89,19 @@ function chatApp() {
         if (!res.ok) return;
         const fresh = await res.json();
         if (fresh.length > 0) {
-          this.messages.push(...fresh);
-          this.lastId = fresh.reduce((m, x) => Math.max(m, x.id), this.lastId);
-          this.scrollBottom();
+          // Дедупликация по id: защищает от гонки с оптимистичной отправкой,
+          // когда poll успел забрать реальное сообщение раньше, чем пришёл
+          // ответ POST (тогда в массиве оказались бы две записи с одним id).
+          const known = new Set(this.messages.map((m) => m.id));
+          const unseen = fresh.filter((m) => !known.has(m.id));
+          if (unseen.length > 0) {
+            this.messages.push(...unseen);
+            this.lastId = unseen.reduce(
+              (m, x) => Math.max(m, x.id),
+              this.lastId,
+            );
+            this.scrollBottom();
+          }
         }
       } catch {
         // Сетевая ошибка poll'а — молча, следующий тик попробует снова.
@@ -99,8 +109,15 @@ function chatApp() {
     },
 
     startPolling() {
-      if (this.pollTimer) clearInterval(this.pollTimer);
+      this.stopPolling();
       this.pollTimer = setInterval(() => this.poll(), this.POLL_MS);
+    },
+
+    stopPolling() {
+      if (this.pollTimer) {
+        clearInterval(this.pollTimer);
+        this.pollTimer = null;
+      }
     },
 
     async send() {
@@ -160,9 +177,17 @@ function chatApp() {
 
     showError(e) {
       this.error = e && e.message ? e.message : String(e);
-      if (this.pollTimer) clearTimeout(this.pollTimer);
-      // Повтор через 10 сек после ошибки.
-      setTimeout(() => this.startPolling(), 10000);
+      this.stopPolling();
+      // Повтор через 10 сек: если инициализация упала (например, протухла
+      // кука) — пробуем заново; иначе просто возобновляем poll.
+      setTimeout(() => {
+        this.error = "";
+        if (this.dialog) {
+          this.startPolling();
+        } else {
+          this.init();
+        }
+      }, 10000);
     },
 
     formatTime(iso) {

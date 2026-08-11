@@ -17,6 +17,7 @@ from pathlib import Path
 from fastapi import APIRouter, Form, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from app.b24.client import Bitrix24Client, Bitrix24Error
 from app.config import get_settings
 from app.web.session import create_session_cookie_params
 
@@ -25,6 +26,35 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/placement", tags=["placement"])
 
 _PLACEMENT_CODE = "CRM_DEAL_DETAIL_TAB"
+
+
+async def _verify_b24_token(access_token: str, expected_user_id: int) -> bool:
+    """Проверить, что access_token валиден и принадлежит expected_user_id.
+
+    Bitrix24 передаёт вместе с placement реальный access_token. Вызов
+    ``user.current`` подтверждает, что токен: (1) валиден, (2) не подделан,
+    (3) соответствует заявленному user_id. Без этой проверки злоумышленник
+    мог бы отправить POST с произвольным user_id и получить сессионную куку
+    любого менеджера.
+    """
+    if not access_token:
+        return False
+    settings = get_settings()
+    client = Bitrix24Client(client_endpoint=settings.b24_portal.rstrip("/") + "/rest/")
+    try:
+        result = await client.call("user.current", auth_token=access_token)
+    except Bitrix24Error:
+        logger.warning("placement: invalid B24 access_token rejected")
+        return False
+    except Exception:
+        logger.exception("placement: B24 token verification failed")
+        return False
+    if not isinstance(result, dict):
+        return False
+    try:
+        return int(result.get("ID", 0)) == expected_user_id
+    except (TypeError, ValueError):
+        return False
 
 
 def _chat_html() -> str:
@@ -96,6 +126,16 @@ async def placement_deal_post(
         b24_user_id = int(user_id_raw)
     except (TypeError, ValueError):
         return JSONResponse({"error": "missing user_id in AUTH"}, status_code=400)
+
+    # Безопасность: проверяем, что POST действительно от B24 (access_token валиден
+    # и соответствует user_id). В dev-режиме проверка пропускается.
+    settings = get_settings()
+    if not settings.dev_mode:
+        access_token = auth_data.get("access_token", "")
+        if not await _verify_b24_token(access_token, b24_user_id):
+            return JSONResponse(
+                {"error": "Недействительный B24 токен"}, status_code=403,
+            )
 
     logger.info(
         "Placement opened: placement=%s deal_id=%s b24_user_id=%s",

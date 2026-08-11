@@ -52,9 +52,11 @@ class IncomingHandler:
             )
 
         # 2. Сохранение в нашей БД (даже если CRM-синхронизация упала)
-        await self._persist(msg, result, account_id=account.id)
+        # ВАЖНО: диалог привязываем к Manager.id (ответственный менеджер), НЕ к
+        # account.id — API фильтрует диалоги по manager.id (Dialog.assigned_user_id).
+        await self._persist(msg, result, manager_id=account.manager_id)
 
-    async def _persist(self, msg: IncomingMessage, sync_result, *, account_id: int) -> None:
+    async def _persist(self, msg: IncomingMessage, sync_result, *, manager_id: int) -> None:
         async with self._db_factory() as session:
             # Контакт: upsert по tg_user_id
             existing = await session.execute(
@@ -92,7 +94,7 @@ class IncomingHandler:
                     contact_id=contact.id,
                     messenger=Messenger.tg,
                     external_chat_id=msg.external_chat_id,
-                    assigned_user_id=account_id,
+                    assigned_user_id=manager_id,
                 )
                 session.add(dialog)
                 await session.flush()
@@ -126,4 +128,7 @@ class IncomingHandler:
                 ),
             )
             session.add(message)
+            await session.flush()
+            # Обновляем «последнее сообщение» для сортировки списка диалогов.
+            dialog.last_msg_at = message.created_at
             await session.commit()

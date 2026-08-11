@@ -153,6 +153,9 @@ async def send_message(
     session.add(message)
     await session.flush()  # получить message.id
 
+    # Обновляем «последнее сообщение» для сортировки списка диалогов.
+    dialog.last_msg_at = message.created_at
+
     repo = SqlAlchemyOutboxRepository(session)
     await repo.enqueue(
         dialog_id=dialog_id,
