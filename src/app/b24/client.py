@@ -1,6 +1,8 @@
 """Async REST-клиент Bitrix24 поверх httpx."""
 
+import asyncio
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -20,15 +22,44 @@ class Bitrix24Error(Exception):
 class Bitrix24Client:
     """Async REST-клиент Bitrix24.
 
-    Один экземпляр на портал (client_endpoint).
-    auth_token передаётся в каждый call (управляется TokenManager'ом).
+    Один экземпляр на портал (client_endpoint). auth_token передаётся в
+    каждый call (управляется TokenManager'ом).
+
+    Общий ``httpx.AsyncClient`` на экземпляр (переиспользуем TLS-сессии
+    вместо нового коннекта на каждый вызов) — закрывается через ``aclose()``
+    при остановке процесса.
+
+    Глобальный per-process throttle: между вызовами выдерживаем
+    ``min_interval`` секунд (free-порталы режут ~2 rps, превышение даёт
+    QUERY_LIMIT_EXCEEDED). На QUERY_LIMIT_EXCEEDED — один повторный вызов
+    после паузы 1.5с; повторное превышение — обычная ``Bitrix24Error``.
     """
 
-    def __init__(self, client_endpoint: str, timeout: float = 30.0):
+    def __init__(
+        self,
+        client_endpoint: str,
+        timeout: float = 30.0,
+        min_interval: float = 0.6,
+    ):
         if not client_endpoint.endswith("/"):
             client_endpoint += "/"
         self._endpoint = client_endpoint
         self._timeout = timeout
+        self._min_interval = min_interval
+        # Общий HTTP-клиент: пул коннектов живёт столько же, сколько клиент.
+        self._http = httpx.AsyncClient(timeout=timeout)
+        # Глобальный throttle: момент последнего вызова + блокировка, чтобы
+        # конкурентные корутины выстроились в очередь минимум-интервалов.
+        self._last_call = 0.0
+        self._interval_lock = asyncio.Lock()
+
+    async def _throttle(self) -> None:
+        """Выдержать минимальный интервал между вызовами (под блокировкой)."""
+        async with self._interval_lock:
+            wait = self._last_call + self._min_interval - time.monotonic()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._last_call = time.monotonic()
 
     async def call(
         self,
@@ -45,13 +76,26 @@ class Bitrix24Client:
         # найдено спайком на проде, план 003).
         body = {"auth": auth_token, **(params or {})}
 
-        async with httpx.AsyncClient(timeout=self._timeout) as http:
-            resp = await http.request(method_http, url, json=body)
-
+        await self._throttle()
+        resp = await self._http.request(method_http, url, json=body)
         data = resp.json()
+
+        if isinstance(data, dict) and data.get("error") == "QUERY_LIMIT_EXCEEDED":
+            # Free-портал жёстко режет частоту (~2 rps). Одна повторная
+            # попытка после паузы: секунда-полторы — и лимит снова открыт.
+            logger.warning("QUERY_LIMIT_EXCEEDED on %s — retrying once", method)
+            await asyncio.sleep(1.5)
+            await self._throttle()
+            resp = await self._http.request(method_http, url, json=body)
+            data = resp.json()
+
         if isinstance(data, dict) and "error" in data:
             raise Bitrix24Error(
                 code=data["error"],
                 description=data.get("error_description", ""),
             )
         return data.get("result")
+
+    async def aclose(self) -> None:
+        """Закрыть общий HTTP-клиент (вызывать при остановке процесса)."""
+        await self._http.aclose()
