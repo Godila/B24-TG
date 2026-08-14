@@ -32,7 +32,7 @@
 - Windows-машина разработки, venv: `.venv/Scripts/python.exe`, ruff: `.venv/Scripts/ruff.exe`. Команды — из корня репо `C:\Users\geor\Desktop\Bitrix-TG`.
 - Тесты: `.venv/Scripts/python.exe -m pytest -q` (сейчас 86 passed). Линт: `.venv/Scripts/ruff.exe check src/ tests/`.
 - Git: работа прямо в `main` (однопользовательский flow), conventional commits вида `fix(scope): ...` (см. `git log`). НЕ пушить без указания оператора.
-- Production: VM 31.77.169.8 (SSH root, ключ установлен), `/opt/bitrix-tg`, `docker compose up -d --build` + `docker compose restart nginx` после пересоздания web. Подробно: `docs/DEPLOY.md`.
+- Production: VM `<VM_SSH_TARGET>` (SSH root, ключ установлен), `/opt/bitrix-tg`, `docker compose up -d --build` + `docker compose restart nginx` после пересоздания web. Подробно: `docs/DEPLOY.md`.
 - Стиль кода: русские docstring-ы, `logging.getLogger(__name__)`, SQLAlchemy 2.0 async (`Mapped`/`mapped_column`), тесты через in-memory SQLite + `dependency_overrides` (образец: `tests/integration/test_dialogs_api.py`).
 
 ## Findings considered and rejected (не перепроверять в следующем аудите)

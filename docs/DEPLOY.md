@@ -1,7 +1,7 @@
 # Деплой Bitrix-TG (production)
 
 Production: **https://b24-tg.haragy.top**
-VM: `root@31.77.169.8`, Ubuntu 24.04, 2 vCPU / 2 GB RAM / 40 GB SSD.
+VM: `<VM_SSH_TARGET>`, Ubuntu 24.04, 2 vCPU / 2 GB RAM / 40 GB SSD.
 
 ## Что развёрнуто (Phase 4)
 5 Docker-контейнеров через `docker compose`:
@@ -59,9 +59,12 @@ docker compose restart nginx
 4. `docker compose restart bridge`.
 
 ### 2. Смена B24-пароля (рекомендация безопасности)
-Учётка `gkaitmazov@gmail.com` использовалась для headless-OAuth. Сменить пароль в B24 после деплоя.
+Учётка `<admin-email>` использовалась для headless-OAuth. Сменить пароль в B24 после деплоя.
 
 ## Операции (полезные команды на VM)
+
+SSH-доступ и креденшлс — в приватных ops-заметках, не в репо.
+
 ```bash
 # статус всех контейнеров
 docker compose ps

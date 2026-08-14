@@ -3,8 +3,12 @@
 
 Читает /root/.b24_tokens.json, генерит случайные SESSION_SECRET /
 POSTGRES_PASSWORD / B24_WEBHOOK_SECRET, пишет /opt/bitrix-tg/.env.
-Запускается НА VM (один раз)."""
+Запускается НА VM (один раз).
+
+OAuth-креденшлсы приложения (B24_CLIENT_ID / B24_CLIENT_SECRET) передаются
+через окружение — их НЕЛЬЗЯ хранить в репо."""
 import json
+import os
 import secrets
 import string
 from pathlib import Path
@@ -13,6 +17,13 @@ TOKENS_PATH = Path("/root/.b24_tokens.json")
 ENV_PATH = Path("/opt/bitrix-tg/.env")
 
 tokens = json.loads(TOKENS_PATH.read_text())
+
+# Креденшлсы B24-приложения берём из окружения (не храним в репо).
+PORTAL = os.environ.get("B24_PORTAL", "https://b24-ye2jjz.bitrix24.ru")
+CLIENT_ID = os.environ.get("B24_CLIENT_ID")
+CLIENT_SECRET = os.environ.get("B24_CLIENT_SECRET")
+if not CLIENT_ID or not CLIENT_SECRET:
+    raise SystemExit("Задайте B24_CLIENT_ID и B24_CLIENT_SECRET в окружении (не храните в репо)")
 
 # Один пароль для postgres — используется и в DATABASE_URL, и в POSTGRES_PASSWORD.
 db_password = secrets.token_urlsafe(16)
@@ -27,9 +38,9 @@ env = f"""# Production environment — generated. НЕ коммитить.
 # Portal: https://b24-ye2jjz.bitrix24.ru
 
 # --- Bitrix24 OAuth ---
-B24_PORTAL=https://b24-ye2jjz.bitrix24.ru
-B24_CLIENT_ID=local.6a7a33e38edc66.87243082
-B24_CLIENT_SECRET=Rtjv2t4Kc5OTeajukCGTq7SWNf9cBCL4XNAnFsjwPW4bCjgqia
+B24_PORTAL={PORTAL}
+B24_CLIENT_ID={CLIENT_ID}
+B24_CLIENT_SECRET={CLIENT_SECRET}
 B24_OAUTH_REDIRECT=https://b24-tg.haragy.top/app
 B24_CLIENT_ENDPOINT=https://b24-ye2jjz.bitrix24.ru/rest/
 B24_MEMBER_ID={tokens['member_id']}

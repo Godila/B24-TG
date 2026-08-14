@@ -18,8 +18,8 @@
 
 ## Current state
 
-- `scripts/gen_prod_env.py:31-32` — литералы `B24_CLIENT_ID=local.6a7a...` и `B24_CLIENT_SECRET=Rtjv...` (значения НЕ копировать никуда). Строки 33-37: `B24_OAUTH_REDIRECT`, `B24_CLIENT_ENDPOINT`, `B24_MEMBER_ID`, `B24_ACCESS_TOKEN`, `B24_REFRESH_TOKEN` — тоже специфичны для прод-портала; `B24_MEMBER_ID/ACCESS_TOKEN/REFRESH_TOKEN/CLIENT_ENDPOINT` при этом вообще не читаются Settings (мёртвые — см. план 008), а `B24_PORTAL` в строке 29 нужен.
-- `docs/DEPLOY.md:4` — «VM: `root@31.77.169.8`…»; `:62` — email админа; `:80-е` — примеры команд с этим IP (`ssh root@31.77.169.8`).
+- `scripts/gen_prod_env.py:31-32` — литералы `B24_CLIENT_ID=<утёкший префикс local.>` и `B24_CLIENT_SECRET=<утёкший литерал>` (значения НЕ копировать никуда). Строки 33-37: `B24_OAUTH_REDIRECT`, `B24_CLIENT_ENDPOINT`, `B24_MEMBER_ID`, `B24_ACCESS_TOKEN`, `B24_REFRESH_TOKEN` — тоже специфичны для прод-портала; `B24_MEMBER_ID/ACCESS_TOKEN/REFRESH_TOKEN/CLIENT_ENDPOINT` при этом вообще не читаются Settings (мёртвые — см. план 008), а `B24_PORTAL` в строке 29 нужен.
+- `docs/DEPLOY.md:4` — «VM: `root@<VM_IP>`…»; `:62` — email админа; `:80-е` — примеры команд с этим IP (`ssh root@<VM_IP>`).
 - `src/app/web/routes/webhook.py` (весь файл ~40 строк): роут `POST /webhook/b24/onappinstall`, читает `await request.json()`, берёт `payload["auth"]`, вызывает `tm.save_install_data(auth_data)` без какой-либо проверки. `payload.get("auth", {})` → `KeyError` в `save_install_data` при неполных данных → 500.
 - `src/app/b24/token_manager.py:91-109` — `save_install_data` делает upsert по `member_id` (перезапись access/refresh).
 - `src/app/config.py:33` — `b24_webhook_secret: str = Field("")` — конфиг существует, нигде не проверяется (grep: только определение).
@@ -37,7 +37,7 @@
 |---|---|---|
 | Тесты | `.venv/Scripts/python.exe -m pytest -q` | all pass (86+N new) |
 | Линт | `.venv/Scripts/ruff.exe check src/ tests/` | exit 0 |
-| Поиск секрета | `git grep -nE "local\.6a7a|Rtjv2t4K"` | нет вывода (после шага 1) |
+| Поиск секрета | `git grep -nE "<фингерпринты client_id|client_secret из контроллерской задачи>"` | нет вывода (после шага 1) |
 
 ## Scope
 
@@ -60,10 +60,10 @@ if not CLIENT_ID or not CLIENT_SECRET:
     raise SystemExit("Задайте B24_CLIENT_ID и B24_CLIENT_SECRET в окружении (не храните в репо)")
 ```
 и подставить `{CLIENT_ID}`/`{CLIENT_SECRET}` в шаблон env. `B24_PORTAL` тоже вынести в переменную `PORTAL = os.environ.get("B24_PORTAL", "https://b24-ye2jjz.bitrix24.ru")` (адрес портала не секрет, но пусть будет управляемым). Импорт `os` добавить.
-2. `docs/DEPLOY.md`: заменить `root@31.77.169.8` → `<VM_SSH_TARGET>` (все вхождения, включая примеры команд), email на `<admin-email>`. Добавить в раздел «Операции» строку: «SSH-доступ и креденшлс — в приватных ops-заметках, не в репо».
+2. `docs/DEPLOY.md`: заменить `root@<VM_IP>` → `<VM_SSH_TARGET>` (все вхождения, включая примеры команд), email на `<admin-email>`. Добавить в раздел «Операции» строку: «SSH-доступ и креденшлс — в приватных ops-заметках, не в репо».
 3. Закоммитить.
 
-**Verify**: `git grep -nE "local\.6a7a|Rtjv2t4K|31\.77\.169\.8"` → пусто; `.venv/Scripts/ruff.exe check scripts/` → exit 0 (если scripts не в ruff scope — пропусти ruff для scripts).
+**Verify**: `git grep -nE "<фингерпринты client_id|client_secret|IP из контроллерской задачи>"` → пусто; `.venv/Scripts/ruff.exe check scripts/` → exit 0 (если scripts не в ruff scope — пропусти ruff для scripts).
 
 ### Step 2: Аутентификация webhook `/webhook/b24/onappinstall`
 
@@ -136,7 +136,7 @@ add_header X-Content-Type-Options "nosniff" always;
 Новые: 3 webhook-теста (401/200/422), 1 placement (Secure-флаг), 1 CORS-disabled, плюс негативные Secure-отсутствие в dev. Образец структур — `tests/integration/test_webhook.py` (текущий) и `test_app_wiring.py`.
 
 ## Done criteria
-- [ ] `git grep -nE "local\.6a7a|Rtjv2t4K|31\.77\.169\.8"` — пусто
+- [ ] `git grep -nE "<фингерпринты client_id|client_secret|IP из контроллерской задачи>"` — пусто
 - [ ] `pytest -q` green; `ruff check src/ tests/` exit 0
 - [ ] POST /webhook/b24/onappinstall без заголовка → 401 (тест)
 - [ ] Кука в prod-режиме содержит Secure (тест)
