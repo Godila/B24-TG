@@ -8,9 +8,9 @@
 
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
-| 001 | Security: ротация утёкшего секрета + харденинг (webhook auth, cookie secure, CORS, HSTS) | P1 | S+M | — | TODO |
-| 002 | Починить входящий конвейер: Telethon NewMessage(incoming=True) + тесты шва | P1 | S | — | TODO |
-| 003 | Spike: верификация B24 free-tier CRM-методов на прод-портале | P1 | S | — | TODO |
+| 001 | Security: ротация утёкшего секрета + харденинг (webhook auth, cookie secure, CORS, HSTS) | P1 | S+M | — | DONE (код, a6a9724; остаётся оператору: ротация секрета + деплой) |
+| 002 | Починить входящий конвейер: Telethon NewMessage(incoming=True) + тесты шва | P1 | S | — | DONE (24c8e0e) |
+| 003 | Spike: верификация B24 free-tier CRM-методов на прод-портале | P1 | S | — | IN PROGRESS (фаза A — executor) |
 | 004 | Мультиаккаунт: dialog scoping по менеджеру + unique constraint | P1 | M | 002 | TODO |
 | 005 | Замкнуть исходящий TG-цикл: Message.status/tg_message_id/message_id + attempts-фикс | P1 | M | — | TODO |
 | 006 | CRM durability: очередь crm_sync + retry, rate-limit B24, shared httpx, outbound timeline | P2 | M-L | 005 | TODO |
