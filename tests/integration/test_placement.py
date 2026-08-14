@@ -159,7 +159,9 @@ def test_placement_deal_prod_accepts_valid_token(monkeypatch):
     assert r.status_code == 200
     cookie_header = r.headers.get("set-cookie", "")
     assert "btg_sess=" in cookie_header
-    # В prod-режиме кука только по HTTPS.
+    # В prod-режиме кука только по HTTPS и SameSite=none — без этого
+    # браузеры не шлют куку из кросс-сайтового iframe портала B24.
     assert "Secure" in cookie_header
+    assert "samesite=none" in cookie_header.lower()
     # deal_id внедрён в HTML как data-deal-id.
     assert 'data-deal-id="42"' in r.text

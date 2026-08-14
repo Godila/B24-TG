@@ -76,6 +76,11 @@ def create_session_cookie_params(
 
     ``secure=True`` по умолчанию (prod за HTTPS); для dev-сервера на
     http://localhost передавай ``secure=False``.
+
+    SameSite: виджет живёт в кросс-сайтовом iframe на портале B24
+    (b24-*.bitrix24.ru → b24-tg.haragy.top) — Lax-куки браузеры в такой
+    контекст не отправляют (401 на каждом /api-вызове из iframe). Поэтому
+    в prod ставим ``none`` (требует Secure), в dev — ``lax``.
     """
     payload = create_session_payload(b24_user_id, deal_id)
     token = sign_session(payload, secret)
@@ -83,7 +88,7 @@ def create_session_cookie_params(
         "key": SESSION_COOKIE,
         "value": token,
         "httponly": True,
-        "samesite": "lax",
+        "samesite": "none" if secure else "lax",
         "max_age": SESSION_TTL,
         "path": "/",
         "secure": secure,
