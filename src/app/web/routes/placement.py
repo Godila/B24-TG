@@ -49,6 +49,10 @@ async def _verify_b24_token(access_token: str, expected_user_id: int) -> bool:
     except Exception:
         logger.exception("placement: B24 token verification failed")
         return False
+    finally:
+        # Клиент одноразовый на placement-вход и держит свой httpx-пул —
+        # обязательно закрываем, иначе утечка коннектов на каждый логин.
+        await client.aclose()
     if not isinstance(result, dict):
         return False
     try:

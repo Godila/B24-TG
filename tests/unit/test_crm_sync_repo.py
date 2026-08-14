@@ -132,6 +132,28 @@ async def test_mark_done_and_failed_and_reschedule(session):
         next_at = next_at.replace(tzinfo=UTC)
     assert next_at > datetime.now(UTC)
 
+
+@pytest.mark.asyncio
+async def test_reschedule_truncates_long_error(session):
+    """last_error — String(512): длинная строка httpx-исключения без обрезки
+    валит UPDATE на postgres, item остаётся due — hot retry loop каждые 2с."""
+    session.add(
+        CrmSyncItem(
+            id=1, kind=KIND_INBOUND, message_id=1, status=CrmSyncStatus.queued,
+            attempts=0, next_attempt_at=datetime.now(UTC),
+        )
+    )
+    await session.commit()
+
+    repo = SqlAlchemyCrmSyncRepository(session)
+    item = await session.get(CrmSyncItem, 1)
+    await repo.reschedule(item, delay_seconds=30, error="x" * 1000)
+
+    await session.reset()
+    refreshed = await session.get(CrmSyncItem, 1)
+    assert len(refreshed.last_error) == 512
+    assert refreshed.last_error == "x" * 512
+
     item = await session.get(CrmSyncItem, 1)
     await repo.mark_failed(item, "5th fail")
     await session.reset()

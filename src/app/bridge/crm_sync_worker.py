@@ -131,11 +131,20 @@ class CrmSyncWorker:
         data = await self._repo.collect(item.message_id)
         if data is None:
             # Сообщение удалено/не найдено — ретраи бессмысленны.
+            logger.warning(
+                "crm_sync item %s: message_id=%s not found — terminal fail",
+                item.id, item.message_id,
+            )
             await self._repo.mark_failed(item, "message_not_found")
             return
         if data.assigned_b24_user_id is None:
             # Без ответственного менеджера process_inbound вызвать нельзя;
             # менеджер не появится сам — терминально.
+            logger.warning(
+                "crm_sync item %s: message_id=%s has no assigned manager — "
+                "terminal fail",
+                item.id, item.message_id,
+            )
             await self._repo.mark_failed(item, "no_assigned_manager")
             return
 
@@ -166,6 +175,10 @@ class CrmSyncWorker:
     async def _handle_outbound(self, item: CrmSyncItem) -> None:
         data = await self._repo.collect(item.message_id)
         if data is None:
+            logger.warning(
+                "crm_sync item %s: message_id=%s not found — terminal fail",
+                item.id, item.message_id,
+            )
             await self._repo.mark_failed(item, "message_not_found")
             return
 

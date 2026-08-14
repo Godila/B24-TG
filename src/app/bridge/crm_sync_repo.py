@@ -88,7 +88,9 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
                 status=CrmSyncStatus.retrying,
                 attempts=item.attempts + 1,
                 next_attempt_at=next_at,
-                last_error=error,
+                # String(512): длинная строка httpx-исключения без обрезки
+                # падает на postgres, item остаётся due — hot retry loop.
+                last_error=error[:512] if error is not None else None,
             )
         )
         await self._session.commit()
