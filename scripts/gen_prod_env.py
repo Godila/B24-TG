@@ -17,7 +17,7 @@ from pathlib import Path
 ENV_PATH = Path("/opt/bitrix-tg/.env")
 
 # Креденшлсы B24-приложения берём из окружения (не храним в репо).
-# PORTAL — база для B24_PORTAL / B24_CLIENT_ENDPOINT / CORS_ORIGINS.
+# PORTAL — база для B24_PORTAL / CORS_ORIGINS.
 PORTAL = os.environ.get("B24_PORTAL", "https://b24-ye2jjz.bitrix24.ru").rstrip("/")
 CLIENT_ID = os.environ.get("B24_CLIENT_ID")
 CLIENT_SECRET = os.environ.get("B24_CLIENT_SECRET")
