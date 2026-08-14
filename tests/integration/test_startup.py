@@ -1,3 +1,4 @@
+from typing import ClassVar
 from unittest.mock import AsyncMock
 
 import pytest
@@ -46,8 +47,9 @@ async def test_run_bridge_wires_b24_components(monkeypatch):
         AsyncMock(return_value=[]),
     )
 
-    # OutboxWorker/CrmSyncWorker/HealthChecker: реальный run() циклит вечно —
-    # подменяем.
+    # OutboxWorker/CrmSyncWorker: реальный run() циклит вечно — подменяем.
+    # HealthChecker: фейк-класс (план 009) — run() не циклит, заодно ловим
+    # constructor-args (session_factory/notifier/admin_user_id).
     import app.bridge.crm_sync_worker as csw_mod
     import app.bridge.health_checker as hc_mod
     import app.bridge.outbox_worker as ow_mod
@@ -57,9 +59,20 @@ async def test_run_bridge_wires_b24_components(monkeypatch):
     monkeypatch.setattr(
         csw_mod.CrmSyncWorker, "run", AsyncMock(return_value=None)
     )
-    monkeypatch.setattr(
-        hc_mod.HealthChecker, "run", AsyncMock(return_value=None)
-    )
+
+    class FakeHealthChecker:
+        init_kwargs: ClassVar[dict] = {}
+
+        def __init__(self, sm, interval_sec=300, **kwargs):
+            FakeHealthChecker.init_kwargs = {"sm": sm, "interval_sec": interval_sec, **kwargs}
+
+        async def run(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+    monkeypatch.setattr(hc_mod, "HealthChecker", FakeHealthChecker)
 
     await main_mod.run_bridge()
 
@@ -67,3 +80,9 @@ async def test_run_bridge_wires_b24_components(monkeypatch):
     assert "crm_sync_enqueue" in constructed
     assert "session_mgr" in constructed
     assert "db_session_factory" in constructed
+
+    # План 009: HealthChecker подключён к БД и B24-алертам.
+    hc_kwargs = FakeHealthChecker.init_kwargs
+    assert hc_kwargs["session_factory"] is not None
+    assert callable(hc_kwargs["notifier"])
+    assert hc_kwargs["admin_user_id"] == 1  # default ALERT_ADMIN_B24_USER_ID

@@ -92,6 +92,15 @@ async def run_bridge() -> None:
     )
     b24sync = Bitrix24Sync(token_mgr=token_mgr, crm=crm, im=im)
 
+    # Алерты админу (план 009): HealthChecker шлёт в B24-чат через TokenManager
+    # + ImService на том же shared-клиенте, что и CRM-конвейер.
+    async def admin_alert(user_id: int, text: str) -> None:
+        token = await token_mgr.get_token()
+        if token is None:
+            logger.warning("Admin alert skipped: no B24 token (integration not installed)")
+            return
+        await im.notify_manager(token.access_token, user_id, text)
+
     # CRM-очередь (план 006): handler ставит задачи, воркер выполняет.
     crm_repo = WorkerCrmSyncRepository(async_session)
 
@@ -141,8 +150,16 @@ async def run_bridge() -> None:
     )
 
     # 5-6. Фоновые задачи: outbox + crm_sync + health + по задаче на входящий
-    #      поток аккаунта.
-    health = HealthChecker(sm)
+    #      поток аккаунта. HealthChecker (план 009) персистит статусы сессий
+    #      в tg_accounts.status (их читает /health в web-процессе) и алертит
+    #      админа при отключении аккаунта.
+    health = HealthChecker(
+        sm,
+        interval_sec=300,
+        session_factory=async_session,
+        notifier=admin_alert,
+        admin_user_id=settings.alert_admin_b24_user_id,
+    )
     tasks: list[asyncio.Task] = [
         asyncio.create_task(worker.run()),
         asyncio.create_task(crm_worker.run()),

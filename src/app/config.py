@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     crm_sync_poll_interval: float = Field(2)      # сек
     crm_sync_max_attempts: int = Field(5)
 
+    # Алерты о состоянии TG-сессий (план 009): b24_user_id админа, которому
+    # HealthChecker шлёт уведомления в B24-чат (im.message.add).
+    alert_admin_b24_user_id: int = Field(1)
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
