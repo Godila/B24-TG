@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     b24_portal: str = Field(...)
     b24_client_id: str = Field(...)
     b24_client_secret: str = Field(...)
-    b24_oauth_redirect: str = Field("https://localhost/oauth/callback")
+    # HMAC-секрет для проверки webhook ONAPPINSTALL (план 001).
     b24_webhook_secret: str = Field("")
 
     # Throttling (защита от бана)
@@ -54,8 +54,6 @@ class Settings(BaseSettings):
 
     # Инфра
     database_url: str = Field(...)
-    redis_url: str = Field(...)
-    sentry_dsn: str = Field("")
 
     # Outbox
     outbox_poll_interval: int = Field(2)          # сек

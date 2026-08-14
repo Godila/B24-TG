@@ -15,14 +15,6 @@ services:
     restart: unless-stopped
     # Без ports — postgres доступен только внутри docker-сети (безопасно).
 
-  redis:
-    image: redis:7-alpine
-    command: redis-server --appendonly yes
-    volumes:
-      - redis_data:/data
-    restart: unless-stopped
-    # Без ports — redis доступен только внутри docker-сети (безопасно).
-
   web:
     build: .
     command: ["python", "-m", "app.main", "web"]
@@ -30,8 +22,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_started
     expose:
       - "8000"  # только для nginx внутри сети, НЕ публикуется наружу
     restart: unless-stopped
@@ -45,8 +35,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_started
     restart: unless-stopped
 
   nginx:
@@ -64,7 +52,6 @@ services:
 
 volumes:
   pg_data:
-  redis_data:
   tg_sessions:
   letsencrypt:
   letsencrypt_www:
