@@ -20,10 +20,10 @@
 | Язык | Python 3.11 |
 | Web | FastAPI, Uvicorn, Vanilla JS + Alpine.js (без сборщика) |
 | БД | PostgreSQL 16, SQLAlchemy 2.0 async, Alembic |
-| Очередь | Outbox-паттерн (Postgres) + Redis (готов под WebSocket pub/sub) |
+| Очередь | Outbox-паттерн + crm_sync-очередь (обе в Postgres) |
 | Telegram | Telethon (MTProto user-API) |
 | Инфра | Docker Compose, nginx, Let's Encrypt |
-| Качество | pytest + pytest-asyncio (86 тестов), ruff, TDD |
+| Качество | pytest + pytest-asyncio (148 тестов), ruff, TDD |
 
 ## Архитектура
 
@@ -36,13 +36,10 @@ flowchart LR
         WEB["web<br/>FastAPI"]
         BRIDGE["bridge<br/>Telethon + outbox-воркер"]
         PG[("Postgres")]
-        REDIS[("Redis")]
 
         N --> WEB
         WEB <--> PG
-        WEB <--> REDIS
         BRIDGE <--> PG
-        BRIDGE <--> REDIS
     end
 
     B24["Bitrix24<br/>(CRM + placement)"] -.placement iFrame.-> N
@@ -53,7 +50,7 @@ flowchart LR
 
 - **web** — FastAPI: виджет placement, REST API (диалоги, сообщения, шаблоны), webhook B24.
 - **bridge** — пул Telethon-сессий: ловит входящие → синхронизирует с CRM → пишет в БД; крутит outbox-воркер для исходящих.
-- Общаются через Postgres (outbox-таблица) + Redis (готов под real-time).
+- Общаются через Postgres (outbox- и crm_sync-таблицы).
 
 ### Поток входящего сообщения
 ```
@@ -112,7 +109,7 @@ python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\act
 pip install -e ".[dev]"
 
 # тесты + линт
-pytest -v          # 86 тестов
+pytest -v          # 148 тестов
 ruff check src/ tests/
 ```
 
@@ -147,7 +144,7 @@ docker compose restart bridge
 ## Безопасность
 
 - **Auth виджета**: B24 передаёт `user_id` + `access_token` → проверка токена через `user.current` → HMAC-подписанная сессионная кука (httponly, SameSite=Lax). Никаких паролей в UI.
-- **Публичные порты**: только nginx (80/443). Postgres/Redis — внутри docker-сети.
+- **Публичные порты**: только nginx (80/443). Postgres — внутри docker-сети.
 - **Секреты**: генерируются случайно на VM (`SESSION_SECRET`, `POSTGRES_PASSWORD`, `B24_WEBHOOK_SECRET`), хранятся в `.env` (chmod 600, в `.gitignore`).
 - **Идемпотентность**: дубли сообщений (MTProto redelivery) отсеиваются по `(dialog_id, tg_message_id)`.
 

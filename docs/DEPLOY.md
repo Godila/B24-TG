@@ -4,12 +4,11 @@ Production: **https://b24-tg.haragy.top**
 VM: `<VM_SSH_TARGET>`, Ubuntu 24.04, 2 vCPU / 2 GB RAM / 40 GB SSD.
 
 ## Что развёрнуто (Phase 4)
-5 Docker-контейнеров через `docker compose`:
+4 Docker-контейнера через `docker compose`:
 - `nginx` — TLS (Let's Encrypt) + reverse-proxy на `web:8000`, порты 80/443
 - `web` — FastAPI (app.main web), порт 8000 только внутри сети
 - `bridge` — Telethon/outbox-воркер (app.main bridge)
 - `postgres:16-alpine` — БД, только внутри сети (без публичного порта)
-- `redis:7-alpine` — pubsub/кэш, только внутри сети
 
 Код: `/opt/bitrix-tg` (git clone GitHub). Конфиг: `/opt/bitrix-tg/.env` (chmod 600, НЕ в git).
 Сертификат: `/etc/letsencrypt/live/b24-tg.haragy.top/`, автопродление через `certbot.timer`.
@@ -43,6 +42,20 @@ docker compose exec web alembic upgrade head
 docker compose restart nginx
 ```
 
+> Plan 008: после pull `docker compose up -d --build` удалит redis-контейнер
+> (больше не описан в compose). Приложение его не использовало, ничего не
+> сломается; `REDIS_URL` в `.env` можно убрать руками (Settings игнорирует
+> неизвестные переменные). Volume `redis_data` при желании удалить:
+> `docker volume rm bitrix-tg_redis_data`.
+
+### Runbook: сессия Telegram инвалидировалась (логаут/смена номера)
+```bash
+docker compose exec web python -m app.main auth --phone <номер>
+docker compose exec postgres psql -U bitrix_tg -d bitrix_tg -c \
+  "UPDATE tg_accounts SET status='active' WHERE phone='<номер>';"
+docker compose restart bridge
+```
+
 ## Что ещё нужно подключить (не сделано в Phase 4-5)
 
 ### 1. Реальный Telegram-аккаунт (отправка/приём сообщений)
@@ -61,7 +74,6 @@ docker compose restart nginx
    ```
 5. `docker compose restart bridge` → в логах должно появиться `Registered session for account_id=1` и `Bridge started: 1 account(s) registered`.
 6. Отправить тестовое сообщение в виджете карточки сделки → клиенту в Telegram.
-4. `docker compose restart bridge`.
 
 ### 2. Смена B24-пароля (рекомендация безопасности)
 Учётка `<admin-email>` использовалась для headless-OAuth. Сменить пароль в B24 после деплоя.
@@ -117,7 +129,6 @@ docker compose exec web alembic upgrade head
 Internet → nginx:443 (TLS) → web:8000 (FastAPI)
                          ↘ /placement/deal ← Bitrix24 iFrame (CRM_DEAL_DETAIL_TAB)
 Postgres ← web, bridge
-Redis    ← web, bridge (готов под WebSocket в Phase 3b)
 bridge   → Telegram MTProto (Telethon) [нужен реальный api_id/hash + номер]
 Bitrix24 REST ← web/bridge (OAuth token в БД, авто-refresh)
 ```
@@ -130,5 +141,5 @@ Bitrix24 REST ← web/bridge (OAuth token в БД, авто-refresh)
 - ✅ placement POST с фейковым токеном → 403 "Недействительный B24 токен"
 - ✅ `/static/app.js` → 200
 - ✅ `placement.bind` → True (вкладка в карточке сделки зарегистрирована)
-- ✅ Все 5 контейнеров Up, postgres healthy
+- ✅ Все контейнеры Up, postgres healthy
 - ✅ Сертификат валиден до 2026-11-09, автопродление активно
