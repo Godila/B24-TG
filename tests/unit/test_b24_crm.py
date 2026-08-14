@@ -63,6 +63,36 @@ async def test_create_deal():
 
 
 @pytest.mark.asyncio
+async def test_find_open_deal_for_contact_found():
+    client = AsyncMock()
+    # crm.item.list возвращает items; order id desc — первый элемент и есть
+    # новейшая открытая сделка.
+    client.call = AsyncMock(
+        return_value={"items": [{"id": "300", "title": "Сделка 3"}, {"id": "200"}]}
+    )
+    svc = CrmService(client)
+    deal = await svc.find_open_deal_for_contact(auth_token="t", contact_id=42)
+    assert deal is not None
+    assert deal.id == 300
+    assert deal.title == "Сделка 3"
+    call_kwargs = client.call.call_args
+    assert call_kwargs.args[0] == "crm.item.list"
+    params = call_kwargs.kwargs["params"]
+    assert params["entityTypeId"] == 2  # DEAL
+    assert params["filter"] == {"CONTACT_ID": 42, "CLOSED": "N"}
+    assert params["order"] == {"id": "desc"}
+
+
+@pytest.mark.asyncio
+async def test_find_open_deal_for_contact_not_found():
+    client = AsyncMock()
+    client.call = AsyncMock(return_value={"items": []})
+    svc = CrmService(client)
+    deal = await svc.find_open_deal_for_contact(auth_token="t", contact_id=42)
+    assert deal is None
+
+
+@pytest.mark.asyncio
 async def test_add_timeline_comment():
     client = AsyncMock()
     client.call = AsyncMock(return_value=999)

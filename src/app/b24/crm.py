@@ -100,6 +100,31 @@ class CrmService:
         item = result.get("item", result) if isinstance(result, dict) else {}
         return ContactInfo(id=int(item.get("id", 0)), name=item.get("title"))
 
+    async def find_open_deal_for_contact(
+        self, auth_token: str, contact_id: int
+    ) -> DealInfo | None:
+        """Найти ОТКРЫТУЮ сделку контакта (новейшую по id).
+
+        Идемпотентность process_inbound: существующий клиент, у которого уже
+        есть сделка, не должен получать deal_id=None навсегда — комментарий
+        должен попадать в его открытую сделку, а не в карточку контакта.
+        """
+        result = await self._client.call(
+            "crm.item.list",
+            auth_token=auth_token,
+            params={
+                "entityTypeId": ENTITY_DEAL,
+                "filter": {"CONTACT_ID": contact_id, "CLOSED": "N"},
+                "order": {"id": "desc"},
+                "select": ["id", "title"],
+            },
+        )
+        items = result.get("items", []) if isinstance(result, dict) else []
+        if not items:
+            return None
+        it = items[0]
+        return DealInfo(id=int(it["id"]), title=it.get("title"))
+
     async def create_deal(
         self, auth_token: str, title: str, contact_id: int, assigned_by_id: int,
     ) -> DealInfo:
