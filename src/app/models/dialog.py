@@ -4,7 +4,7 @@ import enum
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String
+from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
@@ -26,6 +26,17 @@ class DialogStatus(str, enum.Enum):
 
 class Dialog(Base, TimestampMixin):
     __tablename__ = "dialogs"
+    # Мультиаккаунт: в приватных TG-чатах external_chat_id == tg-id клиента
+    # и совпадает у всех менеджеров, поэтому уникальна пара
+    # (external_chat_id, assigned_user_id), а не chat_id сам по себе.
+    # Констрейнт создаёт и составной индекс — отдельный не нужен.
+    __table_args__ = (
+        UniqueConstraint(
+            "external_chat_id",
+            "assigned_user_id",
+            name="uq_dialogs_chat_per_manager",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     contact_id: Mapped[int] = mapped_column(
