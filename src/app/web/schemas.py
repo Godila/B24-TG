@@ -2,7 +2,28 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class OnAppInstallAuth(BaseModel):
+    """Поле auth из ONAPPINSTALL payload (строгая форма — лишнее/битое отвергаем).
+
+    Ключи сверены с ``TokenManager.save_install_data``: access/refresh/member_id
+    обязательны там жёстко (KeyError), остальные приходят в реальном payload B24.
+    ``user_id``/``expires_in`` B24 может присылать строками — pydantic v2 lax-mode
+    приводит их к int.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    access_token: str
+    refresh_token: str
+    member_id: str
+    client_endpoint: str
+    domain: str
+    user_id: int
+    expires_in: int
+    scope: str
 
 
 class DialogOut(BaseModel):

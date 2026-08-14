@@ -1,34 +1,98 @@
+"""Интеграционные тесты webhook ONAPPINSTALL: секрет + валидация auth payload."""
+
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
-from app.web.app import create_app
+WEBHOOK_SECRET = "test-webhook-secret-123"
+
+AUTH_PAYLOAD = {
+    "access_token": "new_access",
+    "expires_in": "3600",
+    "scope": "crm,im",
+    "domain": "b24-ye2jjz.bitrix24.ru",
+    "client_endpoint": "https://b24-ye2jjz.bitrix24.ru/rest/",
+    "member_id": "test_member_123",
+    "refresh_token": "new_refresh",
+    "user_id": "1",
+}
 
 
-def test_onappinstall_saves_token():
-    app = create_app()
-    client = TestClient(app)
+@pytest.fixture
+def client(monkeypatch):
+    monkeypatch.setenv("SESSION_SECRET", "webhook-test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+    monkeypatch.setenv("TG_API_ID", "1")
+    monkeypatch.setenv("TG_API_HASH", "x")
+    monkeypatch.setenv("B24_PORTAL", "https://x.bitrix24.ru")
+    monkeypatch.setenv("B24_CLIENT_ID", "c")
+    monkeypatch.setenv("B24_CLIENT_SECRET", "s")
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    monkeypatch.setenv("B24_WEBHOOK_SECRET", WEBHOOK_SECRET)
+    from app.config import get_settings
+    get_settings.cache_clear()
+    from app.web.app import create_app
+    return TestClient(create_app())
 
-    payload = {
-        "event": "ONAPPINSTALL",
-        "data": {"VERSION": "1", "LANGUAGE_ID": "ru"},
-        "ts": "1700000000",
-        "auth": {
-            "access_token": "new_access",
-            "expires_in": "3600",
-            "scope": "crm,im",
-            "domain": "b24-ye2jjz.bitrix24.ru",
-            "client_endpoint": "https://b24-ye2jjz.bitrix24.ru/rest/",
-            "member_id": "test_member_123",
-            "refresh_token": "new_refresh",
-            "user_id": 1,
-        },
-    }
+
+def test_onappinstall_without_secret_header_returns_401(client):
+    """Без заголовка X-Webhook-Secret токены не сохраняются."""
     with patch("app.web.routes.webhook.get_token_manager") as mock_get:
         tm = AsyncMock()
         tm.save_install_data = AsyncMock()
         mock_get.return_value = tm
-        response = client.post("/webhook/b24/onappinstall", json=payload)
+        response = client.post(
+            "/webhook/b24/onappinstall", json={"event": "ONAPPINSTALL", "auth": AUTH_PAYLOAD},
+        )
+
+    assert response.status_code == 401
+    tm.save_install_data.assert_not_awaited()
+
+
+def test_onappinstall_with_wrong_secret_returns_401(client):
+    """Неверное значение секрета — тоже 401."""
+    response = client.post(
+        "/webhook/b24/onappinstall",
+        json={"event": "ONAPPINSTALL", "auth": AUTH_PAYLOAD},
+        headers={"X-Webhook-Secret": "wrong-secret"},
+    )
+    assert response.status_code == 401
+
+
+def test_onappinstall_with_secret_saves_token(client):
+    """Валидный секрет + полный auth → 200, save_install_data вызван."""
+    with patch("app.web.routes.webhook.get_token_manager") as mock_get:
+        tm = AsyncMock()
+        tm.save_install_data = AsyncMock()
+        mock_get.return_value = tm
+        response = client.post(
+            "/webhook/b24/onappinstall",
+            json={"event": "ONAPPINSTALL", "auth": AUTH_PAYLOAD},
+            headers={"X-Webhook-Secret": WEBHOOK_SECRET},
+        )
 
     assert response.status_code == 200
     tm.save_install_data.assert_awaited_once()
+    # Строковые user_id/expires_in приведены схемой к int.
+    saved = tm.save_install_data.await_args.args[0]
+    assert saved["user_id"] == 1
+    assert saved["expires_in"] == 3600
+    assert saved["member_id"] == "test_member_123"
+
+
+def test_onappinstall_invalid_auth_returns_422(client):
+    """Секрет верный, но auth неполный (нет refresh_token) → 422, токены НЕ сохраняются."""
+    broken_auth = {k: v for k, v in AUTH_PAYLOAD.items() if k != "refresh_token"}
+    with patch("app.web.routes.webhook.get_token_manager") as mock_get:
+        tm = AsyncMock()
+        tm.save_install_data = AsyncMock()
+        mock_get.return_value = tm
+        response = client.post(
+            "/webhook/b24/onappinstall",
+            json={"event": "ONAPPINSTALL", "auth": broken_auth},
+            headers={"X-Webhook-Secret": WEBHOOK_SECRET},
+        )
+
+    assert response.status_code == 422
+    tm.save_install_data.assert_not_awaited()

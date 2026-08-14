@@ -19,6 +19,7 @@ VM: `<VM_SSH_TARGET>`, Ubuntu 24.04, 2 vCPU / 2 GB RAM / 40 GB SSD.
 |---|---|---|
 | GET | `https://b24-tg.haragy.top/health` | Health-check (публичный) |
 | POST | `/placement/deal` | B24 placement handler (CRM_DEAL_DETAIL_TAB) — вкладка в карточке сделки |
+| POST | `/webhook/b24/onappinstall` | Установка приложения. Требует заголовок `X-Webhook-Secret` (= `B24_WEBHOOK_SECRET` из .env): Bitrix24 сам этот заголовок не шлёт, поэтому при ручной переустановке приложения передавай его явно (curl / import_b24_tokens) |
 | GET | `/api/dialogs` | Список диалогов менеджера (нужна сессионная кука) |
 | GET | `/api/dialogs/{id}/messages` | История + poll (`?since=`) |
 | POST | `/api/dialogs/{id}/messages` | Отправить сообщение (→ outbox → Telegram) |
