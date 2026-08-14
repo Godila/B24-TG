@@ -56,6 +56,18 @@ services:
       - web
     restart: unless-stopped
 
+  # MTProto-прокси: хостинг РФ блокирует подсети Telegram, поэтому Telethon
+  # ходит через vless-туннель (TG_PROXY_HOST=xray-client в .env). Раньше это
+  # был ручной `docker run` вне compose — при `compose down/up` сеть
+  # пересоздавалась и контейнер молча терял связность. Конфиг с секретом
+  # живёт ВНЕ репо: /opt/xray-client/config.json на хосте.
+  xray:
+    image: ghcr.io/xtls/xray-core:latest
+    container_name: xray-client
+    volumes:
+      - /opt/xray-client/config.json:/etc/xray/config.json:ro
+    restart: unless-stopped
+
 volumes:
   pg_data:
   tg_sessions:
