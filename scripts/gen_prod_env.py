@@ -19,7 +19,8 @@ ENV_PATH = Path("/opt/bitrix-tg/.env")
 tokens = json.loads(TOKENS_PATH.read_text())
 
 # Креденшлсы B24-приложения берём из окружения (не храним в репо).
-PORTAL = os.environ.get("B24_PORTAL", "https://b24-ye2jjz.bitrix24.ru")
+# PORTAL — база для B24_PORTAL / B24_CLIENT_ENDPOINT / CORS_ORIGINS.
+PORTAL = os.environ.get("B24_PORTAL", "https://b24-ye2jjz.bitrix24.ru").rstrip("/")
 CLIENT_ID = os.environ.get("B24_CLIENT_ID")
 CLIENT_SECRET = os.environ.get("B24_CLIENT_SECRET")
 if not CLIENT_ID or not CLIENT_SECRET:
@@ -35,14 +36,14 @@ def rand_secret(n: int = 48) -> str:
 
 
 env = f"""# Production environment — generated. НЕ коммитить.
-# Portal: https://b24-ye2jjz.bitrix24.ru
+# Portal: {PORTAL}
 
 # --- Bitrix24 OAuth ---
 B24_PORTAL={PORTAL}
 B24_CLIENT_ID={CLIENT_ID}
 B24_CLIENT_SECRET={CLIENT_SECRET}
 B24_OAUTH_REDIRECT=https://b24-tg.haragy.top/app
-B24_CLIENT_ENDPOINT=https://b24-ye2jjz.bitrix24.ru/rest/
+B24_CLIENT_ENDPOINT={PORTAL}/rest/
 B24_MEMBER_ID={tokens['member_id']}
 B24_ACCESS_TOKEN={tokens['access_token']}
 B24_REFRESH_TOKEN={tokens['refresh_token']}
@@ -62,7 +63,7 @@ REDIS_URL=redis://redis:6379/0
 # --- Web/UI ---
 SESSION_SECRET={rand_secret(48)}
 DEV_MODE=false
-CORS_ORIGINS=https://b24-ye2jjz.bitrix24.ru,https://b24-tg.haragy.top
+CORS_ORIGINS={PORTAL},https://b24-tg.haragy.top
 STATIC_DIR=/app/src/app/static
 
 # --- Throttling ---

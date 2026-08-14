@@ -36,12 +36,19 @@ async def on_app_install(request: Request) -> JSONResponse:
     """
     settings = get_settings()
     secret = request.headers.get("X-Webhook-Secret", "")
+    # Сравниваем байты: compare_digest(str, str) падает TypeError на не-ASCII
+    # значениях заголовка (latin-1) — было бы 500 вместо 401.
     if not settings.b24_webhook_secret or not hmac.compare_digest(
-        secret, settings.b24_webhook_secret
+        secret.encode("utf-8"), settings.b24_webhook_secret.encode("utf-8")
     ):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
 
-    payload = await request.json()
+    try:
+        payload = await request.json()
+    except ValueError:
+        # json.JSONDecodeError — подкласс ValueError; битое тело → 422, не 500.
+        logger.warning("ONAPPINSTALL: malformed JSON body rejected")
+        return JSONResponse({"error": "validation error"}, status_code=422)
     auth_raw = payload.get("auth", {}) if isinstance(payload, dict) else {}
     try:
         auth = OnAppInstallAuth.model_validate(auth_raw)

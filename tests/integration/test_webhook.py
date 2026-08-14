@@ -96,3 +96,19 @@ def test_onappinstall_invalid_auth_returns_422(client):
 
     assert response.status_code == 422
     tm.save_install_data.assert_not_awaited()
+
+
+def test_onappinstall_malformed_json_returns_422(client):
+    """Секрет верный, но тело — не JSON → 422 (не 500), токены НЕ сохраняются."""
+    with patch("app.web.routes.webhook.get_token_manager") as mock_get:
+        tm = AsyncMock()
+        tm.save_install_data = AsyncMock()
+        mock_get.return_value = tm
+        response = client.post(
+            "/webhook/b24/onappinstall",
+            content="not-json{",
+            headers={"X-Webhook-Secret": WEBHOOK_SECRET},
+        )
+
+    assert response.status_code == 422
+    tm.save_install_data.assert_not_awaited()
