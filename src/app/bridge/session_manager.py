@@ -15,14 +15,17 @@ class SessionManager:
     ``account.id``; один аккаунт = одна сессия = один менеджер.
     """
 
-    def __init__(self, api_id: int, api_hash: str, sessions_dir: str):
+    def __init__(self, api_id: int, api_hash: str, sessions_dir: str,
+                 proxy: tuple | None = None):
         self._api_id = api_id
         self._api_hash = api_hash
         self._sessions_dir = sessions_dir
+        self._proxy = proxy
         self._providers: dict[int, MessengerProvider] = {}
 
     def _build_provider(self, account: TgAccount) -> MessengerProvider:
-        provider = TelegramProvider(self._api_id, self._api_hash, self._sessions_dir)
+        provider = TelegramProvider(self._api_id, self._api_hash, self._sessions_dir,
+                                    proxy=self._proxy)
         # CRITICAL: per-account session subdirectory.
         # Иначе все провайдеры разделят один .session-файл
         # (<dir>/session) и менеджеры будут перезаписывать сессии друг друга.

@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     tg_api_id: int = Field(...)
     tg_api_hash: str = Field(...)
     tg_sessions_dir: str = Field("/data/tg_sessions")
+    # Прокси для MTProto: часть РФ-хостингов блокирует подсети Telegram
+    # (наш прод — как раз такой). Пустая схема = подключение напрямую.
+    tg_proxy_scheme: str = Field("", description="socks5|socks4|http; пусто = без прокси")
+    tg_proxy_host: str = Field("")
+    tg_proxy_port: int = Field(0)
+    tg_proxy_username: str = Field("")
+    tg_proxy_password: str = Field("")
 
     # Bitrix24 OAuth
     b24_portal: str = Field(...)

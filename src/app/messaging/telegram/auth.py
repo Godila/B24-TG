@@ -20,6 +20,7 @@ from telethon import TelegramClient
 
 from app.config import get_settings
 from app.db import async_session
+from app.messaging.telegram.proxy import telethon_proxy
 from app.models import TgAccount
 
 
@@ -43,7 +44,8 @@ async def login(phone: str) -> int:
     session_path = session_dir / "session"
 
     client = TelegramClient(
-        str(session_path), settings.tg_api_id, settings.tg_api_hash
+        str(session_path), settings.tg_api_id, settings.tg_api_hash,
+        proxy=telethon_proxy(settings),
     )
     await client.connect()
     # client.start сам спросит код подтверждения (SMS/Telegram) и 2FA пароль.

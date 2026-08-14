@@ -68,6 +68,7 @@ async def run_bridge() -> None:
     from app.bridge.throttler import Throttler
     from app.config import get_settings
     from app.db import async_session
+    from app.messaging.telegram.proxy import telethon_proxy
 
     settings = get_settings()
 
@@ -75,6 +76,7 @@ async def run_bridge() -> None:
         api_id=settings.tg_api_id,
         api_hash=settings.tg_api_hash,
         sessions_dir=settings.tg_sessions_dir,
+        proxy=telethon_proxy(settings),
     )
 
     # B24 wiring: ОДИН общий Bitrix24Client (shared TLS-коннекты, глобальный

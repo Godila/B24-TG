@@ -31,6 +31,7 @@ from telethon.errors import SessionPasswordNeededError
 
 from app.config import get_settings
 from app.db import async_session
+from app.messaging.telegram.proxy import telethon_proxy
 from app.models import Manager, ManagerRole, TgAccount, TgAccountStatus
 
 logger = logging.getLogger(__name__)
@@ -247,7 +248,8 @@ async def qr_start(
     session_dir.mkdir(parents=True, exist_ok=True)
 
     client = TelegramClient(
-        str(session_dir / "session"), settings.tg_api_id, settings.tg_api_hash
+        str(session_dir / "session"), settings.tg_api_id, settings.tg_api_hash,
+        proxy=telethon_proxy(settings),
     )
     await client.connect()
 

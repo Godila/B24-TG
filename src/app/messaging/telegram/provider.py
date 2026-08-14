@@ -23,11 +23,13 @@ class TelegramProvider(MessengerProvider):
     """Реализация MessengerProvider поверх Telethon (MTProto user-API).
     Один экземпляр = одна TG-сессия (один менеджер)."""
 
-    def __init__(self, api_id: int, api_hash: str, sessions_dir: str):
+    def __init__(self, api_id: int, api_hash: str, sessions_dir: str,
+                 proxy: tuple | None = None):
         self._api_id = api_id
         self._api_hash = api_hash
         self._sessions_dir = Path(sessions_dir)
         self._sessions_dir.mkdir(parents=True, exist_ok=True)
+        self._proxy = proxy
         self._client: TelegramClient | None = None
         self._incoming_queue: asyncio.Queue[IncomingMessage] = asyncio.Queue()
         self._status_queue: asyncio.Queue[tuple[int, DeliveryStatus]] = asyncio.Queue()
@@ -38,7 +40,8 @@ class TelegramProvider(MessengerProvider):
 
     async def connect(self) -> None:
         self._client = TelegramClient(
-            str(self.session_file), self._api_id, self._api_hash
+            str(self.session_file), self._api_id, self._api_hash,
+            proxy=self._proxy,
         )
         await self._client.connect()
         if not await self._client.is_user_authorized():
