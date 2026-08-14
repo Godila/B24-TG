@@ -105,7 +105,17 @@ async def _find_or_create_account(b24_user_id: int, phone: str) -> TgAccount:
         ).scalar_one_or_none()
         if acc is not None:
             if acc.phone != phone:
-                # «Переименовываем» заглушку/старый номер на реальный.
+                # «Переименовываем» заглушку/старый номер на реальный —
+                # но номер мог быть занят чужим аккаунтом (phone unique):
+                # без проверки был бы IntegrityError → 500 вместо 409.
+                same_phone = (
+                    await s.execute(select(TgAccount).where(TgAccount.phone == phone))
+                ).scalar_one_or_none()
+                if same_phone is not None and same_phone.id != acc.id:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"phone {phone} уже привязан к account_id={same_phone.id}",
+                    )
                 acc.phone = phone
         else:
             same_phone = (

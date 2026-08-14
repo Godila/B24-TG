@@ -133,10 +133,12 @@ One-shot джоба с монтированным volume: пишет сесси�
 
 ## 4. Supervisor-гейт для продакшена
 
-`get_current_manager` (`src/app/web/deps.py`) уже различает роли
-manager/supervisor. Прод-версия маршрута: префикс `/admin/...`, зависимость
-`manager.role == supervisor`, сессионная кука (та же, что placement), без
-DEV_MODE. Для 2FA-пароля — POST-поле, никогда не логировать. Плюс
+`get_current_manager` (`src/app/web/deps.py`) возвращает Manager с полем
+`role` (enum manager/supervisor) — самой ветки по роли там пока нет, гейт
+добавляется одной проверкой в прод-версии маршрута: префикс `/admin/...`,
+зависимость `manager.role == supervisor`, сессионная кука (та же, что
+placement), без DEV_MODE. Для 2FA-пароля — POST-поле, никогда не
+логировать. Плюс
 rate-limit на `/start` (см. вопрос №1) и аудит-лог «кто подключил какой phone».
 
 ## 5. Открытые вопросы

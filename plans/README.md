@@ -16,8 +16,8 @@
 | 006 | CRM durability: очередь crm_sync + retry, rate-limit B24, shared httpx, outbound timeline | P2 | M-L | 005 | DONE (27ae5c5..192445e; миграцию crm_sync применить на VM при деплое) |
 | 007 | UX-патчи: новейшая история, vendored Alpine, media-placeholder | P2 | S-M | — | DONE (1d44d76, d45e3a3, c3bf135) |
 | 008 | Гигиена: dead config/deps (Redis и пр.), tests/conftest.py, CI, docs-чистка | P2 | M | 006 (порядок) | DONE (a6bfdf9..988aaef; CI заработает после пуша оператором) |
-| 009 | Health & alerts: реальные статусы сессий в /health + алерты админу | P3 | S-M | 004 | TODO |
-| 010 | Direction-spike: админ-QR-онбординг менеджеров (вместо SSH+SQL) | P3 | M (spike) | 009 | TODO |
+| 009 | Health & alerts: реальные статусы сессий в /health + алерты админу | P3 | S-M | 004 | DONE (822b0c8, 42d0ae0) |
+| 010 | Direction-spike: админ-QR-онбординг менеджеров (вместо SSH+SQL) | P3 | M (spike) | 009 | DONE (cdc67c7, 22e15c4; вердикт — docs/DESIGN-ADMIN-QR.md: СТРОИТЬ, M; live-эксперимент QR — за оператором) |
 
 ## Dependency notes
 

@@ -135,6 +135,35 @@ async def test_start_updates_placeholder_phone_of_existing_account(dev_env, db, 
         assert accounts[0].phone == "+79995556677"
 
 
+async def test_start_phone_rebind_to_taken_number_returns_409(dev_env, db, monkeypatch):
+    """Смена номера существующего аккаунта на чужой занятый — 409, не 500.
+
+    Регрессия: phone-update путь изначально пропускал проверку уникальности
+    (она была только в ветке создания) → IntegrityError → 500.
+    """
+    async with db() as s:
+        mgr1 = Manager(name="Один", b24_user_id=1, role="supervisor", is_active=True)
+        mgr2 = Manager(name="Два", b24_user_id=2, role="manager", is_active=True)
+        s.add_all([mgr1, mgr2])
+        await s.flush()
+        s.add_all([
+            TgAccount(phone="+70000000000", session_path="x",
+                      status=TgAccountStatus.offline, manager_id=mgr1.id),
+            TgAccount(phone="+79995556677", session_path="y",
+                      status=TgAccountStatus.offline, manager_id=mgr2.id),
+        ])
+        await s.commit()
+
+    _patch_client(monkeypatch, _mock_client(_mock_qr()))
+    with pytest.raises(HTTPException) as exc:
+        await admin_qr.qr_start(b24_user_id=1, phone="+79995556677")
+    assert exc.value.status_code == 409
+
+    async with db() as s:
+        accounts = (await s.execute(select(TgAccount))).scalars().all()
+        assert {a.phone for a in accounts} == {"+70000000000", "+79995556677"}
+
+
 async def test_start_phone_conflict_returns_409(dev_env, db, monkeypatch):
     async with db() as s:
         other = Manager(name="Другой", b24_user_id=1, is_active=True)
