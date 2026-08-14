@@ -64,6 +64,8 @@ services:
   xray:
     image: ghcr.io/xtls/xray-core:latest
     container_name: xray-client
+    # Без явной команды образ запускает дефолтный конфиг-каталог с примерами.
+    command: ["run", "-c", "/etc/xray/config.json"]
     volumes:
       - /opt/xray-client/config.json:/etc/xray/config.json:ro
     restart: unless-stopped
