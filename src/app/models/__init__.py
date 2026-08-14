@@ -10,7 +10,7 @@ from app.models.attachment import Attachment, AttachmentType
 from app.models.b24_token import B24Token
 from app.models.base import Base, TimestampMixin
 from app.models.contact import Contact
-from app.models.crm_sync import CrmSyncItem, CrmSyncStatus, KIND_INBOUND, KIND_OUTBOUND
+from app.models.crm_sync import KIND_INBOUND, KIND_OUTBOUND, CrmSyncItem, CrmSyncStatus
 from app.models.dialog import Dialog, DialogStatus, Messenger
 from app.models.manager import Manager, ManagerRole
 from app.models.message import Message, MessageDirection, MessageStatus
@@ -19,6 +19,8 @@ from app.models.template import Template
 from app.models.tg_account import TgAccount, TgAccountStatus
 
 __all__ = [
+    "KIND_INBOUND",
+    "KIND_OUTBOUND",
     "Attachment",
     "AttachmentType",
     "B24Token",
@@ -28,8 +30,6 @@ __all__ = [
     "CrmSyncStatus",
     "Dialog",
     "DialogStatus",
-    "KIND_INBOUND",
-    "KIND_OUTBOUND",
     "Manager",
     "ManagerRole",
     "Message",

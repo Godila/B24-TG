@@ -1,4 +1,11 @@
-"""IncomingHandler — связка входящего TG-сообщения с CRM и нашей БД."""
+"""IncomingHandler — сохранение входящего TG-сообщения + постановка CRM-задачи.
+
+План 006: сообщение СНАЧАЛА сохраняется в нашей БД (без CRM-полей), затем в
+очередь ``crm_sync`` ставится задача kind=inbound — CRM-вызовы делает
+CrmSyncWorker с ретраями. Раньше Bitrix24Sync звался прямо в пути события и
+любой сбой B24 (rate-limit free-портала, сеть) молча терял контакт/сделку/
+timeline-комментарий навсегда.
+"""
 
 import logging
 from collections.abc import Callable
@@ -7,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.b24.sync import Bitrix24Sync
+from app.bridge.crm_sync_worker import CrmSyncEnqueue
 from app.bridge.session_manager import SessionManager
 from app.messaging.types import IncomingMessage
 from app.models import (
@@ -23,43 +30,40 @@ logger = logging.getLogger(__name__)
 
 
 class IncomingHandler:
-    """Связка: IncomingMessage (из TG) → Bitrix24Sync + сохранение в БД."""
+    """Связка: IncomingMessage (из TG) → наша БД → очередь crm_sync."""
 
     def __init__(
         self,
         session_mgr: SessionManager,
-        b24sync: Bitrix24Sync,
+        crm_sync_enqueue: CrmSyncEnqueue,
         db_session_factory: Callable[[], AsyncSession],
     ):
         self._session_mgr = session_mgr
-        self._b24sync = b24sync
+        self._crm_sync_enqueue = crm_sync_enqueue
         self._db_factory = db_session_factory
 
     async def handle(self, msg: IncomingMessage, *, account) -> None:
-        assigned_b24_user_id = account.manager.b24_user_id
-
-        # 1. Bitrix24Sync: матчинг → создание → timeline → notify
-        result = None
-        try:
-            result = await self._b24sync.process_inbound(
-                sender_name=msg.sender_name or "",
-                sender_phone=msg.sender_phone or "",
-                message_text=msg.text or "",
-                assigned_b24_user_id=assigned_b24_user_id,
-            )
-        except Exception:
-            logger.exception(
-                "Bitrix24Sync failed for msg from tg_id=%s", msg.sender_tg_id
-            )
-
-        # 2. Сохранение в нашей БД (даже если CRM-синхронизация упала)
+        # 1. Сохранение в нашей БД — всегда, независимо от состояния CRM.
         # ВАЖНО: диалог привязываем к Manager.id (ответственный менеджер), НЕ к
         # account.id — API фильтрует диалоги по manager.id (Dialog.assigned_user_id).
-        await self._persist(msg, result, manager_id=account.manager_id)
+        message_id = await self._persist(msg, manager_id=account.manager_id)
+        if message_id is None:
+            return  # дубль доставки — сообщение уже было обработано ранее
 
-    async def _persist(self, msg: IncomingMessage, sync_result, *, manager_id: int) -> None:
+        # 2. CRM-синхронизация — через очередь (воркер с ретраями).
+        try:
+            await self._crm_sync_enqueue(kind="inbound", message_id=message_id)
+        except Exception:
+            logger.exception(
+                "crm_sync enqueue failed for message_id=%s (tg msg %s)",
+                message_id,
+                msg.external_message_id,
+            )
+
+    async def _persist(self, msg: IncomingMessage, *, manager_id: int) -> int | None:
+        """Сохранить сообщение; вернуть его id или None для дубля доставки."""
         async with self._db_factory() as session:
-            contact = await self._upsert_contact(session, msg, sync_result)
+            contact = await self._upsert_contact(session, msg)
 
             # Диалог: upsert по (external_chat_id, assigned_user_id) —
             # мультиаккаунт: в приватных TG-чатах chat_id == tg-id клиента и
@@ -92,17 +96,13 @@ class IncomingHandler:
                     # парой. Rollback откатывает и контактную часть txn —
                     # получаем контакт заново, затем берём существующий диалог.
                     await session.rollback()
-                    contact = await self._upsert_contact(session, msg, sync_result)
+                    contact = await self._upsert_contact(session, msg)
                     dialog = (await session.execute(dialog_stmt)).scalar_one()
-
-            if sync_result and sync_result.deal_id:
-                dialog.crm_deal_id = sync_result.deal_id
-                dialog.crm_entity_type = "deal"
 
             # Идемпотентность: MTProto может дублировать доставку (реботы,
             # рестарт bridge). Пропускаем уже сохранённое сообщение по
             # (dialog, tg_message_id), иначе создадим дубль и повторно
-            # пошлём timeline-комментарий и уведомление менеджеру.
+            # поставим CRM-задачу.
             if msg.external_message_id is not None:
                 existing_msg = await session.execute(
                     select(Message).where(
@@ -112,7 +112,7 @@ class IncomingHandler:
                 )
                 if existing_msg.scalar_one_or_none() is not None:
                     await session.commit()
-                    return
+                    return None
 
             message = Message(
                 dialog_id=dialog.id,
@@ -120,20 +120,19 @@ class IncomingHandler:
                 tg_message_id=msg.external_message_id,
                 text=msg.text,
                 status=MessageStatus.delivered,
-                timeline_comment_id=(
-                    sync_result.timeline_comment_id if sync_result else None
-                ),
             )
             session.add(message)
             await session.flush()
             # Обновляем «последнее сообщение» для сортировки списка диалогов.
             dialog.last_msg_at = message.created_at
+            message_id = message.id
             await session.commit()
+            return message_id
 
     async def _upsert_contact(
-        self, session: AsyncSession, msg: IncomingMessage, sync_result
+        self, session: AsyncSession, msg: IncomingMessage
     ) -> Contact:
-        """Контакт: upsert по tg_user_id (+ привязка к CRM).
+        """Контакт: upsert по tg_user_id (CRM-поля проставит CrmSyncWorker).
 
         Вызывается повторно после IntegrityError-rollback по диалогу: rollback
         откатывает и вставку/правки контакта того же txn, поэтому контакт
@@ -160,7 +159,4 @@ class IncomingHandler:
                 contact.username = msg.sender_username
             if msg.sender_name:
                 contact.name = msg.sender_name
-
-        if sync_result and sync_result.contact_id:
-            contact.crm_contact_id = sync_result.contact_id
         return contact

@@ -56,11 +56,16 @@ async def test_run_bridge_wires_b24_components(monkeypatch):
         AsyncMock(return_value=[]),
     )
 
-    # OutboxWorker/HealthChecker: реальный run() циклит вечно — подменяем.
+    # OutboxWorker/CrmSyncWorker/HealthChecker: реальный run() циклит вечно —
+    # подменяем.
+    import app.bridge.crm_sync_worker as csw_mod
     import app.bridge.health_checker as hc_mod
     import app.bridge.outbox_worker as ow_mod
     monkeypatch.setattr(
         ow_mod.OutboxWorker, "run", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        csw_mod.CrmSyncWorker, "run", AsyncMock(return_value=None)
     )
     monkeypatch.setattr(
         hc_mod.HealthChecker, "run", AsyncMock(return_value=None)
@@ -68,6 +73,7 @@ async def test_run_bridge_wires_b24_components(monkeypatch):
 
     await main_mod.run_bridge()
 
-    assert "b24sync" in constructed
+    # План 006: CRM — через очередь (crm_sync_enqueue), не напрямую b24sync.
+    assert "crm_sync_enqueue" in constructed
     assert "session_mgr" in constructed
     assert "db_session_factory" in constructed

@@ -209,3 +209,78 @@ async def test_generic_failure_exponential_backoff():
     _, kwargs = repo.reschedule.call_args
     assert kwargs["delay_seconds"] == 120  # 30 * 2^2
     assert kwargs["error"] == "network"
+
+
+@pytest.mark.asyncio
+async def test_sent_hook_called_after_successful_send():
+    """После успешной отправки (если outbox связан с Message) — хук
+    crm_sync(kind=outbound) с message_id."""
+    repo = AsyncMock()
+    repo.fetch_due = AsyncMock(return_value=[_make_item(message_id=11)])
+    repo.mark_sent = AsyncMock()
+
+    provider = AsyncMock()
+    provider.send_message = AsyncMock(return_value=SendResult(success=True, external_message_id=55))
+
+    throttler = AsyncMock()
+    throttler.acquire = AsyncMock(return_value=True)
+
+    hook = AsyncMock()
+    worker = OutboxWorker(repo=repo, get_provider=lambda aid: provider,
+                          throttler_factory=lambda aid: throttler,
+                          max_attempts=5, on_sent_hook=hook)
+    await worker._process_once()
+
+    repo.mark_sent.assert_awaited_once()
+    hook.assert_awaited_once_with(11)
+
+
+@pytest.mark.asyncio
+async def test_sent_hook_not_called_without_message_id():
+    """Исторические строки outbox без Message — хук не вызывается."""
+    repo = AsyncMock()
+    repo.fetch_due = AsyncMock(return_value=[_make_item(message_id=None)])
+    repo.mark_sent = AsyncMock()
+
+    provider = AsyncMock()
+    provider.send_message = AsyncMock(return_value=SendResult(success=True, external_message_id=55))
+
+    throttler = AsyncMock()
+    throttler.acquire = AsyncMock(return_value=True)
+
+    hook = AsyncMock()
+    worker = OutboxWorker(repo=repo, get_provider=lambda aid: provider,
+                          throttler_factory=lambda aid: throttler,
+                          max_attempts=5, on_sent_hook=hook)
+    await worker._process_once()
+
+    repo.mark_sent.assert_awaited_once()
+    hook.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_sent_hook_failure_does_not_break_outbox():
+    """Сообщение уже отправлено и помечено sent — ошибка хука не должна
+    ронять цикл outbox (теряется только CRM-комментарий, не доставка)."""
+    repo = AsyncMock()
+    repo.fetch_due = AsyncMock(return_value=[_make_item(message_id=11)])
+    repo.mark_sent = AsyncMock()
+    repo.reschedule = AsyncMock()
+    repo.mark_failed = AsyncMock()
+
+    provider = AsyncMock()
+    provider.send_message = AsyncMock(return_value=SendResult(success=True, external_message_id=55))
+
+    throttler = AsyncMock()
+    throttler.acquire = AsyncMock(return_value=True)
+
+    hook = AsyncMock(side_effect=RuntimeError("crm_sync db down"))
+    worker = OutboxWorker(repo=repo, get_provider=lambda aid: provider,
+                          throttler_factory=lambda aid: throttler,
+                          max_attempts=5, on_sent_hook=hook)
+    # Не бросает, item остаётся sent (reschedule/mark_failed не звались).
+    await worker._process_once()
+
+    repo.mark_sent.assert_awaited_once()
+    repo.reschedule.assert_not_awaited()
+    repo.mark_failed.assert_not_awaited()

@@ -5,6 +5,10 @@
 ``(external_chat_id, assigned_user_id)``, а не только chat_id. Здесь реальная
 in-memory SQLite (StaticPool): handler открывает сессии через
 ``db_session_factory`` (session-per-call), все сессии видят одну БД.
+
+План 006: CRM-полей в persist больше нет (contact_id/deal_id/
+timeline_comment_id пишет CrmSyncWorker из очереди) — handler только
+сохраняет сообщение и ставит crm_sync-задачу.
 """
 
 from unittest.mock import AsyncMock, MagicMock
@@ -18,7 +22,6 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import StaticPool
 
-from app.b24.sync import SyncResult
 from app.bridge.incoming_handler import IncomingHandler
 from app.messaging.types import ContentType, IncomingMessage
 from app.models import (
@@ -110,13 +113,16 @@ def _make_account(manager_id: int, b24_user_id: int = 15) -> MagicMock:
     return account
 
 
-def _make_handler(SessionLocal, *, sync_result=None, db_factory=None):
-    b24sync = AsyncMock()
-    b24sync.process_inbound = AsyncMock(return_value=sync_result)
-    return IncomingHandler(
-        session_mgr=MagicMock(),
-        b24sync=b24sync,
-        db_session_factory=db_factory or SessionLocal,
+def _make_handler(SessionLocal, *, db_factory=None):
+    """Handler с замоканным crm_sync_enqueue; возвращает (handler, enqueue)."""
+    enqueue = AsyncMock()
+    return (
+        IncomingHandler(
+            session_mgr=MagicMock(),
+            crm_sync_enqueue=enqueue,
+            db_session_factory=db_factory or SessionLocal,
+        ),
+        enqueue,
     )
 
 
@@ -149,7 +155,7 @@ async def test_same_client_two_managers_two_dialogs(db):
     на менеджера (в приватных чатах chat_id у обоих сообщений одинаковый)."""
     await _seed_two_managers(db)
 
-    handler = _make_handler(db)
+    handler, enqueue = _make_handler(db)
     await handler.handle(
         _make_msg(external_message_id=1), account=_make_account(manager_id=1)
     )
@@ -164,6 +170,11 @@ async def test_same_client_two_managers_two_dialogs(db):
     messages = await _all_messages(db)
     assert len(messages) == 2
     assert {m.dialog_id for m in messages} == {d.id for d in dialogs}
+    # Каждое сообщение получило свою CRM-задачу с реальным message_id.
+    assert enqueue.await_count == 2
+    enqueued_ids = {c.kwargs["message_id"] for c in enqueue.await_args_list}
+    assert enqueued_ids == {m.id for m in messages}
+    assert all(c.kwargs["kind"] == "inbound" for c in enqueue.await_args_list)
 
 
 @pytest.mark.asyncio
@@ -197,7 +208,7 @@ async def test_concurrent_duplicate_insert_resolved(db):
         )
         await s.commit()
 
-    handler = _make_handler(db)
+    handler, enqueue = _make_handler(db)
     # Не должно бросить MultipleResultsFound и не должно создать 3-й диалог.
     await handler.handle(
         _make_msg(external_message_id=1), account=_make_account(manager_id=1)
@@ -208,12 +219,16 @@ async def test_concurrent_duplicate_insert_resolved(db):
     messages = await _all_messages(db)
     assert len(messages) == 1
     assert messages[0].dialog_id == 101  # переиспользован старейший
+    enqueue.assert_awaited_once_with(
+        kind="inbound", message_id=messages[0].id
+    )
 
 
 @pytest.mark.asyncio
 async def test_existing_dialog_of_other_manager_not_reused(db):
     """Диалог клиента у менеджера 1 нетронут, когда тот же клиент пишет
-    менеджеру 2: создаётся НОВЫЙ диалог, crm_deal_id менеджера 1 не затёрт."""
+    менеджеру 2: создаётся НОВЫЙ диалог; CRM-поля старого не затёрты (их
+    теперь пишет только CrmSyncWorker, не persist)."""
     await _seed_two_managers(db)
     async with db() as s:
         s.add(Contact(id=10, tg_user_id=999, name="Клиент"))
@@ -230,9 +245,7 @@ async def test_existing_dialog_of_other_manager_not_reused(db):
         )
         await s.commit()
 
-    handler = _make_handler(
-        db, sync_result=SyncResult(contact_id=42, deal_id=200, is_new=False)
-    )
+    handler, enqueue = _make_handler(db)
     await handler.handle(
         _make_msg(external_message_id=5), account=_make_account(manager_id=2)
     )
@@ -241,8 +254,10 @@ async def test_existing_dialog_of_other_manager_not_reused(db):
     assert len(dialogs) == 2
     by_manager = {d.assigned_user_id: d for d in dialogs}
     assert by_manager[1].crm_deal_id == 42  # диалог менеджера 1 нетронут
-    assert by_manager[2].crm_deal_id == 200  # новая сделка — у нового диалога
+    # Новый диалог без CRM-привязки — её проставит воркер из SyncResult.
+    assert by_manager[2].crm_deal_id is None
     assert by_manager[2].id != 50
+    enqueue.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -268,11 +283,7 @@ async def test_integrity_error_race_reuses_existing_dialog(db):
     def stale_factory():
         return _StaleDialogSelectSession(db.kw["bind"], expire_on_commit=False)
 
-    handler = _make_handler(
-        db,
-        sync_result=SyncResult(contact_id=77, deal_id=None, is_new=False),
-        db_factory=stale_factory,
-    )
+    handler, enqueue = _make_handler(db, db_factory=stale_factory)
     await handler.handle(
         _make_msg(external_message_id=9), account=_make_account(manager_id=1)
     )
@@ -284,7 +295,10 @@ async def test_integrity_error_race_reuses_existing_dialog(db):
     messages = await _all_messages(db)
     assert len(messages) == 1
     assert messages[0].dialog_id == 50
-    # Rollback откатил и контактную часть txn — она восстановлена.
+    # CRM-задача поставлена с id реально сохранённого сообщения.
+    enqueue.assert_awaited_once_with(kind="inbound", message_id=messages[0].id)
+    # Rollback откатил и контактную часть txn — она восстановлена (без CRM-полей).
     async with db() as s:
         contact = await s.get(Contact, 10)
-        assert contact.crm_contact_id == 77
+        assert contact is not None
+        assert contact.crm_contact_id is None

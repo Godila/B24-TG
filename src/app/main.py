@@ -45,11 +45,12 @@ async def run_bridge() -> None:
     → Bitrix24Sync → IncomingHandler), затем активирует конвейер:
       1. загружает активные TgAccount (с eager-load менеджера);
       2. регистрирует их в SessionManager (подключение TG-сессий);
-      3. запускает OutboxWorker и HealthChecker фоновыми задачами;
+      3. запускает OutboxWorker, CrmSyncWorker и HealthChecker фоновыми
+         задачами;
       4. для каждого подключённого аккаунта — подписку на incoming_stream
          с форвардом в IncomingHandler.
-    Останавливается по сигналу: отменяются все задачи, воркер/health
-    останавливаются, сессии закрываются.
+    Останавливается по сигналу: отменяются все задачи, воркеры/health
+    останавливаются, TG-сессии и общий B24 HTTP-клиент закрываются.
     """
     from app.b24.client import Bitrix24Client
     from app.b24.crm import CrmService
@@ -57,6 +58,8 @@ async def run_bridge() -> None:
     from app.b24.sync import Bitrix24Sync
     from app.b24.token_manager import TokenManager
     from app.bridge.bootstrap import forward_incoming, load_active_accounts, register_accounts
+    from app.bridge.crm_sync_repo import WorkerCrmSyncRepository
+    from app.bridge.crm_sync_worker import CrmSyncWorker
     from app.bridge.health_checker import HealthChecker
     from app.bridge.incoming_handler import IncomingHandler
     from app.bridge.outbox_repo_worker import WorkerOutboxRepository
@@ -74,19 +77,30 @@ async def run_bridge() -> None:
         sessions_dir=settings.tg_sessions_dir,
     )
 
-    # B24 wiring: общий client_endpoint портала (REST-методы доступны с этим URL).
+    # B24 wiring: ОДИН общий Bitrix24Client (shared TLS-коннекты, глобальный
+    # throttle ~2 rps) на все сервисы; закрывается в finally при остановке.
     endpoint = settings.b24_portal.rstrip("/") + "/rest/"
-    b24_client = Bitrix24Client(client_endpoint=endpoint)
+    b24_client = Bitrix24Client(
+        client_endpoint=endpoint,
+        min_interval=settings.b24_min_call_interval,
+    )
     crm = CrmService(b24_client)
-    im = ImService(Bitrix24Client(client_endpoint=endpoint))
+    im = ImService(b24_client)
     token_mgr = TokenManager(
         client_id=settings.b24_client_id,
         client_secret=settings.b24_client_secret,
     )
     b24sync = Bitrix24Sync(token_mgr=token_mgr, crm=crm, im=im)
+
+    # CRM-очередь (план 006): handler ставит задачи, воркер выполняет.
+    crm_repo = WorkerCrmSyncRepository(async_session)
+
+    async def enqueue_crm_sync(kind: str, message_id: int) -> None:
+        await crm_repo.enqueue(kind=kind, message_id=message_id)
+
     handler = IncomingHandler(
         session_mgr=sm,
-        b24sync=b24sync,
+        crm_sync_enqueue=enqueue_crm_sync,
         db_session_factory=async_session,
     )
 
@@ -95,7 +109,8 @@ async def run_bridge() -> None:
     registered = await register_accounts(sm, accounts)
 
     # 4. Outbox-воркер: throttler per-account из настроек, репозиторий открывает
-    #    свежую сессию на каждый вызов (см. WorkerOutboxRepository).
+    #    свежую сессию на каждый вызов (см. WorkerOutboxRepository). После
+    #    успешной отправки — crm_sync(kind=outbound) через on_sent_hook.
     def throttler_factory(_account_id: int) -> Throttler:
         return Throttler(
             reply_per_minute=settings.throttle_reply_max,
@@ -104,6 +119,9 @@ async def run_bridge() -> None:
             init_min_interval=settings.throttle_init_min_interval,
         )
 
+    async def on_outbox_sent(message_id: int) -> None:
+        await crm_repo.enqueue(kind="outbound", message_id=message_id)
+
     repo = WorkerOutboxRepository(async_session)
     worker = OutboxWorker(
         repo=repo,
@@ -111,12 +129,23 @@ async def run_bridge() -> None:
         throttler_factory=throttler_factory,
         max_attempts=settings.outbox_max_attempts,
         poll_interval=settings.outbox_poll_interval,
+        on_sent_hook=on_outbox_sent,
     )
 
-    # 5-6. Фоновые задачи: outbox + health + по задаче на входящий поток аккаунта.
+    # CRM-воркер: те же retry-механики, что и outbox (5 попыток, backoff).
+    crm_worker = CrmSyncWorker(
+        repo=crm_repo,
+        b24sync=b24sync,
+        max_attempts=settings.crm_sync_max_attempts,
+        poll_interval=settings.crm_sync_poll_interval,
+    )
+
+    # 5-6. Фоновые задачи: outbox + crm_sync + health + по задаче на входящий
+    #      поток аккаунта.
     health = HealthChecker(sm)
     tasks: list[asyncio.Task] = [
         asyncio.create_task(worker.run()),
+        asyncio.create_task(crm_worker.run()),
         asyncio.create_task(health.run()),
     ]
     for account in registered.values():
@@ -125,7 +154,7 @@ async def run_bridge() -> None:
             tasks.append(asyncio.create_task(forward_incoming(provider, account, handler)))
 
     logger.info(
-        "Bridge started: %d account(s) registered, outbox+health+incoming running",
+        "Bridge started: %d account(s) registered, outbox+crm_sync+health+incoming running",
         len(registered),
     )
     try:
@@ -135,8 +164,10 @@ async def run_bridge() -> None:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         worker.stop()
+        crm_worker.stop()
         health.stop()
         await sm.close_all()
+        await b24_client.aclose()
 
 
 if __name__ == "__main__":

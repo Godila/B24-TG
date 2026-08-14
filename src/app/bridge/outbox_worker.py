@@ -25,7 +25,7 @@ mock'и репозитория/провайдера/throttler'а.
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -88,6 +88,7 @@ class OutboxWorker:
         max_attempts: int = 5,
         poll_interval: int = 2,
         batch_size: int = 50,
+        on_sent_hook: "Callable[[int], Awaitable[None]] | None" = None,
     ):
         self._repo = repo
         self._get_provider = get_provider
@@ -95,6 +96,9 @@ class OutboxWorker:
         self._max_attempts = max_attempts
         self._poll_interval = poll_interval
         self._batch_size = batch_size
+        # Хук после успешной отправки: bridge ставит crm_sync(kind=outbound)
+        # — timeline-комментарий исходящего (spec §8.2 шаг 6, план 006).
+        self._on_sent_hook = on_sent_hook
         self._running = False
         self._throttlers: dict[int, Throttler] = {}
 
@@ -174,6 +178,7 @@ class OutboxWorker:
         # 4. судьба по результату
         if result.success:
             await self._repo.mark_sent(item, result.external_message_id)
+            await self._after_sent(item)
             return
 
         if result.flood_wait_seconds:
@@ -191,3 +196,20 @@ class OutboxWorker:
         # экспоненциальный backoff: при attempts=0 -> 30, 1 -> 60, 2 -> 120, 3 -> 240, ...
         delay = 30 * (2 ** item.attempts)
         await self._repo.reschedule(item, delay_seconds=delay, error=result.error)
+
+    async def _after_sent(self, item: OutboxItem) -> None:
+        """После успешной отправки — CRM-задача для исходящего (timeline).
+
+        Вызывается только когда outbox связан с Message (item.message_id).
+        Ошибка постановки НЕ должна ронять outbox-цикл: сообщение уже
+        отправлено, потеря CRM-комментария — не повод ломать доставку.
+        """
+        if self._on_sent_hook is None or item.message_id is None:
+            return
+        try:
+            await self._on_sent_hook(item.message_id)
+        except Exception:
+            logger.exception(
+                "on_sent_hook failed for message_id=%s (crm_sync not enqueued)",
+                item.message_id,
+            )
