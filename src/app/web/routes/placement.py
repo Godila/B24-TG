@@ -83,6 +83,7 @@ def _set_session_and_respond(
     settings = get_settings()
     cookie_params = create_session_cookie_params(
         b24_user_id=b24_user_id, deal_id=deal_id, secret=settings.session_secret,
+        secure=not settings.dev_mode,
     )
     # deal_id добавляем в URL как query — фронт читает его для фильтра диалогов.
     body = _chat_html()

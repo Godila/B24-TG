@@ -27,6 +27,10 @@ VM: `<VM_SSH_TARGET>`, Ubuntu 24.04, 2 vCPU / 2 GB RAM / 40 GB SSD.
 
 `/dev/login` отключён в prod (`DEV_MODE=false` → 404).
 
+CORS: с Plan 001 умолчание `CORS_ORIGINS` — пустое (CORS отключён, только same-origin).
+На VM `.env` уже содержит `CORS_ORIGINS=https://b24-ye2jjz.bitrix24.ru,https://b24-tg.haragy.top`
+(генерируется `scripts/gen_prod_env.py`) — поведение прода не меняется.
+
 ## Обновление кода
 На VM:
 ```bash
@@ -62,6 +66,18 @@ docker compose restart nginx
 ### 2. Смена B24-пароля (рекомендация безопасности)
 Учётка `<admin-email>` использовалась для headless-OAuth. Сменить пароль в B24 после деплоя.
 
+### 3. Чеклист оператора после Plan 001 (утёкший OAuth-секрет)
+Секрет закоммитили в публичный репо (удалён из файлов в Plan 001, но он остался в git-истории).
+Лечится только ротацией — удаление из файла историю не переписывает:
+
+- [ ] Ротация секрета B24: Настройки → Разработчикам → приложение «Bitrix-TG Integration» →
+      перегенерировать client_secret (или пересоздать приложение). Обновить `.env` на VM
+      и `import_b24_tokens` при необходимости.
+- [ ] Сменить пароль B24-аккаунта (рекомендация из Фазы 2, не подтверждена).
+- [ ] После деплоя: `docker compose up -d --build && docker compose restart nginx`,
+      проверить `curl -i https://b24-tg.haragy.top/health` (появился HSTS) и
+      `curl -X POST https://b24-tg.haragy.top/webhook/b24/onappinstall` → 401.
+
 ## Операции (полезные команды на VM)
 
 SSH-доступ и креденшлс — в приватных ops-заметках, не в репо.
@@ -78,6 +94,8 @@ docker compose logs -f bridge
 docker compose exec postgres psql -U bitrix_tg -d bitrix_tg
 
 # перегенерировать .env (с новыми случайными секретами — ВНИМАНИЕ: меняет POSTGRES_PASSWORD)
+# С Plan 001 скрипт берёт B24_CLIENT_ID/B24_CLIENT_SECRET из окружения:
+#   B24_CLIENT_ID=... B24_CLIENT_SECRET=... python3 scripts/gen_prod_env.py
 python3 scripts/gen_prod_env.py   # нужно пересоздать volume pg_data после
 
 # резервная копия БД

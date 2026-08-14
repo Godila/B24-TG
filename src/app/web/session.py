@@ -70,9 +70,13 @@ def verify_session(token: str, secret: str) -> dict[str, Any] | None:
 
 
 def create_session_cookie_params(
-    b24_user_id: int, deal_id: int | None, secret: str
+    b24_user_id: int, deal_id: int | None, secret: str, *, secure: bool = True
 ) -> dict[str, Any]:
-    """Параметры для response.set_cookie(...) — готовый токен и настройки."""
+    """Параметры для response.set_cookie(...) — готовый токен и настройки.
+
+    ``secure=True`` по умолчанию (prod за HTTPS); для dev-сервера на
+    http://localhost передавай ``secure=False``.
+    """
     payload = create_session_payload(b24_user_id, deal_id)
     token = sign_session(payload, secret)
     return {
@@ -82,4 +86,5 @@ def create_session_cookie_params(
         "samesite": "lax",
         "max_age": SESSION_TTL,
         "path": "/",
+        "secure": secure,
     }

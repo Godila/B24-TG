@@ -26,14 +26,17 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Bitrix-TG", version="0.1.0")
 
     # --- CORS ---
+    # Fail-closed: без явно заданных CORS_ORIGINS middleware не подключается —
+    # кросс-доменных запросов с credentials нет (только same-origin).
     origins = _parse_origins(settings.cors_origins)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    if origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     # --- Маршруты ---
     app.include_router(health.router)
@@ -57,6 +60,7 @@ def create_app() -> FastAPI:
             params = create_session_cookie_params(
                 b24_user_id=b24_user_id, deal_id=deal_id,
                 secret=settings.session_secret,
+                secure=not settings.dev_mode,
             )
             resp = RedirectResponse(url="/static/placement.html", status_code=302)
             resp.set_cookie(**params)

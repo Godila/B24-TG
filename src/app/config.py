@@ -44,8 +44,11 @@ class Settings(BaseSettings):
     session_secret: str = Field(...)
     # dev-режим: упрощённый auth без B24 (для локальной разработки).
     dev_mode: bool = Field(False)
-    # Разрешённые CORS-origins (через запятую). Минимум — домен портала B24.
-    cors_origins: str = Field("*", description="CORS origins, comma-separated")
+    # Разрешённые CORS-origins (через запятую). Пусто = CORS отключён
+    # (fail-closed: только same-origin). Для прод — домен портала B24.
+    cors_origins: str = Field(
+        "", description="CORS origins через запятую; пусто = CORS отключён (только same-origin)"
+    )
     # Папка со статикой фронтенда (placement.html, app.js, style.css).
     static_dir: str = Field("src/app/static")
 

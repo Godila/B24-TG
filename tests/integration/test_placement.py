@@ -73,6 +73,8 @@ def test_placement_deal_dev_mode_works_without_auth(monkeypatch):
     assert r.status_code == 200
     cookie_header = r.headers.get("set-cookie", "")
     assert "btg_sess=" in cookie_header
+    # В dev-режиме кука без Secure (http://localhost).
+    assert "Secure" not in cookie_header
 
 
 def test_placement_deal_prod_rejects_invalid_token(monkeypatch):
@@ -129,6 +131,9 @@ def test_placement_deal_prod_accepts_valid_token(monkeypatch):
     }
     r = client.post("/placement/deal", data=form_data)
     assert r.status_code == 200
-    assert "btg_sess=" in r.headers.get("set-cookie", "")
+    cookie_header = r.headers.get("set-cookie", "")
+    assert "btg_sess=" in cookie_header
+    # В prod-режиме кука только по HTTPS.
+    assert "Secure" in cookie_header
     # deal_id внедрён в HTML как data-deal-id.
     assert 'data-deal-id="42"' in r.text
