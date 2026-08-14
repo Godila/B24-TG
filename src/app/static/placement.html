@@ -5,8 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Bitrix-TG Чат</title>
   <link rel="stylesheet" href="/static/style.css">
-  <!-- Alpine.js (~15KB) для реактивности без сборщика. -->
-  <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <!-- Alpine.js (~44KB) для реактивности без сборщика.
+       Vendored локально (alpinejs v3.14.9, официальный минифицированный dist):
+       внешние CDN часто недоступны в сетях РФ — тогда виджет показывал сырой
+       x-data вместо чата. Источник скачивания — в сообщении коммита. -->
+  <script defer src="/static/vendor/alpine.min.js"></script>
 </head>
 <body>
   <div id="chat" x-data="chatApp()" x-init="init()">
