@@ -4,14 +4,7 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture
 def client(monkeypatch):
-    monkeypatch.setenv("SESSION_SECRET", "wiring-test-secret")
-    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
-    monkeypatch.setenv("TG_API_ID", "1")
-    monkeypatch.setenv("TG_API_HASH", "x")
-    monkeypatch.setenv("B24_PORTAL", "https://x.bitrix24.ru")
-    monkeypatch.setenv("B24_CLIENT_ID", "c")
-    monkeypatch.setenv("B24_CLIENT_SECRET", "s")
-    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    # Overrides над базой из conftest: dev-режим + конкретные CORS-origins.
     monkeypatch.setenv("DEV_MODE", "true")
     monkeypatch.setenv("CORS_ORIGINS", "https://b24-x.bitrix24.ru,http://localhost:5173")
     from app.config import get_settings
@@ -40,16 +33,6 @@ def test_cors_preflight_options(client):
 
 def test_cors_disabled_without_origins(monkeypatch):
     """Fail-closed: CORS_ORIGINS пуст → middleware не подключается, заголовков CORS нет."""
-    monkeypatch.setenv("SESSION_SECRET", "wiring-test-secret")
-    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
-    monkeypatch.setenv("TG_API_ID", "1")
-    monkeypatch.setenv("TG_API_HASH", "x")
-    monkeypatch.setenv("B24_PORTAL", "https://x.bitrix24.ru")
-    monkeypatch.setenv("B24_CLIENT_ID", "c")
-    monkeypatch.setenv("B24_CLIENT_SECRET", "s")
-    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
-    monkeypatch.setenv("DEV_MODE", "true")
-    # Пустое значение = CORS отключён (env var перекрывает возможный .env).
     monkeypatch.setenv("CORS_ORIGINS", "")
     from app.config import get_settings
     get_settings.cache_clear()
@@ -82,14 +65,6 @@ def test_dev_login_sets_cookie_and_redirects(client):
 
 
 def test_dev_login_disabled_in_prod(monkeypatch):
-    monkeypatch.setenv("SESSION_SECRET", "wiring-test-secret")
-    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
-    monkeypatch.setenv("TG_API_ID", "1")
-    monkeypatch.setenv("TG_API_HASH", "x")
-    monkeypatch.setenv("B24_PORTAL", "https://x.bitrix24.ru")
-    monkeypatch.setenv("B24_CLIENT_ID", "c")
-    monkeypatch.setenv("B24_CLIENT_SECRET", "s")
-    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
     monkeypatch.setenv("DEV_MODE", "false")
     from app.config import get_settings
     get_settings.cache_clear()

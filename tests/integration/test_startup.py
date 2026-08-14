@@ -15,19 +15,9 @@ async def test_run_bridge_wires_b24_components(monkeypatch):
       - ``OutboxWorker.run``/``HealthChecker.run`` — AsyncMock (не запускают
         реальный цикл);
       - ``asyncio.Event`` сразу set — run_bridge выходит из ``.wait()``.
-    """
-    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
-    monkeypatch.setenv("TG_API_ID", "1")
-    monkeypatch.setenv("TG_API_HASH", "x")
-    monkeypatch.setenv("TG_SESSIONS_DIR", "/tmp")
-    monkeypatch.setenv("B24_PORTAL", "https://x.bitrix24.ru")
-    monkeypatch.setenv("B24_CLIENT_ID", "c")
-    monkeypatch.setenv("B24_CLIENT_SECRET", "s")
-    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
-    # Сбрасываем кэш настроек, чтобы подхватились monkeypatch-окружение.
-    from app.config import get_settings
-    get_settings.cache_clear()
 
+    Базовое окружение выставляет conftest (_hermetic_env).
+    """
     import asyncio
 
     # Останавливаем вечный цикл сразу после запуска.

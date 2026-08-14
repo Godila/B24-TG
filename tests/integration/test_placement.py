@@ -6,7 +6,9 @@ from app.web.app import create_app
 
 
 def test_placement_deal_sets_cookie_and_returns_html(monkeypatch):
-    monkeypatch.setenv("SESSION_SECRET", "test-secret-123")
+    # Явный dev-режим: access_token фиктивный, проверка B24 пропускается.
+    # (prod-путь с проверкой токена — в тестах ниже с mock _verify_b24_token.)
+    monkeypatch.setenv("DEV_MODE", "true")
     from app.config import get_settings
     get_settings.cache_clear()
 
@@ -40,11 +42,8 @@ def test_placement_deal_sets_cookie_and_returns_html(monkeypatch):
     assert "<html" in r.text.lower()
 
 
-def test_placement_deal_wrong_placement_returns_400(monkeypatch):
-    monkeypatch.setenv("SESSION_SECRET", "test-secret-123")
-    from app.config import get_settings
-    get_settings.cache_clear()
-
+def test_placement_deal_wrong_placement_returns_400():
+    # 400 выдается до проверок auth/dev-режима — окружение не важно.
     app = create_app()
     client = TestClient(app)
 
@@ -59,7 +58,6 @@ def test_placement_deal_wrong_placement_returns_400(monkeypatch):
 
 def test_placement_deal_dev_mode_works_without_auth(monkeypatch):
     """В dev-режиме можно открыть placement без реального B24 POST."""
-    monkeypatch.setenv("SESSION_SECRET", "test-secret-123")
     monkeypatch.setenv("DEV_MODE", "true")
     from app.config import get_settings
     get_settings.cache_clear()
@@ -79,7 +77,6 @@ def test_placement_deal_dev_mode_works_without_auth(monkeypatch):
 
 def test_placement_deal_prod_rejects_invalid_token(monkeypatch):
     """В prod-режиме POST с невалидным access_token → 403, кука не выставляется."""
-    monkeypatch.setenv("SESSION_SECRET", "test-secret-123")
     monkeypatch.setenv("DEV_MODE", "false")
     from app.config import get_settings
     get_settings.cache_clear()
@@ -108,7 +105,6 @@ def test_placement_deal_prod_rejects_invalid_token(monkeypatch):
 
 def test_placement_deal_prod_accepts_valid_token(monkeypatch):
     """В prod-режиме POST с валидным access_token → 200, кука выставляется."""
-    monkeypatch.setenv("SESSION_SECRET", "test-secret-123")
     monkeypatch.setenv("DEV_MODE", "false")
     from app.config import get_settings
     get_settings.cache_clear()

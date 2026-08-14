@@ -3,7 +3,6 @@ from app.config import Settings, get_settings
 
 def test_config_loads_from_env(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://u:p@localhost/db")
-    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
     monkeypatch.setenv("TG_API_ID", "12345")
     monkeypatch.setenv("TG_API_HASH", "deadbeef")
     monkeypatch.setenv("TG_SESSIONS_DIR", "/tmp/sessions")
@@ -21,7 +20,6 @@ def test_config_loads_from_env(monkeypatch):
 
 def test_get_settings_returns_cached_singleton(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://u:p@localhost/db")
-    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
     monkeypatch.setenv("TG_API_ID", "12345")
     monkeypatch.setenv("TG_API_HASH", "deadbeef")
     monkeypatch.setenv("B24_PORTAL", "https://test.bitrix24.ru")

@@ -13,23 +13,12 @@ from sqlalchemy.pool import StaticPool
 
 
 @pytest.fixture
-async def app_with_data(monkeypatch):
+async def app_with_data():
     """Поднимает in-memory SQLite, сеет данные, override'ит зависимости.
 
-    Возвращает ``(TestClient, {ids...}, SessionLocal)``.
+    Возвращает ``(TestClient, {ids...}, SessionLocal)``. Базовое окружение
+    выставляет conftest (_hermetic_env).
     """
-    monkeypatch.setenv("SESSION_SECRET", "test-secret")
-    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
-    monkeypatch.setenv("TG_API_ID", "1")
-    monkeypatch.setenv("TG_API_HASH", "x")
-    monkeypatch.setenv("B24_PORTAL", "https://x.bitrix24.ru")
-    monkeypatch.setenv("B24_CLIENT_ID", "c")
-    monkeypatch.setenv("B24_CLIENT_SECRET", "s")
-    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
-    from app.config import get_settings
-
-    get_settings.cache_clear()
-
     engine = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
         connect_args={"check_same_thread": False},

@@ -27,15 +27,9 @@ SECRET = "integration-test-secret"
 
 @pytest.fixture
 def client(monkeypatch):
-    # Настраиваем окружение ДО импорта app.db: app.db при импорте вызывает
-    # get_settings(), а deps читает settings.session_secret.
-    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
-    monkeypatch.setenv("TG_API_ID", "1")
-    monkeypatch.setenv("TG_API_HASH", "x")
-    monkeypatch.setenv("B24_PORTAL", "https://x.bitrix24.ru")
-    monkeypatch.setenv("B24_CLIENT_ID", "c")
-    monkeypatch.setenv("B24_CLIENT_SECRET", "s")
-    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    # Тесты подписывают куку секретом SECRET — переопределяем базу из conftest.
+    # Прочее окружение выставляет autouse-фикстура _hermetic_env (до этой
+    # фикстуры), кэш настроек она же и чистит.
     monkeypatch.setenv("SESSION_SECRET", SECRET)
     from app.config import get_settings
 

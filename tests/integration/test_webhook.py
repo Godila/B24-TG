@@ -21,14 +21,7 @@ AUTH_PAYLOAD = {
 
 @pytest.fixture
 def client(monkeypatch):
-    monkeypatch.setenv("SESSION_SECRET", "webhook-test-secret")
-    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
-    monkeypatch.setenv("TG_API_ID", "1")
-    monkeypatch.setenv("TG_API_HASH", "x")
-    monkeypatch.setenv("B24_PORTAL", "https://x.bitrix24.ru")
-    monkeypatch.setenv("B24_CLIENT_ID", "c")
-    monkeypatch.setenv("B24_CLIENT_SECRET", "s")
-    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    # Единственный override над базой из conftest: секрет webhook.
     monkeypatch.setenv("B24_WEBHOOK_SECRET", WEBHOOK_SECRET)
     from app.config import get_settings
     get_settings.cache_clear()
