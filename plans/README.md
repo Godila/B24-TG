@@ -12,7 +12,7 @@
 | 002 | Починить входящий конвейер: Telethon NewMessage(incoming=True) + тесты шва | P1 | S | — | DONE (24c8e0e) |
 | 003 | Spike: верификация B24 free-tier CRM-методов на прод-портале | P1 | S | — | PHASE A DONE (5e43bc5); фаза B — запуск на VM при деплое после 005 |
 | 004 | Мультиаккаунт: dialog scoping по менеджеру + unique constraint | P1 | M | 002 | DONE (11ef4bc, b2cb637; миграцию применить на VM при деплое) |
-| 005 | Замкнуть исходящий TG-цикл: Message.status/tg_message_id/message_id + attempts-фикс | P1 | M | — | IN PROGRESS |
+| 005 | Замкнуть исходящий TG-цикл: Message.status/tg_message_id/message_id + attempts-фикс | P1 | M | — | DONE (09db7cb, 13f3993, 68a641a) |
 | 006 | CRM durability: очередь crm_sync + retry, rate-limit B24, shared httpx, outbound timeline | P2 | M-L | 005 | TODO |
 | 007 | UX-патчи: новейшая история, vendored Alpine, media-placeholder | P2 | S-M | — | TODO |
 | 008 | Гигиена: dead config/deps (Redis и пр.), tests/conftest.py, CI, docs-чистка | P2 | M | 006 (порядок) | TODO |
