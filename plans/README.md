@@ -10,7 +10,7 @@
 |------|-------|----------|--------|------------|--------|
 | 001 | Security: ротация утёкшего секрета + харденинг (webhook auth, cookie secure, CORS, HSTS) | P1 | S+M | — | DONE (код, a6a9724; остаётся оператору: ротация секрета + деплой) |
 | 002 | Починить входящий конвейер: Telethon NewMessage(incoming=True) + тесты шва | P1 | S | — | DONE (24c8e0e) |
-| 003 | Spike: верификация B24 free-tier CRM-методов на прод-портале | P1 | S | — | PHASE A DONE (5e43bc5); фаза B — запуск на VM при деплое после 005 |
+| 003 | Spike: верификация B24 free-tier CRM-методов на прод-портале | P1 | S | — | DONE (фаза B: все 8 методов OK на free-tier; поймал и закрыл баг JSON-body клиента, см. docs/B24-FREE-TIER.md) |
 | 004 | Мультиаккаунт: dialog scoping по менеджеру + unique constraint | P1 | M | 002 | DONE (11ef4bc, b2cb637; миграцию применить на VM при деплое) |
 | 005 | Замкнуть исходящий TG-цикл: Message.status/tg_message_id/message_id + attempts-фикс | P1 | M | — | DONE (09db7cb, 13f3993, 68a641a) |
 | 006 | CRM durability: очередь crm_sync + retry, rate-limit B24, shared httpx, outbound timeline | P2 | M-L | 005 | TODO |
