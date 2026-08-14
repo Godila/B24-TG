@@ -106,7 +106,9 @@ function chatApp() {
       }
     },
 
-    /** Инкрементальный poll: только сообщения после lastId. */
+    /** Инкрементальный poll: новые сообщения (since=lastId) + статусы
+     *  «висящих» исходящих (⏳→✓): poll их не возвращает, а оптимистичный
+     *  пузырь навсегда остался бы с часиками, хотя сервер уже доставил. */
     async poll() {
       if (!this.dialog || this.sending) return;
       try {
@@ -131,8 +133,28 @@ function chatApp() {
             this.scrollBottom();
           }
         }
+        await this.refreshPendingStatuses();
       } catch {
         // Сетевая ошибка poll'а — молча, следующий тик попробует снова.
+      }
+    },
+
+    /** Перечитать хвост истории и обновить статусы уже показанных
+     *  сообщений (pending → sent/error). Новые id не добавляются —
+     *  их приносит poll. */
+    async refreshPendingStatuses() {
+      if (!this.messages.some((m) => m.status === "pending")) return;
+      try {
+        const res = await fetch(
+          `/api/dialogs/${this.dialog.id}/messages?limit=50`,
+          { credentials: "same-origin" },
+        );
+        if (!res.ok) return;
+        const tail = await res.json(); // DESC — новейшие 50
+        const byId = new Map(tail.map((m) => [m.id, m]));
+        this.messages = this.messages.map((m) => byId.get(m.id) ?? m);
+      } catch {
+        // Не критично: следующий poll попробует снова.
       }
     },
 
