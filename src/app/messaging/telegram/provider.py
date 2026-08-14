@@ -3,7 +3,7 @@ import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-from telethon import TelegramClient
+from telethon import TelegramClient, events
 from telethon.errors import FloodWaitError
 from telethon.tl.types import User
 
@@ -42,7 +42,11 @@ class TelegramProvider(MessengerProvider):
         await self._client.connect()
         if not await self._client.is_user_authorized():
             raise RuntimeError("TG session not authorized — run auth_login first")
-        self._client.add_event_handler(self._on_new_message)
+        # incoming=True: только входящие. Без builder Telethon отдаёт сырые Update,
+        # а без фильтра исходящие сообщения менеджера эхом шли бы как входящие.
+        self._client.add_event_handler(
+            self._on_new_message, events.NewMessage(incoming=True)
+        )
         logger.info("TelegramProvider connected")
 
     async def disconnect(self) -> None:
