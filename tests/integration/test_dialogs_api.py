@@ -207,6 +207,7 @@ async def test_send_message_creates_message_and_outbox(app_with_data):
             )
         ).scalars().all()
         assert any(m.text == "Тестовый ответ" for m in msgs)
+        new_msg_id = next(m.id for m in msgs if m.text == "Тестовый ответ")
 
         outbox = (await s.execute(select(OutboxItem))).scalars().all()
         assert len(outbox) == 1
@@ -214,3 +215,5 @@ async def test_send_message_creates_message_and_outbox(app_with_data):
         assert outbox[0].tg_account_id == ids["account"]
         assert outbox[0].text == "Тестовый ответ"
         assert outbox[0].status == OutboxStatus.queued
+        # OutboxItem связан с Message — воркер сможет закрыть статус.
+        assert outbox[0].message_id == new_msg_id

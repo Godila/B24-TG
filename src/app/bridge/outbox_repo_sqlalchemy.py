@@ -2,11 +2,11 @@
 
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bridge.outbox_worker import OutboxRepository
-from app.models import OutboxItem, OutboxStatus
+from app.models import Message, MessageStatus, OutboxItem, OutboxStatus
 
 
 class SqlAlchemyOutboxRepository(OutboxRepository):
@@ -23,8 +23,12 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
         external_chat_id: str,
         text: str,
         is_initiation: bool = False,
+        message_id: int | None = None,
     ) -> OutboxItem:
         """Поставить новое сообщение в очередь отправки (status=queued).
+
+        ``message_id`` связывает элемент очереди с Message(direction=outbound):
+        по нему mark_sent/mark_failed закрывают статус исходящего сообщения.
 
         Внимание: метод НЕ коммитит сам — это делает вызывающий (route),
         чтобы вставка Message и OutboxItem прошла в одной транзакции
@@ -36,6 +40,7 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
             external_chat_id=external_chat_id,
             text=text,
             is_initiation=is_initiation,
+            message_id=message_id,
             status=OutboxStatus.queued,
             attempts=0,
             next_attempt_at=datetime.now(UTC),
@@ -65,21 +70,39 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
         return list(result.scalars().all())
 
     async def mark_sent(self, item: OutboxItem, external_message_id: int) -> None:
-        # В таблице outbox нет столбца под external_message_id — он хранится
-        # в записи Message. Здесь лишь фиксируем успешную доставку.
+        # Одна транзакция: outbox -> sent и связанный Message -> sent
+        # (+ tg_message_id для read-receipts и sent_at для UI).
         await self._session.execute(
             update(OutboxItem)
             .where(OutboxItem.id == item.id)
             .values(status=OutboxStatus.sent)
         )
+        if item.message_id:
+            await self._session.execute(
+                update(Message)
+                .where(Message.id == item.message_id)
+                .values(
+                    status=MessageStatus.sent,
+                    tg_message_id=external_message_id,
+                    sent_at=func.now(),
+                )
+            )
         await self._session.commit()
 
     async def mark_failed(self, item: OutboxItem, error: str) -> None:
+        # Одна транзакция: outbox -> failed и Message -> error,
+        # иначе исходящее навсегда зависнет в pending (⏳ в UI).
         await self._session.execute(
             update(OutboxItem)
             .where(OutboxItem.id == item.id)
             .values(status=OutboxStatus.failed, last_error=error)
         )
+        if item.message_id:
+            await self._session.execute(
+                update(Message)
+                .where(Message.id == item.message_id)
+                .values(status=MessageStatus.error)
+            )
         await self._session.commit()
 
     async def reschedule(

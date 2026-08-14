@@ -163,6 +163,7 @@ async def send_message(
         external_chat_id=dialog.external_chat_id,
         text=body.text,
         is_initiation=is_initiation,
+        message_id=message.id,
     )
     await session.commit()
     return _message_dto(message)

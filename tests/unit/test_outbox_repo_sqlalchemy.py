@@ -5,7 +5,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.bridge.outbox_repo_sqlalchemy import SqlAlchemyOutboxRepository
-from app.models import Base, OutboxItem, OutboxStatus
+from app.models import (
+    Base,
+    Message,
+    MessageDirection,
+    MessageStatus,
+    OutboxItem,
+    OutboxStatus,
+)
 
 
 @pytest.fixture
@@ -148,6 +155,88 @@ async def test_mark_failed_sets_status_and_error(session):
     refreshed = await session.get(OutboxItem, 1)
     assert refreshed.status == OutboxStatus.failed
     assert refreshed.last_error == "boom"
+
+
+@pytest.mark.asyncio
+async def test_mark_sent_updates_message(session):
+    """Замыкание исходящего цикла: mark_sent должен обновлять связанный
+    Message (pending -> sent, tg_message_id, sent_at), а не только outbox."""
+    message = Message(
+        dialog_id=10,
+        direction=MessageDirection.outbound,
+        status=MessageStatus.pending,
+        text="hi",
+    )
+    session.add(message)
+    await session.flush()
+    msg_id = message.id
+
+    session.add(
+        OutboxItem(
+            dialog_id=10,
+            tg_account_id=7,
+            external_chat_id="123",
+            text="hi",
+            message_id=msg_id,
+            status=OutboxStatus.queued,
+            attempts=0,
+            next_attempt_at=datetime.now(UTC) - timedelta(minutes=1),
+        )
+    )
+    await session.commit()
+    outbox_id = (await session.execute(select(OutboxItem.id))).scalar_one()
+
+    item = await session.get(OutboxItem, outbox_id)
+    repo = SqlAlchemyOutboxRepository(session)
+    await repo.mark_sent(item, external_message_id=999)
+
+    await session.reset()
+    refreshed_outbox = await session.get(OutboxItem, outbox_id)
+    refreshed_msg = await session.get(Message, msg_id)
+    assert refreshed_outbox.status == OutboxStatus.sent
+    assert refreshed_msg.status == MessageStatus.sent
+    assert refreshed_msg.tg_message_id == 999
+    assert refreshed_msg.sent_at is not None
+
+
+@pytest.mark.asyncio
+async def test_mark_failed_updates_message(session):
+    """mark_failed должен переводить связанный Message в error."""
+    message = Message(
+        dialog_id=10,
+        direction=MessageDirection.outbound,
+        status=MessageStatus.pending,
+        text="hi",
+    )
+    session.add(message)
+    await session.flush()
+    msg_id = message.id
+
+    session.add(
+        OutboxItem(
+            dialog_id=10,
+            tg_account_id=7,
+            external_chat_id="123",
+            text="hi",
+            message_id=msg_id,
+            status=OutboxStatus.queued,
+            attempts=5,
+            next_attempt_at=datetime.now(UTC) - timedelta(minutes=1),
+        )
+    )
+    await session.commit()
+    outbox_id = (await session.execute(select(OutboxItem.id))).scalar_one()
+
+    item = await session.get(OutboxItem, outbox_id)
+    repo = SqlAlchemyOutboxRepository(session)
+    await repo.mark_failed(item, error="boom")
+
+    await session.reset()
+    refreshed_outbox = await session.get(OutboxItem, outbox_id)
+    refreshed_msg = await session.get(Message, msg_id)
+    assert refreshed_outbox.status == OutboxStatus.failed
+    assert refreshed_outbox.last_error == "boom"
+    assert refreshed_msg.status == MessageStatus.error
 
 
 @pytest.mark.asyncio
