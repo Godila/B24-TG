@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bitrix-TG — QR-онбординг (dev)</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <!-- qrcodejs 1.0.0 (davidshimjs), минифицированный dist с cdnjs
+       (https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js,
+       19.9KB). Vendored локально по той же причине, что и Alpine в плане 007:
+       внешние CDN недоступны в сетях РФ. API: new QRCode(el, {text}). -->
+  <script src="/static/vendor/qrcode.min.js"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 560px; margin: 40px auto; padding: 0 16px; }
+    fieldset { border: 1px solid #ccc; border-radius: 8px; margin-bottom: 16px; }
+    label { display: block; margin: 10px 0 4px; font-weight: 600; }
+    input { width: 100%; padding: 8px; box-sizing: border-box; font-size: 1rem; }
+    button { margin-top: 12px; padding: 10px 20px; font-size: 1rem; cursor: pointer; }
+    #qr { margin: 16px 0; }
+    #status { padding: 12px; border-radius: 8px; display: none; }
+    .ok { background: #e6f6e6; }
+    .err { background: #fde8e8; }
+    .wait { background: #eef4fd; }
+    .hint { color: #666; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <h1>QR-онбординг менеджера <span class="hint">(спайк, dev-only)</span></h1>
+  <p class="hint">
+    Откройте Telegram на телефоне → Настройки → Устройства → «Подключить устройство»
+    и наведите камеру на QR. SMS-код не нужен.
+  </p>
+
+  <fieldset>
+    <legend>Аккаунт</legend>
+    <label for="b24_user_id">b24_user_id (ваш ID в Bitrix24)</label>
+    <input id="b24_user_id" type="number" value="1" required>
+    <label for="phone">Телефон TG-аккаунта (+7…)</label>
+    <input id="phone" type="tel" placeholder="+79991234567" required>
+    <button id="startBtn" type="button">Начать (QR)</button>
+  </fieldset>
+
+  <div id="qr"></div>
+  <div id="status"></div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let accountId = null;
+    let shownUrl = null;
+    let pollTimer = null;
+    let qrWidget = null;
+
+    function showStatus(cls, text) {
+      const el = $("status");
+      el.className = cls;
+      el.style.display = "block";
+      el.textContent = text;
+    }
+
+    function renderQr(url) {
+      if (url === shownUrl) return;
+      shownUrl = url;
+      $("qr").innerHTML = "";
+      qrWidget = new QRCode($("qr"), { text: url, width: 256, height: 256 });
+    }
+
+    async function start() {
+      const b24 = $("b24_user_id").value.trim();
+      const phone = $("phone").value.trim();
+      if (!b24 || !phone) { showStatus("err", "Заполните оба поля"); return; }
+      $("startBtn").disabled = true;
+      if (pollTimer) clearInterval(pollTimer);
+      try {
+        const r = await fetch(`/dev/qr/start?b24_user_id=${b24}&phone=${encodeURIComponent(phone)}`);
+        const data = await r.json();
+        if (!r.ok) { showStatus("err", data.detail || "Ошибка старта"); return; }
+        accountId = data.account_id;
+        if (data.status === "authorized") {
+          finish();
+          return;
+        }
+        renderQr(data.qr_url);
+        showStatus("wait", "Отсканируйте QR приложением Telegram…");
+        pollTimer = setInterval(poll, 2000);
+      } catch (e) {
+        showStatus("err", "Сеть: " + e);
+      } finally {
+        $("startBtn").disabled = false;
+      }
+    }
+
+    async function poll() {
+      try {
+        const r = await fetch(`/dev/qr/status?account_id=${accountId}`);
+        const data = await r.json();
+        if (!r.ok) {
+          clearInterval(pollTimer);
+          showStatus("err", data.detail || "Ошибка статуса");
+          return;
+        }
+        if (data.status === "waiting") {
+          if (data.qr_url) renderQr(data.qr_url); // после recreate url меняется
+        } else if (data.status === "authorized") {
+          clearInterval(pollTimer);
+          finish();
+        } else { // expired | error
+          clearInterval(pollTimer);
+          showStatus("err",
+            data.error || "QR истёк (3 попытки). Нажмите «Начать (QR)» снова.");
+        }
+      } catch (e) {
+        clearInterval(pollTimer);
+        showStatus("err", "Сеть: " + e);
+      }
+    }
+
+    function finish() {
+      $("qr").innerHTML = "";
+      showStatus("ok",
+        "Готово: аккаунт активен. Перезапустите bridge (docker compose restart bridge).");
+    }
+
+    $("startBtn").addEventListener("click", start);
+  </script>
+</body>
+</html>
