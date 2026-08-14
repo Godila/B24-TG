@@ -145,6 +145,25 @@ def test_list_dialogs_filter_by_deal_id(app_with_data):
     assert r2.json() == []
 
 
+async def _seed_extra_messages(session_local, dialog_id: int) -> list[int]:
+    """Досеивает сообщения с id 3..5 в диалог (fixture уже создала 1 и 2)."""
+    from app.models import Message, MessageDirection, MessageStatus
+
+    async with session_local() as s:
+        for i in (3, 4, 5):
+            s.add(
+                Message(
+                    id=i,
+                    dialog_id=dialog_id,
+                    direction=MessageDirection.inbound,
+                    text=f"msg-{i}",
+                    status=MessageStatus.delivered,
+                )
+            )
+        await s.commit()
+    return [3, 4, 5]
+
+
 def test_get_messages_returns_history(app_with_data):
     client, ids, _ = app_with_data
     r = client.get(f"/api/dialogs/{ids['dialog']}/messages")
@@ -154,8 +173,40 @@ def test_get_messages_returns_history(app_with_data):
     texts = {m["text"] for m in data}
     assert "Привет" in texts
     assert "Здравствуйте!" in texts
-    # sorted by id ascending
-    assert data[0]["id"] < data[1]["id"]
+    # первичная загрузка — новейшие первыми (DESC), UI разворачивает сам
+    assert data[0]["id"] > data[1]["id"]
+
+
+@pytest.mark.asyncio
+async def test_get_messages_primary_load_newest_first(app_with_data):
+    """Без параметров: новейшие N в DESC (limit=2 из 5 -> ids [5, 4])."""
+    client, ids, session_local = app_with_data
+    await _seed_extra_messages(session_local, ids["dialog"])
+    r = client.get(f"/api/dialogs/{ids['dialog']}/messages", params={"limit": 2})
+    assert r.status_code == 200
+    assert [m["id"] for m in r.json()] == [5, 4]
+
+
+@pytest.mark.asyncio
+async def test_get_messages_before_returns_older_page(app_with_data):
+    """before=<id>: сообщения старее курсора, тоже DESC (новейшие из старых)."""
+    client, ids, session_local = app_with_data
+    await _seed_extra_messages(session_local, ids["dialog"])
+    r = client.get(
+        f"/api/dialogs/{ids['dialog']}/messages", params={"before": 3, "limit": 10}
+    )
+    assert r.status_code == 200
+    assert [m["id"] for m in r.json()] == [2, 1]
+
+
+@pytest.mark.asyncio
+async def test_get_messages_since_still_ascending(app_with_data):
+    """since (poll-режим): контракт виджета не меняется — ASC от курсора."""
+    client, ids, session_local = app_with_data
+    await _seed_extra_messages(session_local, ids["dialog"])
+    r = client.get(f"/api/dialogs/{ids['dialog']}/messages", params={"since": 2})
+    assert r.status_code == 200
+    assert [m["id"] for m in r.json()] == [3, 4, 5]
 
 
 def test_get_messages_since_returns_only_new(app_with_data):

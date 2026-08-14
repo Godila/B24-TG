@@ -101,13 +101,27 @@ async def list_messages(
     manager: ManagerDep,
     session: SessionDep,
     since: int | None = Query(default=None, description="Вернуть сообщения с id > since"),
+    before: int | None = Query(
+        default=None, description="Вернуть сообщения с id < before (страница старее)"
+    ),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> list[MessageOut]:
+    """История сообщений.
+
+    Режимы:
+    - ``since`` — poll новых сообщений: ASC от курсора (контракт виджета);
+    - ``before`` — страница истории старее курсора: DESC (новейшие из старых);
+    - без параметров — первичная загрузка: DESC (новейшие N), UI разворачивает сам.
+    """
     await _load_dialog_owned(session, dialog_id, manager)
     stmt = select(Message).where(Message.dialog_id == dialog_id)
     if since is not None:
-        stmt = stmt.where(Message.id > since)
-    stmt = stmt.order_by(Message.id.asc()).limit(limit)
+        stmt = stmt.where(Message.id > since).order_by(Message.id.asc())
+    else:
+        if before is not None:
+            stmt = stmt.where(Message.id < before)
+        stmt = stmt.order_by(Message.id.desc())
+    stmt = stmt.limit(limit)
     result = await session.execute(stmt)
     return [_message_dto(m) for m in result.scalars().all()]
 

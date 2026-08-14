@@ -11,6 +11,7 @@
 function chatApp() {
   return {
     POLL_MS: 3000,
+    PAGE_SIZE: 100,
     loading: true,
     sending: false,
     error: "",
@@ -20,6 +21,7 @@ function chatApp() {
     messages: [],
     templates: [],
     lastId: 0,
+    hasMore: false,
     pollTimer: null,
 
     /**
@@ -69,13 +71,39 @@ function chatApp() {
     async loadMessages() {
       if (!this.dialog) return;
       const res = await fetch(
-        `/api/dialogs/${this.dialog.id}/messages?limit=100`,
+        `/api/dialogs/${this.dialog.id}/messages?limit=${this.PAGE_SIZE}`,
         { credentials: "same-origin" },
       );
       if (!res.ok) throw new Error(`Не удалось загрузить сообщения (${res.status})`);
-      this.messages = await res.json();
+      // API отдаёт новейшие N (DESC) — разворачиваем в ASC для рендера.
+      const data = await res.json();
+      this.messages = data.reverse();
       this.lastId = this.messages.reduce((m, x) => Math.max(m, x.id), 0);
+      this.hasMore = data.length === this.PAGE_SIZE;
       this.scrollBottom();
+    },
+
+    /** Догрузка истории: страница старее самого раннего показанного сообщения. */
+    async loadOlder() {
+      if (!this.dialog || !this.hasMore || this.messages.length === 0) return;
+      const oldestId = this.messages[0].id;
+      if (typeof oldestId !== "number") return; // оптимистичный пузырь без id
+      const res = await fetch(
+        `/api/dialogs/${this.dialog.id}/messages?limit=${this.PAGE_SIZE}&before=${oldestId}`,
+        { credentials: "same-origin" },
+      );
+      if (!res.ok) return; // не критично — кнопку можно нажать снова
+      const data = await res.json();
+      this.hasMore = data.length === this.PAGE_SIZE;
+      if (data.length > 0) {
+        // Сохраняем позицию скролла: prepend меняет scrollHeight.
+        const el = this.$refs.messages;
+        const offset = el ? el.scrollHeight - el.scrollTop : 0;
+        this.messages = [...data.reverse(), ...this.messages];
+        this.$nextTick(() => {
+          if (el) el.scrollTop = el.scrollHeight - offset;
+        });
+      }
     },
 
     /** Инкрементальный poll: только сообщения после lastId. */

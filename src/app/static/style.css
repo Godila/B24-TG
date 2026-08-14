@@ -81,6 +81,19 @@ html, body {
 .status-badge { min-width: 1.5em; text-align: right; }
 .empty { color: var(--meta); text-align: center; margin-top: 32px; }
 
+/* Догрузка старых сообщений */
+.load-older {
+  align-self: center;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px 12px;
+}
+.load-older:hover { background: var(--out-bg); }
+
 /* Шаблоны */
 .templates { padding: 0 14px; flex-shrink: 0; }
 .templates-toggle {

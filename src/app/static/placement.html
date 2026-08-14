@@ -26,6 +26,9 @@
 
     <!-- Лента сообщений -->
     <main class="messages" x-ref="messages">
+      <button class="load-older" type="button"
+        x-show="messages.length > 0 && hasMore"
+        @click="loadOlder()">↑ Загрузить ещё</button>
       <template x-for="msg in messages" :key="msg.id">
         <div class="bubble" :class="msg.direction === 'out' ? 'bubble-out' : 'bubble-in'">
           <p class="bubble-text" x-text="msg.text"></p>
