@@ -90,6 +90,139 @@ def test_on_new_message_builds_incoming_message():
     msg = asyncio.run(provider._incoming_queue.get())
     assert msg.sender_tg_id == 4242
     assert msg.text == "Привет"
+    assert msg.content_type.value == "text"
     assert msg.external_message_id == 777
     assert msg.external_chat_id == "4242"
     assert msg.account_id == 0  # перезапишет bootstrap.forward_incoming
+
+
+def _tg_message(text, media):
+    """Псевдо-Message Telethon: .message, .media — как в events.NewMessage."""
+    return SimpleNamespace(message=text, media=media)
+
+
+def _doc(*attributes):
+    from telethon.tl import types as tl
+
+    return tl.Document(
+        id=1,
+        access_hash=1,
+        file_reference=b"",
+        date=None,
+        mime_type="application/octet-stream",
+        size=100,
+        dc_id=1,
+        attributes=list(attributes),
+    )
+
+
+def test_content_type_text_without_media():
+    from app.messaging.telegram.provider import TelegramProvider
+
+    ctype, text = TelegramProvider._content_type_and_text(
+        _tg_message("Привет", media=None)
+    )
+    assert ctype.value == "text"
+    assert text == "Привет"
+
+
+def test_content_type_photo_without_caption():
+    from telethon.tl import types as tl
+
+    from app.messaging.telegram.provider import TelegramProvider
+
+    ctype, text = TelegramProvider._content_type_and_text(
+        _tg_message("", media=tl.MessageMediaPhoto(photo=None))
+    )
+    assert ctype.value == "photo"
+    assert text == "[фото]"
+
+
+def test_content_type_photo_caption_preserved():
+    from telethon.tl import types as tl
+
+    from app.messaging.telegram.provider import TelegramProvider
+
+    ctype, text = TelegramProvider._content_type_and_text(
+        _tg_message("Смотрите чертеж", media=tl.MessageMediaPhoto(photo=None))
+    )
+    assert ctype.value == "photo"
+    assert text == "Смотрите чертеж"
+
+
+def test_content_type_voice_video_sticker_file():
+    from telethon.tl import types as tl
+
+    from app.messaging.telegram.provider import TelegramProvider
+
+    def check(doc, expected_type, expected_text):
+        media = tl.MessageMediaDocument(document=doc)
+        ctype, text = TelegramProvider._content_type_and_text(
+            _tg_message("", media=media)
+        )
+        assert ctype.value == expected_type
+        assert text == expected_text
+
+    check(
+        _doc(tl.DocumentAttributeAudio(duration=5, voice=True)),
+        "voice",
+        "[голосовое сообщение]",
+    )
+    check(
+        _doc(tl.DocumentAttributeVideo(duration=5, w=640, h=480)),
+        "video",
+        "[видео]",
+    )
+    check(
+        _doc(
+            tl.DocumentAttributeSticker(
+                alt="🙂", stickerset=tl.InputStickerSetEmpty()
+            )
+        ),
+        "sticker",
+        "[стикер]",
+    )
+    check(
+        _doc(tl.DocumentAttributeFilename(file_name="doc.pdf")),
+        "file",
+        "[файл]",
+    )
+
+
+def test_content_type_unknown_media_fallback():
+    from telethon.tl import types as tl
+
+    from app.messaging.telegram.provider import TelegramProvider
+
+    ctype, text = TelegramProvider._content_type_and_text(
+        _tg_message(None, media=tl.MessageMediaGeo(geo=tl.GeoPointEmpty()))
+    )
+    assert ctype.value == "file"
+    assert text == "[вложение]"
+
+
+def test_on_new_message_media_becomes_placeholder():
+    """Медиа без подписи не теряется: в очереди плейсхолдер + верный тип."""
+    from telethon.tl import types as tl
+
+    from app.messaging.telegram.provider import TelegramProvider
+
+    provider = TelegramProvider(api_id=1, api_hash="x", sessions_dir="/tmp")
+
+    sender = SimpleNamespace(id=4242, first_name="Иван")
+    event = SimpleNamespace(
+        chat_id=4242,
+        is_reply=False,
+        message=SimpleNamespace(
+            message="",
+            media=tl.MessageMediaPhoto(photo=None),
+            id=778,
+            date=None,
+        ),
+        get_sender=AsyncMock(return_value=sender),
+    )
+
+    asyncio.run(provider._on_new_message(event))
+    msg = asyncio.run(provider._incoming_queue.get())
+    assert msg.content_type.value == "photo"
+    assert msg.text == "[фото]"

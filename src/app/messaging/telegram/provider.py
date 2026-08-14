@@ -5,6 +5,7 @@ from pathlib import Path
 
 from telethon import TelegramClient, events
 from telethon.errors import FloodWaitError
+from telethon.tl import types as tl
 from telethon.tl.types import User
 
 from app.messaging.provider import MessengerProvider
@@ -58,6 +59,7 @@ class TelegramProvider(MessengerProvider):
         """Handler событий Telethon NewMessage — кладёт в очередь."""
         try:
             sender = await event.get_sender()
+            ctype, text = self._content_type_and_text(event.message)
             msg = IncomingMessage(
                 account_id=0,  # SessionManager проставит реальный account_id
                 external_chat_id=str(event.chat_id),
@@ -65,8 +67,8 @@ class TelegramProvider(MessengerProvider):
                 sender_name=self._full_name(sender),
                 sender_phone=getattr(sender, "phone", None),
                 sender_username=getattr(sender, "username", None),
-                content_type=ContentType.text,
-                text=event.message.message,
+                content_type=ctype,
+                text=text,
                 external_message_id=event.message.id,
                 timestamp=event.message.date,
                 is_reply=bool(event.is_reply),
@@ -74,6 +76,32 @@ class TelegramProvider(MessengerProvider):
             await self._incoming_queue.put(msg)
         except Exception:
             logger.exception("Failed to handle incoming TG message")
+
+    @staticmethod
+    def _content_type_and_text(message) -> tuple[ContentType, str | None]:
+        """Тип контента и текст сообщения TG.
+
+        У медиа-сообщений ``message.message`` — это подпись (caption), она может
+        быть пустой; вместо молчаливой потери подставляем плейсхолдер, чтобы
+        сообщение не превращалось в пустой пузырь в чате и пустой коммент в CRM.
+        """
+        text = message.message or None
+        media = getattr(message, "media", None)
+        if media is None:
+            return ContentType.text, text
+        if isinstance(media, tl.MessageMediaPhoto):
+            return ContentType.photo, text or "[фото]"
+        if isinstance(media, tl.MessageMediaDocument):
+            attrs = getattr(media.document, "attributes", [])
+            names = {type(a).__name__ for a in attrs}
+            if "DocumentAttributeAudio" in names:
+                return ContentType.voice, text or "[голосовое сообщение]"
+            if "DocumentAttributeVideo" in names:
+                return ContentType.video, text or "[видео]"
+            if "DocumentAttributeSticker" in names:
+                return ContentType.sticker, text or "[стикер]"
+            return ContentType.file, text or "[файл]"
+        return ContentType.file, text or "[вложение]"
 
     @staticmethod
     def _full_name(sender) -> str | None:
