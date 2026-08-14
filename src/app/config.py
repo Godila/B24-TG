@@ -61,6 +61,13 @@ class Settings(BaseSettings):
     outbox_poll_interval: int = Field(2)          # сек
     outbox_max_attempts: int = Field(5)
 
+    # Bitrix24 REST throttle (free-портал режет ~2 rps)
+    b24_min_call_interval: float = Field(0.6)     # сек между вызовами
+
+    # CRM sync queue (план 006)
+    crm_sync_poll_interval: float = Field(2)      # сек
+    crm_sync_max_attempts: int = Field(5)
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
