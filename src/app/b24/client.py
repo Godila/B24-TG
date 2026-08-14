@@ -1,6 +1,8 @@
 """Async REST-клиент Bitrix24 поверх httpx."""
 
+import json
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 import httpx
@@ -38,7 +40,7 @@ class Bitrix24Client:
         method_http: str = "POST",
     ) -> Any:
         url = f"{self._endpoint}{method}.json"
-        body = {"auth": auth_token, **(params or {})}
+        body = self._build_body(auth_token, params)
 
         async with httpx.AsyncClient(timeout=self._timeout) as http:
             resp = await http.request(method_http, url, data=body)
@@ -50,3 +52,21 @@ class Bitrix24Client:
                 description=data.get("error_description", ""),
             )
         return data.get("result")
+
+    @staticmethod
+    def _build_body(auth_token: str, params: dict[str, Any] | None) -> dict[str, Any]:
+        """Тело form-encoded запроса: вложенные структуры → JSON-строки.
+
+        B24 принимает сложные параметры в form-телах только как JSON-строки;
+        httpx со str(dict) отправляет python-repr с одинарными кавычками —
+        портал отвергает его ошибкой 100 (нашёл spike на проде, план 003).
+        Списки не кодируем: httpx множит их в повторяющиеся поля формы
+        (``values[]`` — рабочий формат для findbycomm).
+        """
+        body: dict[str, Any] = {"auth": auth_token}
+        for key, value in (params or {}).items():
+            if isinstance(value, Mapping):
+                body[key] = json.dumps(value, ensure_ascii=False)
+            else:
+                body[key] = value
+        return body
