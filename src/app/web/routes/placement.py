@@ -1,10 +1,15 @@
 """Placement-обработчик Bitrix24: вкладка чата в карточке сделки (CRM_DEAL_DETAIL_TAB).
 
-B24 открывает этот URL в iFrame и POST'ит form-data:
-- PLACEMENT = "CRM_DEAL_DETAIL_TAB"
-- PLACEMENT_OPTIONS = JSON {ID: <deal_id>}
-- AUTH = JSON {user_id, access_token, member_id, domain, ...}
-Handler ставит сессионную куку и отдаёт HTML чат-страницы.
+B24 открывает этот URL в iFrame и POST'ит form-data (плоские поля, см.
+apidocs.bitrix24.ru «Что получает обработчик встройки»):
+- query: DOMAIN, PROTOCOL, LANG, APP_SID
+- тело: PLACEMENT, PLACEMENT_OPTIONS (JSON-строка {ID: <deal_id>}),
+  AUTH_ID (access_token пользователя), AUTH_EXPIRES, REFRESH_ID, ...
+
+user_id в запросе НЕТ: личность менеджера определяется вызовом user.current
+по AUTH_ID (это же валидирует токен). Формат AUTH=JSON{user_id,...} —
+из вебхука ONAPPINSTALL — здесь НЕ используется (баг, найденный первым
+живым открытием вкладки).
 
 В dev-режиме поддерживается GET с query-параметрами deal_id + b24_user_id
 (чтобы открыть виджет локально без реального B24).
@@ -28,37 +33,35 @@ router = APIRouter(prefix="/placement", tags=["placement"])
 _PLACEMENT_CODE = "CRM_DEAL_DETAIL_TAB"
 
 
-async def _verify_b24_token(access_token: str, expected_user_id: int) -> bool:
-    """Проверить, что access_token валиден и принадлежит expected_user_id.
+async def _user_id_from_token(access_token: str) -> int | None:
+    """Определить менеджера по AUTH_ID: user.current и валидирует токен.
 
-    Bitrix24 передаёт вместе с placement реальный access_token. Вызов
-    ``user.current`` подтверждает, что токен: (1) валиден, (2) не подделан,
-    (3) соответствует заявленному user_id. Без этой проверки злоумышленник
-    мог бы отправить POST с произвольным user_id и получить сессионную куку
-    любого менеджера.
+    Placement-запрос не содержит user_id — токен выписан Битрикс24 конкретному
+    пользователю, открывшему вкладку. Подделка исключена: без настоящего
+    токена user.current не пройдёт.
     """
     if not access_token:
-        return False
+        return None
     settings = get_settings()
     client = Bitrix24Client(client_endpoint=settings.b24_portal.rstrip("/") + "/rest/")
     try:
         result = await client.call("user.current", auth_token=access_token)
     except Bitrix24Error:
         logger.warning("placement: invalid B24 access_token rejected")
-        return False
+        return None
     except Exception:
         logger.exception("placement: B24 token verification failed")
-        return False
+        return None
     finally:
         # Клиент одноразовый на placement-вход и держит свой httpx-пул —
         # обязательно закрываем, иначе утечка коннектов на каждый логин.
         await client.aclose()
     if not isinstance(result, dict):
-        return False
+        return None
     try:
-        return int(result.get("ID", 0)) == expected_user_id
+        return int(result.get("ID", 0)) or None
     except (TypeError, ValueError):
-        return False
+        return None
 
 
 def _chat_html() -> str:
@@ -108,9 +111,14 @@ def _set_session_and_respond(
 async def placement_deal_post(
     placement: str = Form(default="", alias="PLACEMENT"),
     placement_options: str = Form(default="{}", alias="PLACEMENT_OPTIONS"),
-    auth: str = Form(default="{}", alias="AUTH"),
+    auth_id: str = Form(default="", alias="AUTH_ID"),
+    auth: str = Form(default="", alias="AUTH"),
 ) -> HTMLResponse | JSONResponse:
-    """Реальный placement-вызов от Bitrix24 (POST form-data)."""
+    """Реальный placement-вызов от Bitrix24 (POST form-data).
+
+    Прод: личность — user.current по AUTH_ID. Dev: user_id из legacy
+    AUTH-JSON (локальные тесты виджета без реального B24).
+    """
     if placement != _PLACEMENT_CODE:
         return JSONResponse(
             {"error": f"unexpected placement: {placement!r}"}, status_code=400,
@@ -122,22 +130,19 @@ async def placement_deal_post(
     deal_id_raw = options.get("ID")
     deal_id = int(deal_id_raw) if deal_id_raw else None
 
-    try:
-        auth_data = json.loads(auth) if auth else {}
-    except json.JSONDecodeError:
-        auth_data = {}
-    user_id_raw = auth_data.get("user_id")
-    try:
-        b24_user_id = int(user_id_raw)
-    except (TypeError, ValueError):
-        return JSONResponse({"error": "missing user_id in AUTH"}, status_code=400)
-
-    # Безопасность: проверяем, что POST действительно от B24 (access_token валиден
-    # и соответствует user_id). В dev-режиме проверка пропускается.
     settings = get_settings()
-    if not settings.dev_mode:
-        access_token = auth_data.get("access_token", "")
-        if not await _verify_b24_token(access_token, b24_user_id):
+    if settings.dev_mode:
+        # Dev: токена нет — берём user_id из AUTH-JSON (наш локальный формат).
+        try:
+            auth_data = json.loads(auth) if auth else {}
+            b24_user_id = int(auth_data.get("user_id"))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return JSONResponse(
+                {"error": "dev mode: requires AUTH.user_id"}, status_code=400,
+            )
+    else:
+        b24_user_id = await _user_id_from_token(auth_id)
+        if b24_user_id is None:
             return JSONResponse(
                 {"error": "Недействительный B24 токен"}, status_code=403,
             )

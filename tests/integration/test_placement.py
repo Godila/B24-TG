@@ -76,7 +76,11 @@ def test_placement_deal_dev_mode_works_without_auth(monkeypatch):
 
 
 def test_placement_deal_prod_rejects_invalid_token(monkeypatch):
-    """В prod-режиме POST с невалидным access_token → 403, кука не выставляется."""
+    """В prod-режиме POST с невалидным AUTH_ID → 403, кука не выставляется.
+
+    Реальный формат placement-запроса: плоские поля AUTH_ID/AUTH_EXPIRES
+    (см. apidocs «Что получает обработчик встройки») — user_id в запросе нет.
+    """
     monkeypatch.setenv("DEV_MODE", "false")
     from app.config import get_settings
     get_settings.cache_clear()
@@ -85,9 +89,9 @@ def test_placement_deal_prod_rejects_invalid_token(monkeypatch):
 
     import app.web.routes.placement as placement_mod
 
-    # _verify_b24_token возвращает False — токен не прошёл проверку.
+    # _user_id_from_token возвращает None — токен не прошёл user.current.
     monkeypatch.setattr(
-        placement_mod, "_verify_b24_token", AsyncMock(return_value=False)
+        placement_mod, "_user_id_from_token", AsyncMock(return_value=None)
     )
 
     app = create_app()
@@ -96,15 +100,40 @@ def test_placement_deal_prod_rejects_invalid_token(monkeypatch):
     form_data = {
         "PLACEMENT": "CRM_DEAL_DETAIL_TAB",
         "PLACEMENT_OPTIONS": json.dumps({"ID": "42"}),
-        "AUTH": json.dumps({"user_id": "15", "access_token": "bad-token"}),
+        "AUTH_ID": "bad-token",
+        "AUTH_EXPIRES": "3600",
+        "REFRESH_ID": "refresh",
+        "member_id": "abc",
+        "status": "L",
     }
     r = client.post("/placement/deal", data=form_data)
     assert r.status_code == 403
     assert "btg_sess=" not in r.headers.get("set-cookie", "")
 
 
+def test_placement_deal_prod_missing_auth_id_rejected_without_network(monkeypatch):
+    """Пустой AUTH_ID в prod → 403 сразу, без сетевого вызова."""
+    monkeypatch.setenv("DEV_MODE", "false")
+    from app.config import get_settings
+    get_settings.cache_clear()
+
+    app = create_app()
+    client = TestClient(app)
+
+    form_data = {
+        "PLACEMENT": "CRM_DEAL_DETAIL_TAB",
+        "PLACEMENT_OPTIONS": json.dumps({"ID": "42"}),
+    }
+    r = client.post("/placement/deal", data=form_data)
+    assert r.status_code == 403
+
+
 def test_placement_deal_prod_accepts_valid_token(monkeypatch):
-    """В prod-режиме POST с валидным access_token → 200, кука выставляется."""
+    """В prod-режиме POST с валидным AUTH_ID → 200, кука выставляется.
+
+    user_id (15) определяется САМ СЕРВЕР через user.current по токену —
+    ровно как с реальным Bitrix24.
+    """
     monkeypatch.setenv("DEV_MODE", "false")
     from app.config import get_settings
     get_settings.cache_clear()
@@ -114,7 +143,7 @@ def test_placement_deal_prod_accepts_valid_token(monkeypatch):
     import app.web.routes.placement as placement_mod
 
     monkeypatch.setattr(
-        placement_mod, "_verify_b24_token", AsyncMock(return_value=True)
+        placement_mod, "_user_id_from_token", AsyncMock(return_value=15)
     )
 
     app = create_app()
@@ -123,7 +152,8 @@ def test_placement_deal_prod_accepts_valid_token(monkeypatch):
     form_data = {
         "PLACEMENT": "CRM_DEAL_DETAIL_TAB",
         "PLACEMENT_OPTIONS": json.dumps({"ID": "42"}),
-        "AUTH": json.dumps({"user_id": "15", "access_token": "valid-token"}),
+        "AUTH_ID": "valid-token",
+        "AUTH_EXPIRES": "3600",
     }
     r = client.post("/placement/deal", data=form_data)
     assert r.status_code == 200
