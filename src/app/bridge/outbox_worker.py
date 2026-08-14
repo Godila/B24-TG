@@ -2,8 +2,10 @@
 
 Объединяет spec §6.1 слой 1 (throttle, анти-бан) и слой 2 (retry/backoff).
 Воркер опрашивает очередь due-сообщений, для каждого элемента:
-  1) находит провайдера для аккаунта (если нет — откладываем на 30с);
-  2) спрашивает throttler (если лимит исчерпан — короткий отклад на 10с);
+  1) находит провайдера для аккаунта (если нет — откладываем на 30с БЕЗ
+     расхода попытки; дольше суток без провайдера — mark_failed);
+  2) спрашивает throttler (если лимит исчерпан — короткий отклад на 10с,
+     тоже без расхода попытки);
   3) отправляет через провайдера.
 
 Дальнейшая судьба элемента зависит от SendResult:
@@ -11,6 +13,10 @@
   - flood_wait_seconds -> reschedule(delay = flood_wait_seconds)
   - попытки >= max     -> mark_failed(error)
   - иначе              -> экспоненциальный backoff 30 * 2^attempts.
+
+Попытки (attempts) расходуют только реальные (пусть и неудачные) попытки
+отправки; безобидные отклонения (throttle/no_provider) идут с
+``count_attempt=False``.
 
 ``OutboxRepository`` — абстракция доступа к данным; конкретная
 SQLAlchemy-реализация появится в Фазе 2. Сейчас воркер тестируется через
@@ -20,6 +26,7 @@ mock'и репозитория/провайдера/throttler'а.
 import asyncio
 import logging
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from app.models import OutboxItem
@@ -44,9 +51,27 @@ class OutboxRepository:
         ...
 
     async def reschedule(
-        self, item: OutboxItem, *, delay_seconds: int, error: str | None = None
+        self,
+        item: OutboxItem,
+        *,
+        delay_seconds: int,
+        error: str | None = None,
+        count_attempt: bool = True,
     ) -> None:
         ...
+
+
+def _no_provider_timed_out(created_at: datetime | None) -> bool:
+    """Нет провайдера дольше суток — терминальная ошибка, а не вечный ретрай.
+
+    ``created_at`` может быть naive (SQLite) или tz-aware (asyncpg);
+    naive трактуем как UTC. None (не загружен/не установлен) — не таймаут.
+    """
+    if created_at is None:
+        return False
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+    return datetime.now(UTC) - created_at > timedelta(hours=24)
 
 
 class OutboxWorker:
@@ -116,15 +141,26 @@ class OutboxWorker:
         # 1. провайдер для аккаунта
         provider = self._get_provider(item.tg_account_id)
         if provider is None:
-            await self._repo.reschedule(item, delay_seconds=30, error="no_provider")
+            # Отсутствие провайдера — не ошибка отправки: попытку не
+            # расходуем. Но и бесконечно ретраить нельзя: если аккаунта
+            # нет дольше суток — терминальный failed (no_provider_timeout).
+            if _no_provider_timed_out(item.created_at):
+                await self._repo.mark_failed(item, "no_provider_timeout")
+                return
+            await self._repo.reschedule(
+                item, delay_seconds=30, error="no_provider", count_attempt=False
+            )
             return
 
         # 2. throttle (анти-бан)
         throttler = self._throttler_for(item.tg_account_id)
         allowed = await throttler.acquire(is_initiation=bool(item.is_initiation))
         if not allowed:
-            # лимит исчерпан — короткая пауза, попробуем скоро снова.
-            await self._repo.reschedule(item, delay_seconds=10, error="throttled")
+            # лимит исчерпан — короткая пауза, попробуем скоро снова;
+            # отправки не было, попытку не расходуем.
+            await self._repo.reschedule(
+                item, delay_seconds=10, error="throttled", count_attempt=False
+            )
             return
 
         # 3. отправка

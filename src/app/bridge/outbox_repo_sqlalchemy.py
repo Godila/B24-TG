@@ -83,17 +83,25 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
         await self._session.commit()
 
     async def reschedule(
-        self, item: OutboxItem, *, delay_seconds: int, error: str | None = None
+        self,
+        item: OutboxItem,
+        *,
+        delay_seconds: int,
+        error: str | None = None,
+        count_attempt: bool = True,
     ) -> None:
+        # count_attempt=False — безобидные отклонения (throttle/no_provider):
+        # попытка не расходуется, иначе 4 отклонения + первая реальная ошибка
+        # исчерпают лимит и сообщение упадёт в failed без единой отправки.
         next_at = datetime.now(UTC) + timedelta(seconds=delay_seconds)
+        values: dict = {
+            "status": OutboxStatus.retrying,
+            "next_attempt_at": next_at,
+            "last_error": error,
+        }
+        if count_attempt:
+            values["attempts"] = OutboxItem.attempts + 1
         await self._session.execute(
-            update(OutboxItem)
-            .where(OutboxItem.id == item.id)
-            .values(
-                status=OutboxStatus.retrying,
-                attempts=OutboxItem.attempts + 1,
-                next_attempt_at=next_at,
-                last_error=error,
-            )
+            update(OutboxItem).where(OutboxItem.id == item.id).values(**values)
         )
         await self._session.commit()

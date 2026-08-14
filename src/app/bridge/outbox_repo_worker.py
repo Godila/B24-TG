@@ -38,11 +38,19 @@ class WorkerOutboxRepository(OutboxRepository):
             await SqlAlchemyOutboxRepository(s).mark_failed(item, error)
 
     async def reschedule(
-        self, item: OutboxItem, *, delay_seconds: int, error: str | None = None
+        self,
+        item: OutboxItem,
+        *,
+        delay_seconds: int,
+        error: str | None = None,
+        count_attempt: bool = True,
     ) -> None:
         async with self._session_factory() as s:
             await SqlAlchemyOutboxRepository(s).reschedule(
-                item, delay_seconds=delay_seconds, error=error
+                item,
+                delay_seconds=delay_seconds,
+                error=error,
+                count_attempt=count_attempt,
             )
 
     async def enqueue(

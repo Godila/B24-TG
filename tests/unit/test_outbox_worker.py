@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -128,6 +128,60 @@ async def test_no_provider_reschedules():
     _, kwargs = repo.reschedule.call_args
     assert kwargs["delay_seconds"] == 30
     assert kwargs["error"] == "no_provider"
+
+
+@pytest.mark.asyncio
+async def test_no_provider_not_counted_and_terminal_after_day():
+    """no_provider не расходует попытку; если аккаунта нет больше суток —
+    терминальный failed вместо бесконечного ретрая."""
+    repo = AsyncMock()
+    stale = _make_item(id=1, created_at=datetime.now(UTC) - timedelta(hours=25))
+    fresh = _make_item(id=2)  # created_at нет — считаем свежим
+    repo.fetch_due = AsyncMock(return_value=[stale, fresh])
+    repo.reschedule = AsyncMock()
+    repo.mark_failed = AsyncMock()
+
+    throttler = AsyncMock()
+
+    worker = OutboxWorker(
+        repo=repo,
+        get_provider=lambda aid: None,  # нет провайдера ни для кого
+        throttler_factory=lambda aid: throttler,
+        max_attempts=5,
+    )
+    await worker._process_once()
+
+    # Старый (>24h без провайдера) — терминальный failed, без reschedule.
+    repo.mark_failed.assert_awaited_once()
+    assert repo.mark_failed.call_args.args[0].id == stale.id
+    assert repo.mark_failed.call_args.args[1] == "no_provider_timeout"
+
+    # Свежий — reschedule на 30с, попытка не расходуется.
+    repo.reschedule.assert_awaited_once()
+    assert repo.reschedule.call_args.args[0].id == fresh.id
+    assert repo.reschedule.call_args.kwargs["count_attempt"] is False
+
+
+@pytest.mark.asyncio
+async def test_throttle_reschedule_not_counted():
+    """Throttle — безобидное отклонение, попытка не расходуется."""
+    repo = AsyncMock()
+    item = _make_item()
+    repo.fetch_due = AsyncMock(return_value=[item])
+    repo.reschedule = AsyncMock()
+
+    provider = AsyncMock()
+    throttler = AsyncMock()
+    throttler.acquire = AsyncMock(return_value=False)  # лимит исчерпан
+
+    worker = OutboxWorker(repo=repo, get_provider=lambda aid: provider,
+                          throttler_factory=lambda aid: throttler, max_attempts=5)
+    await worker._process_once()
+
+    provider.send_message.assert_not_awaited()
+    repo.reschedule.assert_awaited_once()
+    _, kwargs = repo.reschedule.call_args
+    assert kwargs["count_attempt"] is False
 
 
 @pytest.mark.asyncio

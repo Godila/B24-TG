@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.bridge.outbox_repo_sqlalchemy import SqlAlchemyOutboxRepository
@@ -147,6 +148,43 @@ async def test_mark_failed_sets_status_and_error(session):
     refreshed = await session.get(OutboxItem, 1)
     assert refreshed.status == OutboxStatus.failed
     assert refreshed.last_error == "boom"
+
+
+@pytest.mark.asyncio
+async def test_reschedule_deferral_no_attempt_increment(session):
+    """Безобидные отклонения (throttle/no_provider) не расходуют попытки:
+    count_attempt=False оставляет attempts; True (дефолт) — инкрементирует."""
+    session.add(
+        OutboxItem(
+            dialog_id=10,
+            tg_account_id=7,
+            external_chat_id="123",
+            text="hi",
+            status=OutboxStatus.queued,
+            attempts=2,
+            next_attempt_at=datetime.now(UTC) - timedelta(minutes=1),
+        )
+    )
+    await session.commit()
+    outbox_id = (await session.execute(select(OutboxItem.id))).scalar_one()
+
+    item = await session.get(OutboxItem, outbox_id)
+    repo = SqlAlchemyOutboxRepository(session)
+    await repo.reschedule(
+        item, delay_seconds=10, error="throttled", count_attempt=False
+    )
+
+    await session.reset()
+    refreshed = await session.get(OutboxItem, outbox_id)
+    assert refreshed.status == OutboxStatus.retrying
+    assert refreshed.attempts == 2  # не инкрементирован
+    assert refreshed.last_error == "throttled"
+
+    await repo.reschedule(item, delay_seconds=30, error="boom")  # count_attempt=True
+
+    await session.reset()
+    refreshed = await session.get(OutboxItem, outbox_id)
+    assert refreshed.attempts == 3  # инкрементирован
 
 
 @pytest.mark.asyncio
