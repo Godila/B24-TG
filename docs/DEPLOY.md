@@ -105,6 +105,11 @@ docker compose exec postgres pg_dump -U bitrix_tg bitrix_tg > backup_$(date +%F)
 docker compose stop nginx
 certbot renew
 docker compose start nginx
+
+# применить миграции БД (после деплоя Plan 004 обязательно: миграция
+# uq_dialogs_chat_per_manager дедуплицирует legacy-диалоги — перед запуском
+# сделать backup_$(date +%F).sql, дедуп необратим)
+docker compose exec web alembic upgrade head
 ```
 
 ## Архитектура деплоя (схема)

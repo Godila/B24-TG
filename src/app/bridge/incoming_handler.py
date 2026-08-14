@@ -4,6 +4,7 @@ import logging
 from collections.abc import Callable
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.b24.sync import Bitrix24Sync
@@ -58,37 +59,24 @@ class IncomingHandler:
 
     async def _persist(self, msg: IncomingMessage, sync_result, *, manager_id: int) -> None:
         async with self._db_factory() as session:
-            # Контакт: upsert по tg_user_id
-            existing = await session.execute(
-                select(Contact).where(Contact.tg_user_id == msg.sender_tg_id)
-            )
-            contact = existing.scalar_one_or_none()
-            if contact is None:
-                contact = Contact(
-                    tg_user_id=msg.sender_tg_id,
-                    phone=msg.sender_phone,
-                    username=msg.sender_username,
-                    name=msg.sender_name,
+            contact = await self._upsert_contact(session, msg, sync_result)
+
+            # Диалог: upsert по (external_chat_id, assigned_user_id) —
+            # мультиаккаунт: в приватных TG-чатах chat_id == tg-id клиента и
+            # совпадает у всех менеджеров, поэтому диалоги одного клиента у
+            # разных менеджеров — РАЗНЫЕ строки.
+            dialog_stmt = (
+                select(Dialog)
+                .where(
+                    Dialog.external_chat_id == msg.external_chat_id,
+                    Dialog.assigned_user_id == manager_id,
                 )
-                session.add(contact)
-                await session.flush()  # получаем contact.id
-            else:
-                # Обновляем метаданные, если пришли новые.
-                if msg.sender_phone:
-                    contact.phone = msg.sender_phone
-                if msg.sender_username:
-                    contact.username = msg.sender_username
-                if msg.sender_name:
-                    contact.name = msg.sender_name
-
-            if sync_result and sync_result.contact_id:
-                contact.crm_contact_id = sync_result.contact_id
-
-            # Диалог: upsert по external_chat_id
-            existing_dialog = await session.execute(
-                select(Dialog).where(Dialog.external_chat_id == msg.external_chat_id)
+                # Legacy-дубли (chat_id, manager) могли остаться до миграции:
+                # берём старейший, чтобы не упасть MultipleResultsFound.
+                .order_by(Dialog.id)
+                .limit(1)
             )
-            dialog = existing_dialog.scalar_one_or_none()
+            dialog = (await session.execute(dialog_stmt)).scalar_one_or_none()
             if dialog is None:
                 dialog = Dialog(
                     contact_id=contact.id,
@@ -97,7 +85,16 @@ class IncomingHandler:
                     assigned_user_id=manager_id,
                 )
                 session.add(dialog)
-                await session.flush()
+                try:
+                    await session.flush()
+                except IntegrityError:
+                    # Гонка: параллельная задача уже вставила диалог с этой
+                    # парой. Rollback откатывает и контактную часть txn —
+                    # получаем контакт заново, затем берём существующий диалог.
+                    await session.rollback()
+                    contact = await self._upsert_contact(session, msg, sync_result)
+                    dialog = (await session.execute(dialog_stmt)).scalar_one()
+
             if sync_result and sync_result.deal_id:
                 dialog.crm_deal_id = sync_result.deal_id
                 dialog.crm_entity_type = "deal"
@@ -132,3 +129,38 @@ class IncomingHandler:
             # Обновляем «последнее сообщение» для сортировки списка диалогов.
             dialog.last_msg_at = message.created_at
             await session.commit()
+
+    async def _upsert_contact(
+        self, session: AsyncSession, msg: IncomingMessage, sync_result
+    ) -> Contact:
+        """Контакт: upsert по tg_user_id (+ привязка к CRM).
+
+        Вызывается повторно после IntegrityError-rollback по диалогу: rollback
+        откатывает и вставку/правки контакта того же txn, поэтому контакт
+        нужно получить заново, чтобы сессия осталась консистентной.
+        """
+        existing = await session.execute(
+            select(Contact).where(Contact.tg_user_id == msg.sender_tg_id)
+        )
+        contact = existing.scalar_one_or_none()
+        if contact is None:
+            contact = Contact(
+                tg_user_id=msg.sender_tg_id,
+                phone=msg.sender_phone,
+                username=msg.sender_username,
+                name=msg.sender_name,
+            )
+            session.add(contact)
+            await session.flush()  # получаем contact.id
+        else:
+            # Обновляем метаданные, если пришли новые.
+            if msg.sender_phone:
+                contact.phone = msg.sender_phone
+            if msg.sender_username:
+                contact.username = msg.sender_username
+            if msg.sender_name:
+                contact.name = msg.sender_name
+
+        if sync_result and sync_result.contact_id:
+            contact.crm_contact_id = sync_result.contact_id
+        return contact
