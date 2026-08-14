@@ -32,3 +32,6 @@ docker-compose.override.yml
 .idea/
 .DS_Store
 Thumbs.db
+
+# ZCode local session state
+.zcode/
