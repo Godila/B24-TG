@@ -48,7 +48,7 @@ class CrmService:
         result = await self._client.call(
             "crm.duplicate.findbyComm",
             auth_token=auth_token,
-            params={"type": "PHONE", "values[]": [phone]},
+            params={"type": "PHONE", "values": [phone]},
         )
         if not result:
             return None

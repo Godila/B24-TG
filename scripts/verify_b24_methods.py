@@ -84,7 +84,7 @@ async def run_verification(
         lambda: client.call(
             "crm.duplicate.findbycomm",
             auth_token=token,
-            params={"type": "PHONE", "values[]": [SPIKE_SEARCH_PHONE]},
+            params={"type": "PHONE", "values": [SPIKE_SEARCH_PHONE]},
         ),
     )
 
