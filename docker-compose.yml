@@ -24,9 +24,6 @@ services:
         condition: service_healthy
     expose:
       - "8000"  # только для nginx внутри сети, НЕ публикуется наружу
-    volumes:
-      # Спайк 010 (QR-онбординг): web пишет .session в тот же volume, что и
-      # bridge, иначе файл остался бы в FS web-контейнера и bridge его не
     restart: unless-stopped
 
   bridge:

@@ -154,8 +154,11 @@ tg_user_id → external_user_id) — старый код с новой схем�
 # на VM, из каталога проекта
 pg_dump ... > backup_$(date +%F)_pre_max.sql   # бэкап перед миграцией (конвенция)
 docker compose stop web bridge
+git pull origin main
+docker compose build          # миграции вшиты в образ: build ОБЯЗАТЕЛЬНО до alembic
 docker compose run --rm web alembic upgrade head
-docker compose up -d --build
+docker compose up -d
+docker compose restart nginx  # обновить DNS upstream на пересозданный web
 docker compose logs -f bridge   # ждём "Registered session" / "Bridge started"
 ```
 
