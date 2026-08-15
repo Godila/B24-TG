@@ -82,6 +82,7 @@ async def run_bridge() -> None:
         sessions_dir=settings.tg_sessions_dir,
         proxy=telethon_proxy(settings),
         builders={Messenger.max: build_max_provider},
+        register_timeout_sec=settings.register_timeout_sec,
     )
 
     # B24 wiring: ОДИН общий Bitrix24Client (shared TLS-коннекты, глобальный

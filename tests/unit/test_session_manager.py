@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -32,3 +33,32 @@ async def test_unregister_disconnects():
     await sm.unregister(7)
     fake_provider.disconnect.assert_awaited_once()
     assert sm.get(7) is None
+
+
+@pytest.mark.asyncio
+async def test_register_timeout_cleans_up_and_raises(monkeypatch):
+    """Вечно висящий connect (мёртвый MTProto-прокси) не подвешивает старт:
+
+    по истечении таймаута провайдер отключается, TimeoutError наружу,
+    аккаунт НЕ попадает в пул."""
+    sm = SessionManager(api_id=1, api_hash="x", sessions_dir="/tmp",
+                        register_timeout_sec=0.05)
+
+    fake_provider = AsyncMock()
+
+    async def _hang() -> None:
+        await asyncio.sleep(10)
+
+    fake_provider.connect = AsyncMock(side_effect=_hang)
+
+    monkeypatch.setattr(sm, "_build_provider", lambda account: fake_provider)
+
+    account = MagicMock()
+    account.id = 7
+
+    with pytest.raises(TimeoutError):
+        await sm.register(account)
+
+    fake_provider.disconnect.assert_awaited_once()
+    assert sm.get(account.id) is None
+    assert sm.registered_ids() == set()

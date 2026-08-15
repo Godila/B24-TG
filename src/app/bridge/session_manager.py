@@ -9,6 +9,7 @@ MessengerProvider}``. Это точка расширения для новых �
 MAX-строки), поэтому outbox-маршрутизация и throttler-pool не различают каналы.
 """
 
+import asyncio
 import logging
 from collections.abc import Callable, Iterable
 from pathlib import Path
@@ -25,13 +26,15 @@ ProviderBuilder = Callable[[TgAccount], MessengerProvider]
 class SessionManager:
     def __init__(self, api_id: int, api_hash: str, sessions_dir: str,
                  proxy: tuple | None = None, *,
-                 builders: dict[Messenger, ProviderBuilder] | None = None):
+                 builders: dict[Messenger, ProviderBuilder] | None = None,
+                 register_timeout_sec: float = 60.0):
         self._api_id = api_id
         self._api_hash = api_hash
         self._sessions_dir = sessions_dir
         self._proxy = proxy
         self._providers: dict[int, MessengerProvider] = {}
         self._builders: dict[Messenger, ProviderBuilder] = builders or {}
+        self._register_timeout_sec = register_timeout_sec
         # TG остаётся дефолтным каналом (обратная совместимость с тестами,
         # которые не передают builders).
         self._builders.setdefault(Messenger.tg, self._default_tg_builder)
@@ -60,7 +63,21 @@ class SessionManager:
         if account.id in self._providers:
             return self._providers[account.id]
         provider = self._build_provider(account)
-        await provider.connect()
+        # Подключение с таймаутом: Telethon не имеет своего RPC-таймаута,
+        # а старт bridge ждёт регистрации — без лимита мёртвый MTProto-
+        # прокси подвешивает весь процесс (воркеры не поднимаются).
+        try:
+            await asyncio.wait_for(
+                provider.connect(), timeout=self._register_timeout_sec
+            )
+        except TimeoutError:
+            await provider.disconnect()
+            logger.error(
+                "Register timeout (%ss) account_id=%s messenger=%s — "
+                "провайдер не подключился, продолжаем без него",
+                self._register_timeout_sec, account.id, account.messenger.value,
+            )
+            raise
         self._providers[account.id] = provider
         logger.info(
             "Registered session for account_id=%s messenger=%s phone=%s",

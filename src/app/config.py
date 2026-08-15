@@ -103,6 +103,10 @@ class Settings(BaseSettings):
     # Подхват новых active-аккаунтов bridge'ем (после QR-онбординга, без
     # рестарта) — период AccountSyncWorker.
     account_sync_interval_sec: float = Field(20.0)
+    # Таймаут подключения аккаунта при регистрации. Telethon без таймаута
+    # ждёт RPC бесконечно (мёртвый MTProto-прокси = вечное зависание,
+    # блокирующее старт bridge целиком).
+    register_timeout_sec: float = Field(60.0)
 
     # TG QR-онбординг (вариант B: команды в БД, bridge исполняет).
     tg_onboarding_deadline_sec: float = Field(900.0)   # окно всей команды
