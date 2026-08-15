@@ -13,6 +13,7 @@ function chatApp() {
     POLL_MS: 3000,
     PAGE_SIZE: 100,
     loading: true,
+    readonly: false,
     sending: false,
     error: "",
     draft: "",
@@ -37,7 +38,7 @@ function chatApp() {
 
     async init() {
       try {
-        await Promise.all([this.loadDialogs(), this.loadTemplates()]);
+        await Promise.all([this.loadMe(), this.loadDialogs(), this.loadTemplates()]);
         if (this.dialogs.length > 0) {
           this.dialog = this.dialogs[0];
           await this.loadMessages();
@@ -47,6 +48,17 @@ function chatApp() {
         this.showError(e);
       } finally {
         this.loading = false;
+      }
+    },
+
+    /** Права текущего менеджера: read-only прячет поле отправки. */
+    async loadMe() {
+      try {
+        const res = await fetch("/api/me", { credentials: "same-origin" });
+        if (res.ok) this.readonly = (await res.json()).is_readonly === true;
+      } catch {
+        // Недоступен /api/me — считаем читателем (fail-closed для отправки).
+        this.readonly = true;
       }
     },
 
@@ -172,7 +184,7 @@ function chatApp() {
 
     async send() {
       const text = this.draft.trim();
-      if (!text || !this.dialog || this.sending) return;
+      if (!text || !this.dialog || this.sending || this.readonly) return;
       this.sending = true;
       this.error = "";
       // Оптимистичный рендер: показываем сообщение сразу как pending.
@@ -238,6 +250,13 @@ function chatApp() {
           this.init();
         }
       }, 10000);
+    },
+
+    /** Короткая метка канала для бейджа в шапке диалога. */
+    channelLabel(messenger) {
+      if (messenger === "max") return "MAX";
+      if (messenger === "tg") return "TG";
+      return "";
     },
 
     formatTime(iso) {

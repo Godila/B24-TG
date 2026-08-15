@@ -41,6 +41,20 @@ html, body {
 .contact { display: flex; flex-direction: column; }
 .contact-name { font-weight: 600; }
 .contact-meta { font-size: 12px; color: var(--meta); }
+
+/* Бейдж канала диалога (TG / MAX) в шапке виджета. */
+.channel-badge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  vertical-align: middle;
+  letter-spacing: 0.5px;
+}
+.channel-badge.tg { background: #e1f0fb; color: #1c6fb3; }
+.channel-badge.max { background: #ece4fb; color: #6a3db8; }
 .status { color: var(--meta); font-size: 13px; }
 
 /* Лента сообщений */

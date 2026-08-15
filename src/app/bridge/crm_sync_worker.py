@@ -23,7 +23,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from app.b24.sync import Bitrix24Sync
-from app.models import KIND_INBOUND, CrmSyncItem
+from app.models import KIND_INBOUND, CrmSyncItem, Messenger
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +36,10 @@ class CrmSyncData:
     sender_name: str | None        # Contact.name (для входящих)
     sender_phone: str | None       # Contact.phone (для входящих)
     crm_contact_id: int | None     # Contact.crm_contact_id (для исходящих)
-    crm_deal_id: int | None        # Dialog.crm_deal_id (для исходящих)
+    crm_deal_id: int | None        # Dialog.crm_deal_id
     crm_entity_type: str | None    # Dialog.crm_entity_type
     assigned_b24_user_id: int | None  # Manager.b24_user_id диалога
+    messenger: Messenger           # канал диалога (тексты/источник CRM)
 
 
 class CrmSyncRepository:
@@ -154,6 +155,9 @@ class CrmSyncWorker:
                 sender_phone=data.sender_phone or "",
                 message_text=data.message_text or "",
                 assigned_b24_user_id=data.assigned_b24_user_id,
+                messenger=data.messenger,
+                existing_contact_id=data.crm_contact_id,
+                existing_deal_id=data.crm_deal_id,
             )
             if result is None:
                 # Нет B24-токена (интеграция не установлена) — ретраибельно:

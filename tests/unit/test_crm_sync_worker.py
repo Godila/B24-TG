@@ -7,7 +7,7 @@ import pytest
 
 from app.b24.sync import SyncResult
 from app.bridge.crm_sync_worker import CrmSyncData, CrmSyncWorker
-from app.models import KIND_INBOUND, KIND_OUTBOUND, CrmSyncItem, CrmSyncStatus
+from app.models import KIND_INBOUND, KIND_OUTBOUND, CrmSyncItem, CrmSyncStatus, Messenger
 
 
 def _make_item(**kw) -> CrmSyncItem:
@@ -33,6 +33,7 @@ def _make_data(**kw) -> CrmSyncData:
         "crm_deal_id": 100,
         "crm_entity_type": "deal",
         "assigned_b24_user_id": 15,
+        "messenger": Messenger.tg,
     }
     defaults.update(kw)
     return CrmSyncData(**defaults)

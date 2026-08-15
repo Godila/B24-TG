@@ -48,8 +48,8 @@ async def app_with_data():
     ids: dict[str, int] = {}
     async with SessionLocal() as s:
         s.add(Manager(id=1, name="Иван", b24_user_id=15, is_active=True))
-        s.add(TgAccount(id=7, phone="+79991234567", session_path="/tmp/s", manager_id=1))
-        s.add(Contact(id=10, tg_user_id=999, phone="+79990000001", name="Клиент"))
+        s.add(TgAccount(id=7, messenger=Messenger.tg, phone="+79991234567", session_path="/tmp/s", manager_id=1))
+        s.add(Contact(id=10, messenger=Messenger.tg, external_user_id="999", phone="+79990000001", name="Клиент"))
         s.add(
             Dialog(
                 id=20,
@@ -68,7 +68,7 @@ async def app_with_data():
                 direction=MessageDirection.inbound,
                 text="Привет",
                 status=MessageStatus.delivered,
-                tg_message_id=111,
+                external_message_id="111",
             )
         )
         s.add(
@@ -78,7 +78,7 @@ async def app_with_data():
                 direction=MessageDirection.outbound,
                 text="Здравствуйте!",
                 status=MessageStatus.sent,
-                tg_message_id=222,
+                external_message_id="222",
                 author_user_id=15,
             )
         )

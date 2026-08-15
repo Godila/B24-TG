@@ -10,7 +10,7 @@
 
 Дальнейшая судьба элемента зависит от SendResult:
   - success            -> mark_sent(external_message_id)
-  - flood_wait_seconds -> reschedule(delay = flood_wait_seconds)
+  - retry_after_seconds -> reschedule(delay = retry_after_seconds)
   - попытки >= max     -> mark_failed(error)
   - иначе              -> экспоненциальный backoff 30 * 2^attempts.
 
@@ -44,7 +44,7 @@ class OutboxRepository:
     async def fetch_due(self, limit: int = 50) -> list[OutboxItem]:
         ...
 
-    async def mark_sent(self, item: OutboxItem, external_message_id: int) -> None:
+    async def mark_sent(self, item: OutboxItem, external_message_id: str) -> None:
         ...
 
     async def mark_failed(self, item: OutboxItem, error: str) -> None:
@@ -169,7 +169,6 @@ class OutboxWorker:
 
         # 3. отправка
         result = await provider.send_message(
-            account_id=item.tg_account_id,
             external_chat_id=item.external_chat_id,
             text=item.text or "",
             is_initiation=bool(item.is_initiation),
@@ -177,14 +176,20 @@ class OutboxWorker:
 
         # 4. судьба по результату
         if result.success:
-            await self._repo.mark_sent(item, result.external_message_id)
+            await self._repo.mark_sent(item, result.external_message_id or "")
             await self._after_sent(item)
             return
 
-        if result.flood_wait_seconds:
-            # TG сам сказал, сколько подождать — уважаем.
+        if result.retry_after_seconds:
+            # Канал сам сказал, сколько подождать (FloodWait TG, throttle
+            # MAX). Отправки не было — попытку НЕ расходуем: иначе цепочка
+            # throttle'ов + одна реальная ошибка исчерпали бы лимит без
+            # единой фактической отправки.
             await self._repo.reschedule(
-                item, delay_seconds=result.flood_wait_seconds, error="flood_wait"
+                item,
+                delay_seconds=result.retry_after_seconds,
+                error="rate_limited",
+                count_attempt=False,
             )
             return
 

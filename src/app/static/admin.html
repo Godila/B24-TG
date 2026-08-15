@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bitrix-TG — панель управления</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/vendor/qrcode.min.js"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 30px auto; padding: 0 16px; background: var(--bg); }
+    h1 { font-size: 1.4rem; }
+    h2 { font-size: 1.1rem; margin-top: 32px; }
+    .cards { display: flex; gap: 16px; flex-wrap: wrap; }
+    .channel-card { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 16px; width: 320px; }
+    .channel-card h3 { margin: 0 0 8px; }
+    button { margin-top: 8px; padding: 8px 16px; font-size: 0.95rem; cursor: pointer; }
+    .qrbox { margin: 12px 0; }
+    .pwrow input { padding: 8px; font-size: 1rem; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; }
+    .badge.ok { background: #e6f6e6; color: #1d7a35; }
+    .badge.warn { background: #fdf3d8; color: #8a6d1a; }
+    .badge.err { background: #fde8e8; color: #b3352f; }
+    .badge.wait { background: #eef4fd; color: #2a5fa8; }
+    .hint { color: #666; font-size: 0.88rem; margin-top: 4px; }
+    table { border-collapse: collapse; width: 100%; background: #fff; border: 1px solid var(--border); border-radius: 8px; }
+    th, td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: left; font-size: 0.92rem; }
+    th { background: #f3f5f8; }
+    .toggle { cursor: pointer; }
+    form.inline { display: flex; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
+    form.inline input { padding: 8px; font-size: 0.95rem; }
+    .err-line { color: #b3352f; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <h1>Панель управления</h1>
+  <p class="hint">Открывается из Bitrix24 (сессионная кука). Менеджеры подключают свои
+    мессенджеры сами; администратор управляет правами и аккаунтами.</p>
+
+  <h2>Мои каналы</h2>
+  <div class="cards">
+    <div id="card-tg"></div>
+    <div id="card-max"></div>
+  </div>
+
+  <div id="supervisor-zone" style="display:none">
+    <h2>Менеджеры</h2>
+    <form class="inline" id="add-manager">
+      <input id="m-name" placeholder="Имя" required>
+      <input id="m-b24" type="number" placeholder="b24_user_id" required>
+      <button type="submit">Добавить менеджера</button>
+    </form>
+    <div id="add-manager-err" class="err-line"></div>
+    <table id="managers-table">
+      <thead>
+        <tr>
+          <th>Менеджер</th><th>b24_user_id</th><th>Права</th><th>Аккаунты</th><th>Действия</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <script src="/static/admin/channel-connect.js"></script>
+  <script>
+    async function api(path, opts) {
+      const res = await fetch(path, Object.assign({ credentials: "same-origin" }, opts));
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw Object.assign(new Error(data.detail || res.status), { data });
+      return data;
+    }
+
+    function reloadAll() {
+      tg.refresh();
+      max.refresh();
+      loadSupervisor();
+    }
+
+    const tg = createChannelConnect({
+      root: document.getElementById("card-tg"),
+      channel: "tg",
+      labels: {
+        title: "Telegram",
+        startLabel: "Подключить Telegram",
+        scanHint: "Telegram → Настройки → Устройства → Подключить устройство — наведите камеру на QR.",
+      },
+      onAuthorized: reloadAll,
+    });
+    const max = createChannelConnect({
+      root: document.getElementById("card-max"),
+      channel: "max",
+      labels: {
+        title: "MAX",
+        startLabel: "Подключить MAX",
+        scanHint: "MAX → Профиль → Устройства → Войти по QR-коду — наведите камеру.",
+      },
+      onAuthorized: reloadAll,
+    });
+    tg.mount();
+    max.mount();
+
+    // ---- Supervisor-зона ----
+    async function loadSupervisor() {
+      let me;
+      try { me = await api("/admin/api/me"); } catch { return; }
+      if (me.role !== "supervisor") return;
+      document.getElementById("supervisor-zone").style.display = "";
+      const rows = await api("/admin/api/managers");
+      const tbody = document.querySelector("#managers-table tbody");
+      tbody.innerHTML = "";
+      for (const m of rows) {
+        const tr = document.createElement("tr");
+        const accounts = m.accounts.map((a) =>
+          `<span class="badge ${a.status === "active" ? "ok" : a.status === "banned" ? "err" : "warn"}">` +
+          `${a.messenger.toUpperCase()} · ${a.status}</span> ` +
+          (a.status !== "active" ? "" :
+            `<button data-unlink="${a.id}" type="button">Отключить</button>`)
+        ).join(" ") || "<span class='hint'>нет</span>";
+        tr.innerHTML = `
+          <td>${m.name}${m.is_active ? "" : " <span class='badge err'>деактивирован</span>"}</td>
+          <td>${m.b24_user_id}</td>
+          <td><button class="toggle" data-patch="${m.id}" data-field="is_readonly"
+               data-value="${!m.is_readonly}" type="button">${m.is_readonly ? "только чтение" : "чтение и запись"}</button></td>
+          <td>${accounts}</td>
+          <td>${m.is_active
+            ? `<button class="toggle" data-patch="${m.id}" data-field="is_active" data-value="false" type="button">Деактивировать</button>`
+            : `<button class="toggle" data-patch="${m.id}" data-field="is_active" data-value="true" type="button">Активировать</button>`}</td>`;
+        tbody.appendChild(tr);
+      }
+      tbody.querySelectorAll("[data-unlink]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          btn.disabled = true;
+          try { await api(`/admin/api/accounts/${btn.dataset.unlink}/unlink`, { method: "POST" }); }
+          catch (e) { alert(e.message); }
+          loadSupervisor();
+        });
+      });
+      tbody.querySelectorAll("[data-patch]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const body = {}; body[btn.dataset.field] = btn.dataset.value === "true";
+          try { await api(`/admin/api/managers/${btn.dataset.patch}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          }); } catch (e) { alert(e.message); }
+          loadSupervisor();
+        });
+      });
+    }
+
+    document.getElementById("add-manager").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const errBox = document.getElementById("add-manager-err");
+      errBox.textContent = "";
+      try {
+        await api("/admin/api/managers", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: document.getElementById("m-name").value.trim(),
+            b24_user_id: Number(document.getElementById("m-b24").value),
+          }),
+        });
+        document.getElementById("m-name").value = "";
+        document.getElementById("m-b24").value = "";
+        loadSupervisor();
+      } catch (err) { errBox.textContent = err.message; }
+    });
+
+    loadSupervisor();
+  </script>
+</body>
+</html>

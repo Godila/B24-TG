@@ -91,15 +91,15 @@ class _StaleDialogSelectSession(AsyncSession):
 
 def _make_msg(**kw):
     defaults = {
-        "account_id": 1,
+        "messenger": Messenger.tg,
         "external_chat_id": "111",
-        "sender_tg_id": 999,
+        "sender_external_id": "999",
         "sender_name": "Клиент",
         "sender_phone": None,
         "sender_username": None,
         "content_type": ContentType.text,
         "text": "Привет",
-        "external_message_id": 1,
+        "external_message_id": "1",
         "is_reply": False,
     }
     defaults.update(kw)
@@ -118,7 +118,6 @@ def _make_handler(SessionLocal, *, db_factory=None):
     enqueue = AsyncMock()
     return (
         IncomingHandler(
-            session_mgr=MagicMock(),
             crm_sync_enqueue=enqueue,
             db_session_factory=db_factory or SessionLocal,
         ),
@@ -157,10 +156,10 @@ async def test_same_client_two_managers_two_dialogs(db):
 
     handler, enqueue = _make_handler(db)
     await handler.handle(
-        _make_msg(external_message_id=1), account=_make_account(manager_id=1)
+        _make_msg(external_message_id="1"), account=_make_account(manager_id=1)
     )
     await handler.handle(
-        _make_msg(external_message_id=2), account=_make_account(manager_id=2)
+        _make_msg(external_message_id="2"), account=_make_account(manager_id=2)
     )
 
     dialogs = await _all_dialogs(db)
@@ -187,7 +186,7 @@ async def test_concurrent_duplicate_insert_resolved(db):
         # засеять дубли нельзя.
         await s.execute(text("DROP TABLE dialogs"))
         await s.execute(text(_LEGACY_DIALOGS_DDL))
-        s.add(Contact(id=10, tg_user_id=999, name="Клиент"))
+        s.add(Contact(id=10, messenger=Messenger.tg, external_user_id="999", name="Клиент"))
         s.add(
             Dialog(
                 id=101,
@@ -211,7 +210,7 @@ async def test_concurrent_duplicate_insert_resolved(db):
     handler, enqueue = _make_handler(db)
     # Не должно бросить MultipleResultsFound и не должно создать 3-й диалог.
     await handler.handle(
-        _make_msg(external_message_id=1), account=_make_account(manager_id=1)
+        _make_msg(external_message_id="1"), account=_make_account(manager_id=1)
     )
 
     dialogs = await _all_dialogs(db)
@@ -231,7 +230,7 @@ async def test_existing_dialog_of_other_manager_not_reused(db):
     теперь пишет только CrmSyncWorker, не persist)."""
     await _seed_two_managers(db)
     async with db() as s:
-        s.add(Contact(id=10, tg_user_id=999, name="Клиент"))
+        s.add(Contact(id=10, messenger=Messenger.tg, external_user_id="999", name="Клиент"))
         s.add(
             Dialog(
                 id=50,
@@ -247,7 +246,7 @@ async def test_existing_dialog_of_other_manager_not_reused(db):
 
     handler, enqueue = _make_handler(db)
     await handler.handle(
-        _make_msg(external_message_id=5), account=_make_account(manager_id=2)
+        _make_msg(external_message_id="5"), account=_make_account(manager_id=2)
     )
 
     dialogs = await _all_dialogs(db)
@@ -267,7 +266,7 @@ async def test_integrity_error_race_reuses_existing_dialog(db):
     контакт после rollback остаётся консистентным."""
     await _seed_two_managers(db)
     async with db() as s:
-        s.add(Contact(id=10, tg_user_id=999, name="Клиент"))
+        s.add(Contact(id=10, messenger=Messenger.tg, external_user_id="999", name="Клиент"))
         s.add(
             Dialog(
                 id=50,
@@ -285,7 +284,7 @@ async def test_integrity_error_race_reuses_existing_dialog(db):
 
     handler, enqueue = _make_handler(db, db_factory=stale_factory)
     await handler.handle(
-        _make_msg(external_message_id=9), account=_make_account(manager_id=1)
+        _make_msg(external_message_id="9"), account=_make_account(manager_id=1)
     )
 
     dialogs = await _all_dialogs(db)

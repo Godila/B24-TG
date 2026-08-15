@@ -124,7 +124,7 @@ async def test_mark_sent_sets_status(session):
 
     item = OutboxItem(id=1, dialog_id=10, tg_account_id=7, external_chat_id="123")
     repo = SqlAlchemyOutboxRepository(session)
-    await repo.mark_sent(item, external_message_id=999)
+    await repo.mark_sent(item, external_message_id="999")
 
     await session.reset()
     refreshed = await session.get(OutboxItem, 1)
@@ -160,7 +160,7 @@ async def test_mark_failed_sets_status_and_error(session):
 @pytest.mark.asyncio
 async def test_mark_sent_updates_message(session):
     """Замыкание исходящего цикла: mark_sent должен обновлять связанный
-    Message (pending -> sent, tg_message_id, sent_at), а не только outbox."""
+    Message (pending -> sent, external_message_id, sent_at), а не только outbox."""
     message = Message(
         dialog_id=10,
         direction=MessageDirection.outbound,
@@ -188,14 +188,14 @@ async def test_mark_sent_updates_message(session):
 
     item = await session.get(OutboxItem, outbox_id)
     repo = SqlAlchemyOutboxRepository(session)
-    await repo.mark_sent(item, external_message_id=999)
+    await repo.mark_sent(item, external_message_id="999")
 
     await session.reset()
     refreshed_outbox = await session.get(OutboxItem, outbox_id)
     refreshed_msg = await session.get(Message, msg_id)
     assert refreshed_outbox.status == OutboxStatus.sent
     assert refreshed_msg.status == MessageStatus.sent
-    assert refreshed_msg.tg_message_id == 999
+    assert refreshed_msg.external_message_id == "999"
     assert refreshed_msg.sent_at is not None
 
 

@@ -108,6 +108,7 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
                 Contact.crm_contact_id,
                 Dialog.crm_deal_id,
                 Dialog.crm_entity_type,
+                Dialog.messenger,
                 Manager.b24_user_id,
             )
             .join(Dialog, Message.dialog_id == Dialog.id)
@@ -126,6 +127,7 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
             crm_deal_id=row.crm_deal_id,
             crm_entity_type=row.crm_entity_type,
             assigned_b24_user_id=row.b24_user_id,
+            messenger=row.messenger,
         )
 
     async def apply_inbound_result(

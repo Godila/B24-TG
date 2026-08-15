@@ -77,6 +77,38 @@ class Settings(BaseSettings):
     # HealthChecker шлёт уведомления в B24-чат (im.message.add).
     alert_admin_b24_user_id: int = Field(1)
 
+    # MAX (эмуляция web-клиента; протокол ver=11 по wss). appVersion ДРЕЙФУЕТ
+    # вслед за web-клиентом — симптом устаревания: qr_login.disabled на 288;
+    # актуальную версию добывают из бандлов web.max.ru (рецепт в памяти
+    # проекта project-max-channel).
+    max_ws_url: str = Field("wss://ws-api.oneme.ru/websocket")
+    max_origin: str = Field("https://web.max.ru")
+    max_browser_ua: str = Field(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+    )
+    max_app_version: str = Field("26.8.4")
+    max_request_timeout_sec: float = Field(15.0)
+    # Heartbeat: сервер рвёт соединение после ~30-60с тишины; свой ping —
+    # при простое >15с (серверный op=1 автоотвечается в ws_client).
+    max_heartbeat_idle_sec: float = Field(15.0)
+    max_heartbeat_tick_sec: float = Field(5.0)
+    # Реконнект: ~30-50 LOGIN быстро сбрасывают токен → один провайдер держит
+    # соединение и лечит его с backoff 2..32с.
+    max_backoff_min_sec: float = Field(2.0)
+    max_backoff_max_sec: float = Field(32.0)
+    # QR-онбординг: сколько ждать скана всего и пароля 2FA отдельно.
+    max_onboarding_deadline_sec: float = Field(300.0)
+    max_onboarding_password_timeout_sec: float = Field(120.0)
+    # Подхват новых active-аккаунтов bridge'ем (после QR-онбординга, без
+    # рестарта) — период AccountSyncWorker.
+    account_sync_interval_sec: float = Field(20.0)
+
+    # TG QR-онбординг (вариант B: команды в БД, bridge исполняет).
+    tg_onboarding_deadline_sec: float = Field(900.0)   # окно всей команды
+    login_password_timeout_sec: float = Field(120.0)   # ожидание 2FA-ввода
+    login_worker_poll_sec: float = Field(2.0)          # каденс LoginCommandWorker
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

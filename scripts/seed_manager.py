@@ -13,7 +13,7 @@ import asyncio
 from sqlalchemy import select
 
 from app.db import async_session
-from app.models import Manager, ManagerRole, TgAccount, TgAccountStatus
+from app.models import Manager, ManagerRole, Messenger, TgAccount, TgAccountStatus
 
 B24_USER_ID = 1
 MANAGER_NAME = "Админ"
@@ -39,10 +39,16 @@ async def main():
             print(f"Manager already exists id={mgr.id}")
 
         acc = (
-            await s.execute(select(TgAccount).where(TgAccount.manager_id == mgr.id))
+            await s.execute(
+                select(TgAccount).where(
+                    TgAccount.manager_id == mgr.id,
+                    TgAccount.messenger == Messenger.tg,
+                )
+            )
         ).scalar_one_or_none()
         if acc is None:
             acc = TgAccount(
+                messenger=Messenger.tg,
                 phone=TG_PHONE,
                 session_path="/data/tg_sessions/account_1/session",
                 status=TgAccountStatus.offline,

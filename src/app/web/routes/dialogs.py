@@ -17,10 +17,14 @@ from app.models import (
     MessageStatus,
     TgAccount,
 )
-from app.web.deps import get_current_manager
+from app.web.deps import get_current_manager, verify_origin
 from app.web.schemas import DialogOut, MessageOut, SendMessageIn
 
-router = APIRouter(prefix="/api", tags=["dialogs"])
+# verify_origin: прод-кука SameSite=none (iframe B24) прикрепляется к
+# кросс-сайтовым POST — без сверки Origin открыт был бы POST сообщений.
+router = APIRouter(
+    prefix="/api", tags=["dialogs"], dependencies=[Depends(verify_origin)]
+)
 
 ManagerDep = Annotated[Manager, Depends(get_current_manager)]
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -53,7 +57,7 @@ def _message_dto(msg: Message) -> MessageOut:
         direction=direction,
         text=msg.text,
         status=status,
-        tg_message_id=msg.tg_message_id,
+        external_message_id=msg.external_message_id,
         author_user_id=msg.author_user_id,
         timeline_comment_id=msg.timeline_comment_id,
         created_at=msg.created_at,
@@ -73,6 +77,19 @@ async def _load_dialog_owned(
     if dialog is None:
         raise HTTPException(status_code=404, detail="Диалог не найден")
     return dialog
+
+
+@router.get("/me", response_model=None)
+async def whoami(manager: ManagerDep) -> dict:
+    """Профиль текущего менеджера: виджет прячет composer при is_readonly,
+    админ-страница узнаёт роль."""
+    return {
+        "id": manager.id,
+        "name": manager.name,
+        "b24_user_id": manager.b24_user_id,
+        "role": manager.role.value,
+        "is_readonly": manager.is_readonly,
+    }
 
 
 @router.get("/dialogs")
@@ -135,15 +152,28 @@ async def send_message(
 ) -> MessageOut:
     dialog = await _load_dialog_owned(session, dialog_id, manager)
 
-    # Аккаунт менеджера (для outbox).
+    # Права: read-only менеджер читает историю, но не отправляет.
+    if manager.is_readonly:
+        raise HTTPException(
+            status_code=403, detail="Режим только чтение: отправка запрещена"
+        )
+
+    # Аккаунт менеджера в канале ДИАЛОГА (для outbox): у менеджера может быть
+    # аккаунт в каждом канале — TG и MAX.
     acc_result = await session.execute(
-        select(TgAccount).where(TgAccount.manager_id == manager.id)
+        select(TgAccount).where(
+            TgAccount.manager_id == manager.id,
+            TgAccount.messenger == dialog.messenger,
+        )
     )
     account = acc_result.scalar_one_or_none()
     if account is None:
+        channel_label = (
+            dialog.messenger.value if hasattr(dialog.messenger, "value") else str(dialog.messenger)
+        )
         raise HTTPException(
             status_code=409,
-            detail="У менеджера нет привязанного TG-аккаунта",
+            detail=f"У менеджера нет привязанного аккаунта канала {channel_label.upper()}",
         )
 
     # is_initiation: нет ни одного входящего сообщения в диалоге.

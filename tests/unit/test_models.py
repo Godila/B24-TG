@@ -28,10 +28,18 @@ async def test_models_create_tables(tmp_path):
     await engine.dispose()
 
 
-def test_manager_tg_account_one_to_one():
+def test_manager_one_account_per_channel():
+    """Уникальность (manager_id, messenger): менеджер может иметь аккаунт в
+    каждом канале, но не два в одном; phone уникален внутри канала."""
+    uq = {c.name for c in TgAccount.__table__.constraints if hasattr(c, "name")}
+    assert "uq_tg_accounts_manager_messenger" in uq
+    assert "uq_tg_accounts_messenger_phone" in uq
+    assert TgAccount.__table__.c.manager_id.unique is not True
     cols = {c.name for c in TgAccount.__table__.columns}
-    assert "manager_id" in cols
-    assert TgAccount.__table__.c.manager_id.unique is True
+    assert "messenger" in cols
+    assert "token" in cols
+    assert "device_id" in cols
+    assert "max_user_id" in cols
 
 
 def test_outbox_has_required_status_fields():

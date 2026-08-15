@@ -16,7 +16,10 @@
     <!-- Шапка: информация о клиенте/диалоге -->
     <header class="chat-header">
       <div class="contact" x-show="dialog">
-        <span class="contact-name" x-text="dialog?.contact_name || 'Неизвестный'"></span>
+        <span class="contact-name">
+          <span class="channel-badge" :class="dialog?.messenger" x-text="channelLabel(dialog?.messenger)"></span>
+          <span x-text="dialog?.contact_name || 'Неизвестный'"></span>
+        </span>
         <span class="contact-meta" x-text="dialog?.external_chat_id"></span>
       </div>
       <div class="status" x-show="!dialog && !loading">
@@ -47,7 +50,7 @@
     </main>
 
     <!-- Панель шаблонов (быстрые ответы) -->
-    <div class="templates" x-show="templates.length > 0" x-data="{ open: false }">
+    <div class="templates" x-show="!readonly && templates.length > 0" x-data="{ open: false }">
       <button class="templates-toggle" @click="open = !open" type="button">
         <span x-text="open ? '▾' : '▸'"></span> Шаблоны (<span x-text="templates.length"></span>)
       </button>
@@ -60,8 +63,11 @@
       </ul>
     </div>
 
-    <!-- Поле ввода + отправка -->
-    <footer class="composer">
+    <!-- Поле ввода + отправка (скрыто в режиме только чтение) -->
+    <div class="status" x-show="readonly" style="padding:8px 14px">
+      <span>Режим только чтение — отправка сообщений отключена администратором</span>
+    </div>
+    <footer class="composer" x-show="!readonly">
       <textarea
         x-model="draft"
         @keydown.enter.prevent="send()"

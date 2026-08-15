@@ -43,7 +43,7 @@ class MessageOut(BaseModel):
     direction: str
     text: str | None = None
     status: str
-    tg_message_id: int | None = None
+    external_message_id: str | None = None
     author_user_id: int | None = None
     timeline_comment_id: int | None = None
     created_at: datetime | None = None

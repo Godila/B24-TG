@@ -57,18 +57,22 @@ async def run_bridge() -> None:
     from app.b24.im import ImService
     from app.b24.sync import Bitrix24Sync
     from app.b24.token_manager import TokenManager
+    from app.bridge.account_sync import AccountSyncWorker, make_register_failure_hook
     from app.bridge.bootstrap import forward_incoming, load_active_accounts, register_accounts
     from app.bridge.crm_sync_repo import WorkerCrmSyncRepository
     from app.bridge.crm_sync_worker import CrmSyncWorker
     from app.bridge.health_checker import HealthChecker
     from app.bridge.incoming_handler import IncomingHandler
+    from app.bridge.login_worker import LoginCommandWorker
     from app.bridge.outbox_repo_worker import WorkerOutboxRepository
     from app.bridge.outbox_worker import OutboxWorker
     from app.bridge.session_manager import SessionManager
     from app.bridge.throttler import Throttler
     from app.config import get_settings
     from app.db import async_session
+    from app.messaging.max.factory import build_max_provider
     from app.messaging.telegram.proxy import telethon_proxy
+    from app.models import Messenger
 
     settings = get_settings()
 
@@ -77,6 +81,7 @@ async def run_bridge() -> None:
         api_hash=settings.tg_api_hash,
         sessions_dir=settings.tg_sessions_dir,
         proxy=telethon_proxy(settings),
+        builders={Messenger.max: build_max_provider},
     )
 
     # B24 wiring: ОДИН общий Bitrix24Client (shared TLS-коннекты, глобальный
@@ -110,7 +115,6 @@ async def run_bridge() -> None:
         await crm_repo.enqueue(kind=kind, message_id=message_id)
 
     handler = IncomingHandler(
-        session_mgr=sm,
         crm_sync_enqueue=enqueue_crm_sync,
         db_session_factory=async_session,
     )
@@ -152,9 +156,10 @@ async def run_bridge() -> None:
     )
 
     # 5-6. Фоновые задачи: outbox + crm_sync + health + по задаче на входящий
-    #      поток аккаунта. HealthChecker (план 009) персистит статусы сессий
-    #      в tg_accounts.status (их читает /health в web-процессе) и алертит
-    #      админа при отключении аккаунта.
+    #      поток аккаунта + AccountSync (подхват новых active-аккаунтов после
+    #      QR-онбординга без рестарта bridge). HealthChecker (план 009)
+    #      персистит статусы сессий в tg_accounts.status (их читает /health
+    #      в web-процессе) и алертит админа при отключении аккаунта.
     health = HealthChecker(
         sm,
         interval_sec=300,
@@ -162,10 +167,30 @@ async def run_bridge() -> None:
         notifier=admin_alert,
         admin_user_id=settings.alert_admin_b24_user_id,
     )
+    account_sync = AccountSyncWorker(
+        sm=sm,
+        handler=handler,
+        session_factory=async_session,
+        interval_sec=settings.account_sync_interval_sec,
+        on_register_failure=make_register_failure_hook(
+            async_session, admin_alert, settings.alert_admin_b24_user_id
+        ),
+    )
+    # TG QR-онбординг (вариант B): web пишет команды в login_commands,
+    # bridge исполняет (единственный писатель .session-файлов).
+    login_worker = LoginCommandWorker(
+        sm=sm,
+        account_sync=account_sync,
+        session_factory=async_session,
+        poll_interval=settings.login_worker_poll_sec,
+        password_timeout_sec=settings.login_password_timeout_sec,
+    )
     tasks: list[asyncio.Task] = [
         asyncio.create_task(worker.run()),
         asyncio.create_task(crm_worker.run()),
         asyncio.create_task(health.run()),
+        asyncio.create_task(account_sync.run()),
+        asyncio.create_task(login_worker.run()),
     ]
     for account in registered.values():
         provider = sm.get(account.id)
@@ -173,7 +198,8 @@ async def run_bridge() -> None:
             tasks.append(asyncio.create_task(forward_incoming(provider, account, handler)))
 
     logger.info(
-        "Bridge started: %d account(s) registered, outbox+crm_sync+health+incoming running",
+        "Bridge started: %d account(s) registered, outbox+crm_sync+health+"
+        "account_sync+incoming running",
         len(registered),
     )
     try:
@@ -185,6 +211,10 @@ async def run_bridge() -> None:
         worker.stop()
         crm_worker.stop()
         health.stop()
+        account_sync.stop()
+        login_worker.stop()
+        await login_worker.shutdown()
+        await account_sync.cancel_forwards()
         await sm.close_all()
         await b24_client.aclose()
 

@@ -21,17 +21,14 @@ from app.bridge.session_manager import SessionManager
 from app.models import Base, Manager, TgAccount, TgAccountStatus
 
 
-class FakeClient:
+class FakeProvider:
+    """Фейк под контракт ABC: sync is_connected()."""
+
     def __init__(self, connected: bool):
         self._connected = connected
 
     def is_connected(self) -> bool:
         return self._connected
-
-
-class FakeProvider:
-    def __init__(self, connected: bool):
-        self._client = FakeClient(connected)
 
 
 @pytest.fixture

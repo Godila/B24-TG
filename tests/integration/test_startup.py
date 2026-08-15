@@ -78,7 +78,6 @@ async def test_run_bridge_wires_b24_components(monkeypatch):
 
     # План 006: CRM — через очередь (crm_sync_enqueue), не напрямую b24sync.
     assert "crm_sync_enqueue" in constructed
-    assert "session_mgr" in constructed
     assert "db_session_factory" in constructed
 
     # План 009: HealthChecker подключён к БД и B24-алертам.

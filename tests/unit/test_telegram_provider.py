@@ -20,11 +20,11 @@ async def test_send_message_success():
     provider._client = mock_client  # type: ignore
 
     result = await provider.send_message(
-        account_id=1, external_chat_id="12345", text="hello", is_initiation=False
+        external_chat_id="12345", text="hello", is_initiation=False
     )
     assert isinstance(result, SendResult)
     assert result.success is True
-    assert result.external_message_id == 999
+    assert result.external_message_id == "999"
     mock_client.send_message.assert_awaited_once()
 
 
@@ -40,10 +40,10 @@ async def test_send_message_floodwait():
     provider._client = mock_client  # type: ignore
 
     result = await provider.send_message(
-        account_id=1, external_chat_id="12345", text="hello", is_initiation=True
+        external_chat_id="12345", text="hello", is_initiation=True
     )
     assert result.success is False
-    assert result.flood_wait_seconds == 42
+    assert result.retry_after_seconds == 42
 
 
 def test_connect_registers_newmessage_incoming_builder():
@@ -88,12 +88,12 @@ def test_on_new_message_builds_incoming_message():
 
     asyncio.run(provider._on_new_message(event))
     msg = asyncio.run(provider._incoming_queue.get())
-    assert msg.sender_tg_id == 4242
+    assert msg.sender_external_id == "4242"
+    assert msg.messenger.value == "tg"
     assert msg.text == "Привет"
     assert msg.content_type.value == "text"
-    assert msg.external_message_id == 777
+    assert msg.external_message_id == "777"
     assert msg.external_chat_id == "4242"
-    assert msg.account_id == 0  # перезапишет bootstrap.forward_incoming
 
 
 def _tg_message(text, media):

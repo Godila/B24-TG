@@ -1,10 +1,13 @@
-"""IncomingHandler — сохранение входящего TG-сообщения + постановка CRM-задачи.
+"""IncomingHandler — сохранение входящего сообщения + постановка CRM-задачи.
 
 План 006: сообщение СНАЧАЛА сохраняется в нашей БД (без CRM-полей), затем в
 очередь ``crm_sync`` ставится задача kind=inbound — CRM-вызовы делает
 CrmSyncWorker с ретраями. Раньше Bitrix24Sync звался прямо в пути события и
 любой сбой B24 (rate-limit free-портала, сеть) молча терял контакт/сделку/
 timeline-комментарий навсегда.
+
+Канал-нейтрально: messenger диалога/контакта берётся из IncomingMessage,
+идентичность контакта — пара (messenger, external_user_id).
 """
 
 import logging
@@ -15,7 +18,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bridge.crm_sync_worker import CrmSyncEnqueue
-from app.bridge.session_manager import SessionManager
 from app.messaging.types import IncomingMessage
 from app.models import (
     Contact,
@@ -23,22 +25,19 @@ from app.models import (
     Message,
     MessageDirection,
     MessageStatus,
-    Messenger,
 )
 
 logger = logging.getLogger(__name__)
 
 
 class IncomingHandler:
-    """Связка: IncomingMessage (из TG) → наша БД → очередь crm_sync."""
+    """Связка: IncomingMessage (из канала) → наша БД → очередь crm_sync."""
 
     def __init__(
         self,
-        session_mgr: SessionManager,
         crm_sync_enqueue: CrmSyncEnqueue,
         db_session_factory: Callable[[], AsyncSession],
     ):
-        self._session_mgr = session_mgr
         self._crm_sync_enqueue = crm_sync_enqueue
         self._db_factory = db_session_factory
 
@@ -55,7 +54,7 @@ class IncomingHandler:
             await self._crm_sync_enqueue(kind="inbound", message_id=message_id)
         except Exception:
             logger.exception(
-                "crm_sync enqueue failed for message_id=%s (tg msg %s)",
+                "crm_sync enqueue failed for message_id=%s (external msg %s)",
                 message_id,
                 msg.external_message_id,
             )
@@ -65,13 +64,14 @@ class IncomingHandler:
         async with self._db_factory() as session:
             contact = await self._upsert_contact(session, msg)
 
-            # Диалог: upsert по (external_chat_id, assigned_user_id) —
-            # мультиаккаунт: в приватных TG-чатах chat_id == tg-id клиента и
-            # совпадает у всех менеджеров, поэтому диалоги одного клиента у
-            # разных менеджеров — РАЗНЫЕ строки.
+            # Диалог: upsert по (messenger, external_chat_id, assigned_user_id)
+            # — мультиаккаунт (в приватных TG-чатах chat_id == id клиента и
+            # совпадает у всех менеджеров) и мультиканал (id-пространства
+            # каналов независимы).
             dialog_stmt = (
                 select(Dialog)
                 .where(
+                    Dialog.messenger == msg.messenger,
                     Dialog.external_chat_id == msg.external_chat_id,
                     Dialog.assigned_user_id == manager_id,
                 )
@@ -84,7 +84,7 @@ class IncomingHandler:
             if dialog is None:
                 dialog = Dialog(
                     contact_id=contact.id,
-                    messenger=Messenger.tg,
+                    messenger=msg.messenger,
                     external_chat_id=msg.external_chat_id,
                     assigned_user_id=manager_id,
                 )
@@ -93,21 +93,21 @@ class IncomingHandler:
                     await session.flush()
                 except IntegrityError:
                     # Гонка: параллельная задача уже вставила диалог с этой
-                    # парой. Rollback откатывает и контактную часть txn —
+                    # тройкой. Rollback откатывает и контактную часть txn —
                     # получаем контакт заново, затем берём существующий диалог.
                     await session.rollback()
                     contact = await self._upsert_contact(session, msg)
                     dialog = (await session.execute(dialog_stmt)).scalar_one()
 
-            # Идемпотентность: MTProto может дублировать доставку (реботы,
+            # Идемпотентность: канал может дублировать доставку (реботы,
             # рестарт bridge). Пропускаем уже сохранённое сообщение по
-            # (dialog, tg_message_id), иначе создадим дубль и повторно
+            # (dialog, external_message_id), иначе создадим дубль и повторно
             # поставим CRM-задачу.
             if msg.external_message_id is not None:
                 existing_msg = await session.execute(
                     select(Message).where(
                         Message.dialog_id == dialog.id,
-                        Message.tg_message_id == msg.external_message_id,
+                        Message.external_message_id == msg.external_message_id,
                     )
                 )
                 if existing_msg.scalar_one_or_none() is not None:
@@ -117,7 +117,7 @@ class IncomingHandler:
             message = Message(
                 dialog_id=dialog.id,
                 direction=MessageDirection.inbound,
-                tg_message_id=msg.external_message_id,
+                external_message_id=msg.external_message_id,
                 text=msg.text,
                 status=MessageStatus.delivered,
             )
@@ -132,25 +132,45 @@ class IncomingHandler:
     async def _upsert_contact(
         self, session: AsyncSession, msg: IncomingMessage
     ) -> Contact:
-        """Контакт: upsert по tg_user_id (CRM-поля проставит CrmSyncWorker).
+        """Контакт: upsert по (messenger, external_user_id).
 
         Вызывается повторно после IntegrityError-rollback по диалогу: rollback
         откатывает и вставку/правки контакта того же txn, поэтому контакт
         нужно получить заново, чтобы сессия осталась консистентной.
         """
         existing = await session.execute(
-            select(Contact).where(Contact.tg_user_id == msg.sender_tg_id)
+            select(Contact).where(
+                Contact.messenger == msg.messenger,
+                Contact.external_user_id == msg.sender_external_id,
+            )
         )
         contact = existing.scalar_one_or_none()
         if contact is None:
             contact = Contact(
-                tg_user_id=msg.sender_tg_id,
+                messenger=msg.messenger,
+                external_user_id=msg.sender_external_id,
                 phone=msg.sender_phone,
                 username=msg.sender_username,
                 name=msg.sender_name,
             )
             session.add(contact)
-            await session.flush()  # получаем contact.id
+            try:
+                await session.flush()  # получаем contact.id
+            except IntegrityError:
+                # Гонка вставки контакта: форвард-таски разных менеджеров
+                # параллельно обрабатывают сообщения одного нового клиента
+                # (uq (messenger, external_user_id)). Без отката сообщение
+                # первого менеджера терялось бы совсем.
+                await session.rollback()
+                contact = (
+                    await session.execute(
+                        select(Contact).where(
+                            Contact.messenger == msg.messenger,
+                            Contact.external_user_id == msg.sender_external_id,
+                        )
+                    )
+                ).scalar_one()
+                return contact
         else:
             # Обновляем метаданные, если пришли новые.
             if msg.sender_phone:

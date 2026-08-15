@@ -12,6 +12,12 @@ from app.models.base import Base, TimestampMixin
 from app.models.contact import Contact
 from app.models.crm_sync import KIND_INBOUND, KIND_OUTBOUND, CrmSyncItem, CrmSyncStatus
 from app.models.dialog import Dialog, DialogStatus, Messenger
+from app.models.login_command import (
+    ACTIVE_STATUSES,
+    LoginCommand,
+    LoginCommandKind,
+    LoginCommandStatus,
+)
 from app.models.manager import Manager, ManagerRole
 from app.models.message import Message, MessageDirection, MessageStatus
 from app.models.outbox import OutboxItem, OutboxStatus
@@ -19,6 +25,7 @@ from app.models.template import Template
 from app.models.tg_account import TgAccount, TgAccountStatus
 
 __all__ = [
+    "ACTIVE_STATUSES",
     "KIND_INBOUND",
     "KIND_OUTBOUND",
     "Attachment",
@@ -30,6 +37,9 @@ __all__ = [
     "CrmSyncStatus",
     "Dialog",
     "DialogStatus",
+    "LoginCommand",
+    "LoginCommandKind",
+    "LoginCommandStatus",
     "Manager",
     "ManagerRole",
     "Message",

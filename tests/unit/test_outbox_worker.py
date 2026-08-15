@@ -50,7 +50,7 @@ async def test_process_floodwait_reschedules():
 
     provider = AsyncMock()
     provider.send_message = AsyncMock(
-        return_value=SendResult(success=False, flood_wait_seconds=120, error="flood_wait")
+        return_value=SendResult(success=False, retry_after_seconds=120, error="rate_limited")
     )
 
     throttler = AsyncMock()

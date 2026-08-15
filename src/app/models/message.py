@@ -4,7 +4,7 @@ import enum
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Integer, Text
+from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
@@ -47,8 +47,12 @@ class Message(Base, TimestampMixin):
         ),
         nullable=False,
     )
-    tg_message_id: Mapped[int | None] = mapped_column(
-        BigInteger, nullable=True, index=True
+    # Внешний id сообщения в канале. TG: числовой id MTProto; MAX: числовой
+    # id web-протокола (приходит числом, хранится строкой — id MAX длинные,
+    # а Bot API отдаёт строковые mid). Дедуп входящих идёт по
+    # (dialog_id, external_message_id).
+    external_message_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
     )
     text: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[MessageStatus] = mapped_column(

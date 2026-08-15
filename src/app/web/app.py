@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import get_settings
-from app.web.routes import admin_qr, dialogs, health, placement, templates, webhook
+from app.web.routes import admin, admin_api, dialogs, health, placement, templates, webhook
 from app.web.session import create_session_cookie_params
 
 logger = logging.getLogger(__name__)
@@ -44,10 +44,18 @@ def create_app() -> FastAPI:
     app.include_router(placement.router)
     app.include_router(dialogs.router)
     app.include_router(templates.router)
-    # QR-онбординг (спайк 010): роутер зарегистрирован всегда, но каждый
-    # маршрут сам гасится в 404 вне dev_mode (внутренний gate надёжнее для
-    # тестов, чем условная регистрация).
-    app.include_router(admin_qr.router)
+    # Админ-панель: страница + единый API (онбординг обоих каналов и
+    # supervisor-панель). Каналы регистрируются сюда же.
+    app.include_router(admin.router)
+    app.include_router(admin_api.router)
+    from app.models import Messenger
+    from app.onboarding.max_channel import MaxOnboardingChannel
+    from app.onboarding.tg_channel import TgOnboardingChannel
+
+    admin_api.register_channels({
+        Messenger.max: MaxOnboardingChannel(),
+        Messenger.tg: TgOnboardingChannel(),
+    })
 
     # --- Dev-логин (только в dev-режиме) ---
     if settings.dev_mode:

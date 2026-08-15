@@ -2,6 +2,8 @@ import enum
 from dataclasses import dataclass
 from datetime import datetime
 
+from app.models import Messenger
+
 
 class ContentType(str, enum.Enum):
     text = "text"
@@ -14,32 +16,33 @@ class ContentType(str, enum.Enum):
 
 @dataclass
 class IncomingMessage:
-    """Сообщение, пришедшее из мессенджера."""
+    """Сообщение, пришедшее из мессенджера (канал-нейтрально).
 
-    account_id: int  # id tg_accounts (на какой аккаунт пришло)
-    external_chat_id: str  # TG chat id как строка
-    sender_tg_id: int  # кто написал (клиент)
+    ``external_*``-поля — строковые внешние id: у TG это числовые id MTProto,
+    у MAX — числовые id web-протокола; строка безопасна для обоих (id MAX
+    длинные, а Bot API отдаёт строковые mid).
+    """
+
+    messenger: Messenger  # канал, из которого пришло сообщение
+    external_chat_id: str  # id чата в канале (у TG == id клиента в приватных)
+    sender_external_id: str  # кто написал (клиент)
     sender_name: str | None
     sender_phone: str | None
     sender_username: str | None
     content_type: ContentType
     text: str | None = None
     media_path: str | None = None
-    external_message_id: int | None = None
+    external_message_id: str | None = None
     timestamp: datetime | None = None
     is_reply: bool = False  # True если это ответ клиента (диалог уже существует)
 
 
 @dataclass
 class SendResult:
+    """Результат отправки: провайдер сам знает, из какого он аккаунта."""
+
     success: bool
-    external_message_id: int | None = None
+    external_message_id: str | None = None
     error: str | None = None
-    flood_wait_seconds: int | None = None  # если TG прислал FloodWait
-
-
-class DeliveryStatus(str, enum.Enum):
-    sent = "sent"
-    delivered = "delivered"
-    read = "read"
-    failed = "failed"
+    # Сколько секунд подождать до повтора (FloodWait TG / throttle MAX).
+    retry_after_seconds: int | None = None

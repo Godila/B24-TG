@@ -1,40 +1,59 @@
+"""Пул провайдеров канальных аккаунтов — по одному на аккаунт (менеджера).
+
+Фабрики поставляются словарём ``builders``: ``{Messenger: factory(account) ->
+MessengerProvider}``. Это точка расширения для новых каналов: TelegramProvider
+строится дефолтной фабрикой из TG-настроек, MaxUserProvider — фабрикой из
+``app.messaging.max.factory`` (wiring в ``main.py``).
+
+Ключ пула — ``account.id`` (уникален глобально в tg_accounts, включая
+MAX-строки), поэтому outbox-маршрутизация и throttler-pool не различают каналы.
+"""
+
 import logging
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from app.messaging.provider import MessengerProvider
 from app.messaging.telegram.provider import TelegramProvider
-from app.models import TgAccount
+from app.models import Messenger, TgAccount
 
 logger = logging.getLogger(__name__)
 
+ProviderBuilder = Callable[[TgAccount], MessengerProvider]
+
 
 class SessionManager:
-    """Пул Telethon-сессий — по одной на TG-аккаунт (менеджера).
-
-    Связывает каждый аккаунт с ответственным менеджером. Ключ пула —
-    ``account.id``; один аккаунт = одна сессия = один менеджер.
-    """
-
     def __init__(self, api_id: int, api_hash: str, sessions_dir: str,
-                 proxy: tuple | None = None):
+                 proxy: tuple | None = None, *,
+                 builders: dict[Messenger, ProviderBuilder] | None = None):
         self._api_id = api_id
         self._api_hash = api_hash
         self._sessions_dir = sessions_dir
         self._proxy = proxy
         self._providers: dict[int, MessengerProvider] = {}
+        self._builders: dict[Messenger, ProviderBuilder] = builders or {}
+        # TG остаётся дефолтным каналом (обратная совместимость с тестами,
+        # которые не передают builders).
+        self._builders.setdefault(Messenger.tg, self._default_tg_builder)
 
-    def _build_provider(self, account: TgAccount) -> MessengerProvider:
-        provider = TelegramProvider(self._api_id, self._api_hash, self._sessions_dir,
-                                    proxy=self._proxy)
+    def _default_tg_builder(self, account: TgAccount) -> MessengerProvider:
         # CRITICAL: per-account session subdirectory.
         # Иначе все провайдеры разделят один .session-файл
         # (<dir>/session) и менеджеры будут перезаписывать сессии друг друга.
-        # session_file = _sessions_dir / "session", поэтому переопределяем
-        # _sessions_dir на per-account подпапку ДО вызова connect().
+        # session_file = <dir>/session, поэтому dir = per-account подпапка.
         per_account_dir = Path(self._sessions_dir) / f"account_{account.id}"
-        per_account_dir.mkdir(parents=True, exist_ok=True)
-        provider._sessions_dir = per_account_dir  # type: ignore[attr-defined]
-        return provider
+        return TelegramProvider(
+            self._api_id, self._api_hash, per_account_dir, proxy=self._proxy
+        )
+
+    def _build_provider(self, account: TgAccount) -> MessengerProvider:
+        try:
+            builder = self._builders[account.messenger]
+        except KeyError:
+            raise ValueError(
+                f"no provider builder for messenger={account.messenger}"
+            ) from None
+        return builder(account)
 
     async def register(self, account: TgAccount) -> MessengerProvider:
         # Идемпотентно: если сессия уже зарегистрирована — возвращаем её.
@@ -44,14 +63,23 @@ class SessionManager:
         await provider.connect()
         self._providers[account.id] = provider
         logger.info(
-            "Registered session for account_id=%s phone=%s",
+            "Registered session for account_id=%s messenger=%s phone=%s",
             account.id,
+            account.messenger.value,
             account.phone,
         )
         return provider
 
     def get(self, account_id: int) -> MessengerProvider | None:
         return self._providers.get(account_id)
+
+    def registered_ids(self) -> set[int]:
+        """ID аккаунтов с живыми провайдерами (для AccountSyncWorker)."""
+        return set(self._providers)
+
+    def iter_providers(self) -> Iterable[tuple[int, MessengerProvider]]:
+        """Снимок пула (для HealthChecker — без залезания в приватные поля)."""
+        return list(self._providers.items())
 
     async def unregister(self, account_id: int) -> None:
         provider = self._providers.pop(account_id, None)

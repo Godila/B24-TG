@@ -4,20 +4,20 @@ import pytest
 
 from app.bridge.incoming_handler import IncomingHandler
 from app.messaging.types import ContentType, IncomingMessage
-from app.models import Message
+from app.models import Message, Messenger
 
 
 def _make_msg(**kw):
     defaults = {
-        "account_id": 7,
+        "messenger": Messenger.tg,
         "external_chat_id": "12345",
-        "sender_tg_id": 999,
+        "sender_external_id": "999",
         "sender_name": "Иван",
         "sender_phone": "+79991234567",
         "sender_username": None,
         "content_type": ContentType.text,
         "text": "Привет",
-        "external_message_id": 1,
+        "external_message_id": "1",
         "is_reply": False,
     }
     defaults.update(kw)
@@ -65,7 +65,6 @@ async def test_handle_persists_then_enqueues_crm_sync():
     db_session = _make_db_session()
 
     handler = IncomingHandler(
-        session_mgr=MagicMock(),
         crm_sync_enqueue=enqueue,
         db_session_factory=lambda: db_session,
     )
@@ -96,7 +95,6 @@ async def test_handle_survives_enqueue_failure():
     db_session = _make_db_session()
 
     handler = IncomingHandler(
-        session_mgr=MagicMock(),
         crm_sync_enqueue=enqueue,
         db_session_factory=lambda: db_session,
     )
@@ -109,7 +107,7 @@ async def test_handle_survives_enqueue_failure():
 
 @pytest.mark.asyncio
 async def test_handle_skips_duplicate_message():
-    """Идемпотентность: если сообщение (dialog+tg_message_id) уже сохранено,
+    """Идемпотентность: если сообщение (dialog+external_message_id) уже сохранено,
     повторная обработка не создаёт дубль Message И не ставит вторую
     CRM-задачу."""
     account = MagicMock()
@@ -130,7 +128,6 @@ async def test_handle_skips_duplicate_message():
     session.execute.side_effect = [none_result, none_result, found_result]
 
     handler = IncomingHandler(
-        session_mgr=MagicMock(),
         crm_sync_enqueue=enqueue,
         db_session_factory=lambda: session,
     )

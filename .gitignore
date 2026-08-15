@@ -6,6 +6,8 @@
 *.session-journal
 tg_sessions/
 secrets/
+spike_max_session.json
+spike_max_qr*.png
 
 # Brainstorming artefacts (временные)
 .superpowers/

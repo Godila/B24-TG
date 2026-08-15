@@ -47,7 +47,7 @@ class OutboxItem(Base, TimestampMixin):
         ForeignKey("dialogs.id"), nullable=False, index=True
     )
     # Ссылка на Message(direction=outbound): по ней воркер после отправки
-    # закрывает исходящий цикл (pending -> sent/error, tg_message_id, sent_at).
+    # закрывает исходящий цикл (pending -> sent/error, external_message_id, sent_at).
     # nullable — исторические строки и внутренние постановки в очередь без Message.
     message_id: Mapped[int | None] = mapped_column(
         BigInteger().with_variant(Integer, "sqlite"),

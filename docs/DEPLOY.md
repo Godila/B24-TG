@@ -143,3 +143,48 @@ Bitrix24 REST ← web/bridge (OAuth token в БД, авто-refresh)
 - ✅ `placement.bind` → True (вкладка в карточке сделки зарегистрирована)
 - ✅ Все контейнеры Up, postgres healthy
 - ✅ Сертификат валиден до 2026-11-09, автопродление активно
+
+## Деплой канала MAX (миграция c3a7f1d92e40)
+
+⚠️ Ревизия переименовывает колонки (tg_message_id → external_message_id,
+tg_user_id → external_user_id) — старый код с новой схемой несовместим.
+Порядок деплоя БЕЗ окна несовместимости:
+
+```bash
+# на VM, из каталога проекта
+pg_dump ... > backup_$(date +%F)_pre_max.sql   # бэкап перед миграцией (конвенция)
+docker compose stop web bridge
+docker compose run --rm web alembic upgrade head
+docker compose up -d --build
+docker compose logs -f bridge   # ждём "Registered session" / "Bridge started"
+```
+
+После деплоя:
+- подключение MAX-аккаунта — страница `/admin/max` (сессионная кука B24,
+  QR + 2FA); bridge подхватит аккаунт сам за ~20с (AccountSyncWorker);
+- контроль: `docker compose logs bridge | grep -i max` и `GET /health`
+  (счётчики аккаунтов теперь по обоим каналам);
+- `websockets>=12` добавлен в pyproject — образ пересоберётся с ним.
+
+Чувствительные дрейфы: `MAX_APP_VERSION` в .env при симптоме
+`qr_login.disabled` (устарела версия web-клиента; актуальную добывают из
+бандлов web.max.ru — рецепт в памяти проекта project-max-channel).
+
+## Админ-панель + TG QR-онбординг (миграция d8e2b6a91c74)
+
+Миграция только-расширения (is_readonly + login_commands) — применяется тем
+же одним окном, порядок как у MAX-ревизии выше. После деплоя:
+
+- панель: `https://b24-tg.haragy.top/admin` (открытая вкладка из B24;
+  карточки TG/MAX — менеджерам, раздел «Менеджеры» — администратору);
+- TG подключение: карточка Telegram → QR (bridge исполняет по командам в
+  login_commands; телефон подтягивается сам после скана);
+- отвязка TG = log_out через bridge-команду; MAX = деактивация (токен
+  стирается);
+- `tg_sessions` volume больше НЕ монтируется в web (вариант B): CLI-фолбэк
+  аутентификации запускать в bridge:
+  `docker compose exec bridge python -m app.main auth --phone +7...`;
+- права: «только чтение» в разделе «Менеджеры» — POST сообщений для
+  read-only менеджера возвращает 403, виджет прячет поле ввода;
+- безопасность: мутирующие /admin/api и /api роуты сверяют Origin
+  (кука SameSite=none для iframe B24 иначе открывала CSRF).

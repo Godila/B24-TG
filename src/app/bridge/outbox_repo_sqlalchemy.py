@@ -69,9 +69,9 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
-    async def mark_sent(self, item: OutboxItem, external_message_id: int) -> None:
+    async def mark_sent(self, item: OutboxItem, external_message_id: str) -> None:
         # Одна транзакция: outbox -> sent и связанный Message -> sent
-        # (+ tg_message_id для read-receipts и sent_at для UI).
+        # (+ external_message_id для идемпотентности и sent_at для UI).
         await self._session.execute(
             update(OutboxItem)
             .where(OutboxItem.id == item.id)
@@ -83,7 +83,7 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
                 .where(Message.id == item.message_id)
                 .values(
                     status=MessageStatus.sent,
-                    tg_message_id=external_message_id,
+                    external_message_id=external_message_id or None,
                     sent_at=func.now(),
                 )
             )

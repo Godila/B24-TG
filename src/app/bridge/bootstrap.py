@@ -3,13 +3,13 @@
 Модуль держит ``run_bridge()`` чистым — вся работа со стартовым потоком
 аккаунтов вынесена сюда:
 
-* ``load_active_accounts`` — запрос активных TgAccount с eager-load менеджера
-  (критично: IncomingHandler читает ``account.manager.b24_user_id`` уже после
-  закрытия стартовой сессии, без eager-load — DetachedInstanceError);
+* ``load_active_accounts`` — запрос активных аккаунтов (всех каналов) с
+  eager-load менеджера (критично: IncomingHandler читает
+  ``account.manager.b24_user_id`` уже после закрытия стартовой сессии, без
+  eager-load — DetachedInstanceError);
 * ``register_accounts`` — подключение каждого аккаунта через SessionManager,
   устойчивое к одиночным сбоям (один упал — остальные регистрируются);
-* ``forward_incoming`` — бесконечный цикл чтения ``incoming_stream`` провайдера
-  с переписыванием захардкоженного ``account_id=0`` на реальный id аккаунта.
+* ``forward_incoming`` — бесконечный цикл чтения ``incoming_stream`` провайдера.
 """
 
 import logging
@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 async def load_active_accounts(
     session_factory: async_sessionmaker[AsyncSession] | Callable[[], AsyncSession],
 ) -> list[TgAccount]:
-    """Загрузить активные TG-аккаунты с eager-load менеджера.
+    """Загрузить активные аккаунты (всех каналов) с eager-load менеджера.
 
     Возвращает список (возможно пустой). Менеджер загружается сразу
     (``selectinload``), чтобы после закрытия стартовой сессии обращаться к
@@ -66,8 +66,9 @@ async def register_accounts(
             registered[account.id] = account
         except Exception:
             logger.exception(
-                "Failed to register account_id=%s phone=%s",
+                "Failed to register account_id=%s messenger=%s phone=%s",
                 account.id,
+                account.messenger.value,
                 account.phone,
             )
     return registered
@@ -80,19 +81,14 @@ async def forward_incoming(
 ) -> None:
     """Бесконечный цикл: incoming_stream провайдера → IncomingHandler.
 
-    ``TelegramProvider._on_new_message`` создаёт ``IncomingMessage`` с
-    захардкоженным ``account_id=0`` (провайдер ничего не знает про TgAccount);
-    здесь переписываем его на реальный ``account.id`` перед обработкой.
-
     Ошибка обработки одного сообщения логируется, но не рвёт подписку —
     цикл продолжается для следующих сообщений.
     """
     stream = provider.incoming_stream()
     async for msg in stream:
-        msg.account_id = account.id
         try:
             await handler.handle(msg, account=account)
         except Exception:
             logger.exception(
-                "handler failed for msg from tg_id=%s", msg.sender_tg_id
+                "handler failed for msg from sender=%s", msg.sender_external_id
             )

@@ -1,33 +1,53 @@
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 
-from app.messaging.types import DeliveryStatus, IncomingMessage, SendResult
+from app.messaging.types import IncomingMessage, SendResult
 
 
 class MessengerProvider(ABC):
     """Абстракция над мессенджером.
 
-    Точка расширения: TelegramProvider (Фаза 1), MaxProvider (позже).
+    Один экземпляр = один канальный аккаунт (один менеджер). Точка
+    расширения: TelegramProvider (Telethon/MTProto), MaxUserProvider
+    (WebSocket web-клиента MAX).
+
+    Статусы доставки (delivered/read) в контракт не входят: outbox закрывает
+    цикл исходящих через mark_sent, платформы дают разную глубину статусов.
     """
 
     @abstractmethod
     async def connect(self) -> None:
-        """Подключиться / авторизоваться."""
+        """Подключиться / авторизоваться. Raise = аккаунт не зарегистрирован."""
 
     @abstractmethod
     async def disconnect(self) -> None:
-        """Корректно закрыть соединение."""
+        """Корректно закрыть соединение (идемпотентно)."""
+
+    @abstractmethod
+    def is_connected(self) -> bool:
+        """Живо ли соединение прямо сейчас (для HealthChecker)."""
 
     @abstractmethod
     def incoming_stream(self) -> AsyncIterator[IncomingMessage]:
-        """Асинхронный поток входящих сообщений."""
+        """Асинхронный поток входящих сообщений.
+
+        Реализации Telethon-типа держат соединение сами (реконнект внутри
+        провайдера); поток живёт, пока не вызван disconnect().
+        """
 
     @abstractmethod
     async def send_message(
-        self, account_id: int, external_chat_id: str, text: str, *, is_initiation: bool
+        self, external_chat_id: str, text: str, *, is_initiation: bool
     ) -> SendResult:
         """Отправить сообщение. is_initiation влияет на throttle."""
 
-    @abstractmethod
-    def status_stream(self) -> AsyncIterator[tuple[int, DeliveryStatus]]:
-        """Поток обновлений статусов доставки (message_id, status)."""
+    def is_dead(self) -> bool:
+        """Сессия отозвана безнадёжно (токен MAX сброшен) — реконнект
+        бессмыслен, провайдера надо снять. TG: всегда False."""
+        return False
+
+    def credential_token(self) -> str | None:
+        """Кред-токен живой сессии провайдера; расхождение с токеном строки
+        аккаунта означает перепривязку (новый QR) — провайдер устарел.
+        TG: None (сессия в файле, перепривязку отслеживает путь файла)."""
+        return None

@@ -29,7 +29,7 @@ class WorkerOutboxRepository(OutboxRepository):
         async with self._session_factory() as s:
             return await SqlAlchemyOutboxRepository(s).fetch_due(limit)
 
-    async def mark_sent(self, item: OutboxItem, external_message_id: int) -> None:
+    async def mark_sent(self, item: OutboxItem, external_message_id: str) -> None:
         async with self._session_factory() as s:
             await SqlAlchemyOutboxRepository(s).mark_sent(item, external_message_id)
 

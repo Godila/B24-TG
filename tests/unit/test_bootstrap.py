@@ -9,7 +9,7 @@ from app.bridge.bootstrap import (
     register_accounts,
 )
 from app.messaging.types import ContentType, IncomingMessage
-from app.models import Base, Manager, ManagerRole, TgAccount, TgAccountStatus
+from app.models import Base, Manager, ManagerRole, Messenger, TgAccount, TgAccountStatus
 
 
 @pytest.fixture
@@ -85,13 +85,13 @@ async def test_register_accounts_skips_failed():
 
 
 @pytest.mark.asyncio
-async def test_forward_incoming_overwrites_account_id():
-    """TG-провайдер шлёт msg с account_id=0 — цикл обязан подставить реальный id."""
+async def test_forward_incoming_passes_account():
+    """Цикл зовёт handler для каждого сообщения, передавая аккаунт."""
 
     real_msg = IncomingMessage(
-        account_id=0,  # HARDCODED в TelegramProvider
+        messenger=Messenger.tg,
         external_chat_id="42",
-        sender_tg_id=999,
+        sender_external_id="999",
         sender_name=None,
         sender_phone=None,
         sender_username=None,
@@ -111,8 +111,6 @@ async def test_forward_incoming_overwrites_account_id():
     handler.handle.assert_awaited_once()
     # Аккаунт передан как keyword-only.
     assert handler.handle.call_args.kwargs["account"] is account
-    # КРИТИЧНО: msg.account_id перезаписан на реальный.
-    assert real_msg.account_id == 77
 
 
 @pytest.mark.asyncio
@@ -120,9 +118,9 @@ async def test_forward_incoming_survives_handler_error():
     """Ошибка в handler для одного сообщения не убивает подписку."""
 
     msg1 = IncomingMessage(
-        account_id=0,
+        messenger=Messenger.tg,
         external_chat_id="1",
-        sender_tg_id=1,
+        sender_external_id="1",
         sender_name=None,
         sender_phone=None,
         sender_username=None,
@@ -130,9 +128,9 @@ async def test_forward_incoming_survives_handler_error():
         text="boom",
     )
     msg2 = IncomingMessage(
-        account_id=0,
+        messenger=Messenger.tg,
         external_chat_id="2",
-        sender_tg_id=2,
+        sender_external_id="2",
         sender_name=None,
         sender_phone=None,
         sender_username=None,
@@ -154,5 +152,3 @@ async def test_forward_incoming_survives_handler_error():
     await forward_incoming(FakeProvider(), account, handler)
 
     assert handler.handle.await_count == 2
-    assert msg1.account_id == 5
-    assert msg2.account_id == 5

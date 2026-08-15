@@ -82,16 +82,35 @@ class CrmService:
             return int(first)  # список ID
         return None
 
+    async def get_contact(self, auth_token: str, contact_id: int) -> ContactInfo | None:
+        """Контакт по id (для проверки существующей CRM-связки).
+
+        None — контакт удалён или недоступен (вызывающий ищет по телефону).
+        """
+        try:
+            detail = await self._client.call(
+                "crm.contact.get", auth_token=auth_token, params={"id": contact_id},
+            )
+        except Exception:  # noqa: BLE001 - контакт мог быть удалён в B24
+            return None
+        if not isinstance(detail, dict):
+            return None
+        name = (detail.get("NAME", "") + " " + detail.get("LAST_NAME", "")).strip() or None
+        return ContactInfo(id=contact_id, name=name)
+
     async def create_contact(
         self, auth_token: str, name: str, phone: str,
-        assigned_by_id: int, source: str = "telegram",
+        assigned_by_id: int, source: str | None = "telegram",
     ) -> ContactInfo:
         fields: dict[str, Any] = {
             "NAME": name,
             "ASSIGNED_BY_ID": assigned_by_id,
-            "SOURCE_ID": source.upper(),
             "PHONE": [{"VALUE": phone, "VALUE_TYPE": "MOBILE"}],
         }
+        # SOURCE_ID должен существовать в справочнике портала; для каналов без
+        # своего источника (MAX) просто не передаём — B24 возьмёт дефолт.
+        if source:
+            fields["SOURCE_ID"] = source.upper()
         result = await self._client.call(
             "crm.item.add",
             auth_token=auth_token,

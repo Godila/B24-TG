@@ -35,7 +35,7 @@ async def session():
 async def _seed_message(session) -> int:
     """Manager + Contact + Dialog + Message; возвращает message_id."""
     session.add(Manager(id=1, name="Менеджер", b24_user_id=15))
-    session.add(Contact(id=10, tg_user_id=999, name="Иван", phone="+7999"))
+    session.add(Contact(id=10, messenger=Messenger.tg, external_user_id="999", name="Иван", phone="+7999"))
     session.add(
         Dialog(
             id=50,
@@ -175,6 +175,7 @@ async def test_collect_joins_message_dialog_contact_manager(session):
     assert data.sender_name == "Иван"
     assert data.sender_phone == "+7999"
     assert data.assigned_b24_user_id == 15
+    assert data.messenger is Messenger.tg
     assert data.crm_contact_id is None
     assert data.crm_deal_id is None
 

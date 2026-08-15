@@ -9,12 +9,8 @@ from telethon.tl import types as tl
 from telethon.tl.types import User
 
 from app.messaging.provider import MessengerProvider
-from app.messaging.types import (
-    ContentType,
-    DeliveryStatus,
-    IncomingMessage,
-    SendResult,
-)
+from app.messaging.types import ContentType, IncomingMessage, SendResult
+from app.models import Messenger
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +19,7 @@ class TelegramProvider(MessengerProvider):
     """Реализация MessengerProvider поверх Telethon (MTProto user-API).
     Один экземпляр = одна TG-сессия (один менеджер)."""
 
-    def __init__(self, api_id: int, api_hash: str, sessions_dir: str,
+    def __init__(self, api_id: int, api_hash: str, sessions_dir: str | Path,
                  proxy: tuple | None = None):
         self._api_id = api_id
         self._api_hash = api_hash
@@ -32,7 +28,6 @@ class TelegramProvider(MessengerProvider):
         self._proxy = proxy
         self._client: TelegramClient | None = None
         self._incoming_queue: asyncio.Queue[IncomingMessage] = asyncio.Queue()
-        self._status_queue: asyncio.Queue[tuple[int, DeliveryStatus]] = asyncio.Queue()
 
     @property
     def session_file(self) -> Path:
@@ -58,21 +53,35 @@ class TelegramProvider(MessengerProvider):
             await self._client.disconnect()
             self._client = None
 
+    async def log_out(self) -> None:
+        """Отвязка аккаунта: RPC log_out + удаление .session-файла.
+
+        После этого провайдер непригоден — bridge снимает его
+        (AccountSyncWorker.force_unregister)."""
+        if self._client:
+            await self._client.log_out()
+            self._client = None
+
+    def is_connected(self) -> bool:
+        return bool(
+            self._client and self._client.is_connected()
+        )
+
     async def _on_new_message(self, event) -> None:
         """Handler событий Telethon NewMessage — кладёт в очередь."""
         try:
             sender = await event.get_sender()
             ctype, text = self._content_type_and_text(event.message)
             msg = IncomingMessage(
-                account_id=0,  # SessionManager проставит реальный account_id
+                messenger=Messenger.tg,
                 external_chat_id=str(event.chat_id),
-                sender_tg_id=getattr(sender, "id", 0),
+                sender_external_id=str(getattr(sender, "id", 0)),
                 sender_name=self._full_name(sender),
                 sender_phone=getattr(sender, "phone", None),
                 sender_username=getattr(sender, "username", None),
                 content_type=ctype,
                 text=text,
-                external_message_id=event.message.id,
+                external_message_id=str(event.message.id),
                 timestamp=event.message.date,
                 is_reply=bool(event.is_reply),
             )
@@ -117,23 +126,19 @@ class TelegramProvider(MessengerProvider):
         while True:
             yield await self._incoming_queue.get()
 
-    async def status_stream(self) -> AsyncIterator[tuple[int, DeliveryStatus]]:
-        while True:
-            yield await self._status_queue.get()
-
     async def send_message(
-        self, account_id: int, external_chat_id: str, text: str, *, is_initiation: bool
+        self, external_chat_id: str, text: str, *, is_initiation: bool
     ) -> SendResult:
         if not self._client:
             return SendResult(success=False, error="not connected")
         try:
             result = await self._client.send_message(int(external_chat_id), text)
-            return SendResult(success=True, external_message_id=result.id)
+            return SendResult(success=True, external_message_id=str(result.id))
         except FloodWaitError as e:
             return SendResult(
                 success=False,
                 error="flood_wait",
-                flood_wait_seconds=int(e.seconds),
+                retry_after_seconds=int(e.seconds),
             )
         except Exception as e:
             logger.exception("send_message failed")

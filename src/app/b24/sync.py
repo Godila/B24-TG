@@ -2,9 +2,11 @@
 
 import logging
 
+from app.b24.channels import channel_profile
 from app.b24.crm import CrmService
 from app.b24.im import ImService
 from app.b24.token_manager import TokenManager
+from app.models import Messenger
 
 logger = logging.getLogger(__name__)
 
@@ -47,35 +49,57 @@ class Bitrix24Sync:
         sender_phone: str,
         message_text: str,
         assigned_b24_user_id: int,
+        *,
+        messenger: Messenger = Messenger.tg,
+        existing_contact_id: int | None = None,
+        existing_deal_id: int | None = None,
     ) -> SyncResult | None:
+        """Входящее сообщение → CRM.
+
+        ``messenger`` параметризует тексты (префикс сделки, уведомление,
+        источник) по каналу. ``existing_contact_id``/``existing_deal_id`` —
+        уже известные CRM-связи диалога/контакта: если контакт связан,
+        пропускаем поиск по телефону (findbyComm по пустому телефону у
+        MAX-клиентов плодил бы дубли), если сделка связана — не ищем открытую.
+        """
         token = await self._token_mgr.get_token()
         if token is None:
             logger.error("No B24 token — integration not installed")
             return None
         auth = token.access_token
+        profile = channel_profile(messenger)
 
-        # 1. Матчинг по номеру
-        contact = await self._crm.find_contact_by_phone(auth, sender_phone)
+        # 1. Матчинг: известная CRM-связка приоритетнее поиска по телефону.
+        if existing_contact_id is not None:
+            contact = await self._crm.get_contact(auth, existing_contact_id)
+            if contact is None:
+                # Связка протухла (контакт удалён в B24) — ищем заново.
+                contact = await self._crm.find_contact_by_phone(auth, sender_phone)
+        else:
+            contact = await self._crm.find_contact_by_phone(auth, sender_phone)
         is_new = contact is None
 
-        # 2. Новый → создаём Контакт + Сделку. Существующий → ищем его
-        #    ОТКРЫТУЮ сделку (идемпотентность: раньше deal_id навсегда
-        #    оставался None и все комментарии падали в карточку контакта).
+        # 2. Новый → создаём Контакт + Сделку. Существующий → его ОТКРЫТУЮ
+        #    сделку (идемпотентность: раньше deal_id навсегда оставался None
+        #    и все комментарии падали в карточку контакта).
         if is_new:
-            name = sender_name or sender_phone
+            name = sender_name or sender_phone or "Без имени"
             contact = await self._crm.create_contact(
                 auth,
                 name=name,
                 phone=sender_phone,
                 assigned_by_id=assigned_b24_user_id,
+                source=profile.source_id,
             )
             deal = await self._crm.create_deal(
                 auth,
-                title=f"TG: {name}",
+                title=f"{profile.deal_prefix}{name}",
                 contact_id=contact.id,
                 assigned_by_id=assigned_b24_user_id,
             )
             deal_id = deal.id
+        elif existing_deal_id is not None:
+            deal_id = existing_deal_id
         else:
             deal = await self._crm.find_open_deal_for_contact(auth, contact.id)
             # Нет открытых сделок — не создаём (клиент уже в работе):
@@ -104,7 +128,7 @@ class Bitrix24Sync:
                 auth,
                 user_id=assigned_b24_user_id,
                 message=(
-                    f"💬 Новое сообщение в Telegram от "
+                    f"💬 Новое сообщение в {profile.notify_label} от "
                     f"{sender_name or sender_phone}:\n{message_text}"
                 ),
             )

@@ -57,11 +57,9 @@ class HealthChecker:
         self._running = False
 
     async def _check_once(self) -> None:
-        for account_id, provider in list(self._sm._providers.items()):  # type: ignore[attr-defined]
+        for account_id, provider in self._sm.iter_providers():
             try:
-                # Унифицированный интерфейс: проверяем наличие подключения
-                client = getattr(provider, "_client", None)
-                connected = bool(client and getattr(client, "is_connected", lambda: False)())
+                connected = provider.is_connected()
                 if not connected:
                     logger.warning("Account %s: session disconnected", account_id)
                 if self._session_factory is not None:
@@ -88,6 +86,7 @@ class HealthChecker:
                 return
             old_status = account.status
             phone = account.phone
+            channel = account.messenger.value
             if old_status == new_status:
                 return  # статус не изменился — не трогаем БД и не алертим
             account.status = new_status
@@ -95,19 +94,19 @@ class HealthChecker:
 
         if new_status is TgAccountStatus.offline:
             logger.error("Account %s went offline", account_id)
-            if old_status is TgAccountStatus.active:
-                await self._alert(account_id, phone)
+            if old_status == TgAccountStatus.active:
+                await self._alert(account_id, channel, phone)
         else:
             logger.info("Account %s is back online", account_id)
 
-    async def _alert(self, account_id: int, phone: str) -> None:
+    async def _alert(self, account_id: int, channel: str, phone: str) -> None:
         if self._notifier is None:
             return
         try:
             await self._notifier(
                 self._admin_user_id,
-                f"⚠️ Bitrix-TG: TG-аккаунт id={account_id} ({phone}) отключён — "
-                "проверьте сессию",
+                f"⚠️ Bitrix-TG: {channel.upper()}-аккаунт id={account_id} ({phone}) "
+                "отключён — проверьте сессию",
             )
         except Exception:
             # Сбой доставки алерта не должен ронять чекер.

@@ -29,11 +29,14 @@ class Dialog(Base, TimestampMixin):
     # Мультиаккаунт: в приватных TG-чатах external_chat_id == tg-id клиента
     # и совпадает у всех менеджеров, поэтому уникальна пара
     # (external_chat_id, assigned_user_id), а не chat_id сам по себе.
+    # Мультиканал: id-пространства TG и MAX независимы и могут совпасть
+    # строкой — поэтому в ключ добавлен messenger.
     # Констрейнт создаёт и составной индекс — отдельный не нужен.
     __table_args__ = (
         UniqueConstraint(
             "external_chat_id",
             "assigned_user_id",
+            "messenger",
             name="uq_dialogs_chat_per_manager",
         ),
     )
