@@ -176,3 +176,52 @@ async def test_credentials_rotation_reregisters():
     await asyncio.sleep(0.05)
 
     assert sm.unregistered == [11]
+
+
+@pytest.mark.asyncio
+async def test_register_failure_hook_rate_limits_transient_alerts():
+    """Транзиентные сбои ретраятся каждые ~20с: без rate-lock долговременный
+
+    сетевой сбой заспамил бы админ-чат. Не-терминальные алерты — не чаще
+    раза в transient_alert_repeat_sec; терминальные (MaxAuthError) — всегда."""
+    from app.bridge.account_sync import make_register_failure_hook
+    from app.messaging.max.protocol import MaxAuthError
+
+    calls: list[int] = []
+
+    async def notifier(user_id: int, text: str) -> None:
+        calls.append(user_id)
+
+    class _Ctx:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def execute(self, stmt):
+            return None
+
+        async def commit(self):
+            return None
+
+    def session_factory():
+        return _Ctx()
+
+    hook = make_register_failure_hook(
+        session_factory, notifier, 42, transient_alert_repeat_sec=0.2
+    )
+    acc = _account(1)
+    acc.messenger = Messenger.tg
+
+    await hook(acc, TimeoutError("tunnel down"))
+    await hook(acc, TimeoutError("tunnel down"))
+    assert calls == [42]  # второй транзиентный подавлен
+
+    await asyncio.sleep(0.25)
+    await hook(acc, TimeoutError("tunnel down"))
+    assert calls == [42, 42]  # окно истекло — снова доставлен
+
+    await hook(acc, MaxAuthError("token revoked"))
+    await hook(acc, MaxAuthError("token revoked"))
+    assert calls == [42, 42, 42, 42]  # терминальные идут всегда

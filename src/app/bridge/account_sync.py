@@ -168,13 +168,20 @@ class AccountSyncWorker:
 
 
 def make_register_failure_hook(
-    session_factory, notifier, admin_user_id: int
+    session_factory, notifier, admin_user_id: int,
+    *, transient_alert_repeat_sec: float = 900.0,
 ) -> RegisterFailureHook:
     """Хук для on_register_failure: status=offline + алерт админу.
 
     Аккаунт выпадает из active-сета (нет молотилки LOGIN мёртвым токеном),
     админ получает алерт, менеджер переподключается через /admin/max.
+    Транзиентные сбои ретраятся каждые ~20с — без rate-limit алерты о
+    долговременной сетевой деградации заспамили бы чат, поэтому не-
+    терминальные уведомления идут не чаще раза в transient_alert_repeat_sec.
     """
+    import time
+
+    last_transient_alert: dict[int, float] = {}
 
     async def hook(account: TgAccount, exc: Exception) -> None:
         # Терминально — только отозванный токен (ретраи бессмысленны и
@@ -189,17 +196,22 @@ def make_register_failure_hook(
                     .values(status=TgAccountStatus.offline)
                 )
                 await s.commit()
-        if notifier is not None:
-            try:
-                await notifier(
-                    admin_user_id,
-                    f"⚠️ Bitrix-TG: {account.messenger.value.upper()}-аккаунт "
-                    f"id={account.id} ({account.phone}) не подключается"
-                    + (" — сессия отозвана, переподключите (для MAX — /admin/max)"
-                       if terminal else " (сетевой сбой, повторим автоматически)")
-                    + f": {exc}",
-                )
-            except Exception:
-                logger.exception("alert о неудачной регистрации не доставлен")
+        if notifier is None:
+            return
+        now = time.monotonic()
+        if not terminal and now - last_transient_alert.get(account.id, 0.0) < transient_alert_repeat_sec:
+            return
+        last_transient_alert[account.id] = now
+        try:
+            await notifier(
+                admin_user_id,
+                f"⚠️ Bitrix-TG: {account.messenger.value.upper()}-аккаунт "
+                f"id={account.id} ({account.phone}) не подключается"
+                + (" — сессия отозвана, переподключите (для MAX — /admin/max)"
+                   if terminal else " (сетевой сбой, повторим автоматически)")
+                + f": {exc}",
+            )
+        except Exception:
+            logger.exception("alert о неудачной регистрации не доставлен")
 
     return hook
