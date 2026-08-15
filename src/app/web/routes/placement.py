@@ -24,6 +24,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from app.b24.client import Bitrix24Client, Bitrix24Error
 from app.config import get_settings
+from app.web.deps import ManagerDep
 from app.web.session import create_session_cookie_params
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/placement", tags=["placement"])
 
 _PLACEMENT_CODE = "CRM_DEAL_DETAIL_TAB"
+_ADMIN_PLACEMENT_CODE = "LEFT_MENU"
 
 
 async def _user_id_from_token(access_token: str) -> int | None:
@@ -105,6 +107,73 @@ def _set_session_and_respond(
     resp = HTMLResponse(content=body)
     resp.set_cookie(**cookie_params)
     return resp
+
+
+@router.post("/admin", response_model=None)
+async def placement_admin_post(
+    placement: str = Form(default="", alias="PLACEMENT"),
+    auth_id: str = Form(default="", alias="AUTH_ID"),
+    auth: str = Form(default="", alias="AUTH"),
+) -> HTMLResponse | JSONResponse:
+    """Placement LEFT_MENU: админ-панель внутри интерфейса Битрикс24.
+
+    Личность — как в /placement/deal (user.current по AUTH_ID; dev — из
+    AUTH-JSON). Ставит сессионную куку и отдаёт admin.html — страницу
+    подключения каналов (менеджеру) и supervisor-панель (администратору).
+    """
+    if placement != _ADMIN_PLACEMENT_CODE:
+        return JSONResponse(
+            {"error": f"unexpected placement: {placement!r}"}, status_code=400,
+        )
+    settings = get_settings()
+    if settings.dev_mode:
+        try:
+            auth_data = json.loads(auth) if auth else {}
+            b24_user_id = int(auth_data.get("user_id"))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return JSONResponse(
+                {"error": "dev mode: requires AUTH.user_id"}, status_code=400,
+            )
+    else:
+        b24_user_id = await _user_id_from_token(auth_id)
+        if b24_user_id is None:
+            return JSONResponse(
+                {"error": "Недействительный B24 токен"}, status_code=403,
+            )
+
+    logger.info(
+        "Placement opened: placement=%s b24_user_id=%s", placement, b24_user_id,
+    )
+    cookie_params = create_session_cookie_params(
+        b24_user_id=b24_user_id, deal_id=None,
+        secret=settings.session_secret, secure=not settings.dev_mode,
+    )
+    resp = HTMLResponse(content=_admin_html())
+    resp.set_cookie(**cookie_params)
+    return resp
+
+
+@router.get("/admin", response_model=None)
+async def placement_admin_get(_manager: ManagerDep) -> HTMLResponse:
+    """GET-фолбэк (перезагрузка фрейма / прямая ссылка): страница отдаётся
+    только при уже существующей сессионной куке — без неё пусть открывают
+    через B24 (там поставится куку placement-вызовом)."""
+    return HTMLResponse(content=_admin_html())
+
+
+def _admin_html() -> str:
+    """static/admin.html (админ-панель) с заглушкой при отсутствии."""
+    settings = get_settings()
+    html_path = Path(settings.static_dir) / "admin.html"
+    if html_path.is_file():
+        return html_path.read_text(encoding="utf-8")
+    logger.warning("admin.html not found at %s — returning stub", html_path)
+    return (
+        '<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">'
+        "<title>Bitrix-TG: каналы</title></head>"
+        '<body><div>Панель недоступна: static/admin.html не найден.</div>'
+        "</body></html>"
+    )
 
 
 @router.post("/deal", response_model=None)
