@@ -37,6 +37,14 @@ class TelegramProvider(MessengerProvider):
         self._client = TelegramClient(
             str(self.session_file), self._api_id, self._api_hash,
             proxy=self._proxy,
+            # CRITICAL: авто-реконнект Telethon на «TCP жив, сервер рвёт
+            # после рукопожатия» молотит реконнектами БЕЗ задержки и БЕЗ
+            # лимита (sleep в _reconnect только на ошибке коннекта, которой
+            # нет; retries/retry_delay этот путь не ограничивают) — сутки
+            # дауна туннеля = сотни тысяч соединений в панель. Вместо
+            # бесконечного авто-реконнекта — быстрый чистый отказ, а
+            # повторами владеет AccountSyncWorker (грейс + свой каденс).
+            auto_reconnect=False,
         )
         await self._client.connect()
         if not await self._client.is_user_authorized():

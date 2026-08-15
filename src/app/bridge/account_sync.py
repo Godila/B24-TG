@@ -10,7 +10,11 @@
     его самолечение);
   * сбой регистрации (например, MaxAuthError — токен отозван) →
     on_register_failure: аккаунт переводится в offline (выпадает из
-    active-сета — нет молотилки LOGIN каждые N секунд) + алерт админу.
+    active-сета — нет молотилки LOGIN каждые N секунд) + алерт админу;
+  * оживление: провайдер без соединения N тиков подряд снимается и
+    следующим тиком перерегистрируется (TG ходит с auto_reconnect=False —
+    без этого зависал бы отключённым навсегда; ретраи с вежливым каденсом
+    вместо неограниченной молотилки Telethon).
 """
 
 import asyncio
@@ -50,6 +54,11 @@ class AccountSyncWorker:
         self._on_register_failure = on_register_failure
         self._running = False
         self._forward_tasks: dict[int, asyncio.Task] = {}
+        # Сколько тиков подряд провайдер числился disconnected (грейс на
+        # мелькающие реконнекты MAX; TG с auto_reconnect=False не лечит
+        # себя сам — его оживляет перерегистрация).
+        self._disconnect_streak: dict[int, int] = {}
+        self._disconnect_grace_ticks = 2
 
     async def run(self) -> None:
         self._running = True
@@ -111,6 +120,26 @@ class AccountSyncWorker:
                 continue
             if provider.is_dead():
                 await self._unregister(account_id, reason="provider dead")
+                continue
+            # Оживление: провайдер зарегистрирован, но соединения нет
+            # N тиков подряд (TG с auto_reconnect=False сам не лечится;
+            # MAX обычно укладывается в грейс своим backoff 2..32с).
+            # Снимаем — следующий тик зарегистрирует заново.
+            if provider.is_connected():
+                self._disconnect_streak.pop(account_id, None)
+            else:
+                streak = self._disconnect_streak.get(account_id, 0) + 1
+                if streak >= self._disconnect_grace_ticks:
+                    self._disconnect_streak.pop(account_id, None)
+                    await self._unregister(
+                        account_id, reason="provider disconnected (ревайв)"
+                    )
+                else:
+                    self._disconnect_streak[account_id] = streak
+                    logger.info(
+                        "AccountSync: account_id=%s без соединения (тик %s/%s)",
+                        account_id, streak, self._disconnect_grace_ticks,
+                    )
 
         for account_id in sorted(self._sm.registered_ids() - active_ids):
             provider = self._sm.get(account_id)
@@ -125,7 +154,20 @@ class AccountSyncWorker:
                 await self._unregister(account_id, reason="deactivated by admin")
                 continue
             # offline-статус при живом провайдере: HealthChecker видит
-            # разрыв, реконнект-цикл продолжается — не мешаем.
+            # разрыв, реконнект-цикл продолжается — не мешаем. Исключение —
+            # надолго отвалившийся (тот же грейс-счётчик, что и в active-
+            # ветке): перерегистрация оживит.
+            if provider.is_connected():
+                self._disconnect_streak.pop(account_id, None)
+            else:
+                streak = self._disconnect_streak.get(account_id, 0) + 1
+                if streak >= self._disconnect_grace_ticks:
+                    self._disconnect_streak.pop(account_id, None)
+                    await self._unregister(
+                        account_id, reason="provider disconnected (ревайв)"
+                    )
+                    continue
+                self._disconnect_streak[account_id] = streak
             logger.info(
                 "AccountSync: account_id=%s offline, провайдер жив — не трогаем",
                 account_id,

@@ -179,6 +179,42 @@ async def test_credentials_rotation_reregisters():
 
 
 @pytest.mark.asyncio
+async def test_disconnected_provider_revived_after_grace():
+    """TG ходит с auto_reconnect=False: отвалившийся провайдер сам не
+    лечится. Грейс 2 тика — не сбрасываем на мелькании, после — снимаем
+    (следующий тик перерегистрирует)."""
+    sm = FakeSm()
+    acc = _account(21, messenger=Messenger.tg)
+    await sm.register(acc)
+    provider = sm.get(21)
+    provider.is_connected.return_value = False
+    provider.is_dead.return_value = False
+    worker, _fwd = _make_worker(sm, [acc])
+
+    await worker._sync_once()  # тик 1: грейс, не трогаем
+    assert sm.unregistered == []
+    assert sm.get(21) is not None
+
+    await worker._sync_once()  # тик 2: порог — ревайв
+    assert sm.unregistered == [21]
+    assert sm.get(21) is None
+
+
+@pytest.mark.asyncio
+async def test_connected_provider_not_revived():
+    sm = FakeSm()
+    acc = _account(22)
+    await sm.register(acc)
+    worker, _fwd = _make_worker(sm, [acc])
+
+    for _ in range(4):
+        await worker._sync_once()
+
+    assert sm.unregistered == []
+    assert sm.get(22) is not None
+
+
+@pytest.mark.asyncio
 async def test_register_failure_hook_rate_limits_transient_alerts():
     """Транзиентные сбои ретраятся каждые ~20с: без rate-lock долговременный
 
