@@ -35,7 +35,18 @@ async def session():
 async def _seed_message(session) -> int:
     """Manager + Contact + Dialog + Message; возвращает message_id."""
     session.add(Manager(id=1, name="Менеджер", b24_user_id=15))
-    session.add(Contact(id=10, messenger=Messenger.tg, external_user_id="999", name="Иван", phone="+7999"))
+    session.add(
+        Contact(
+            id=10,
+            messenger=Messenger.tg,
+            external_user_id="999",
+            name="Иван",
+            phone="+7999",
+            username="ivan_p",
+            first_name="Иван",
+            last_name="Петров",
+        )
+    )
     session.add(
         Dialog(
             id=50,
@@ -64,8 +75,10 @@ async def test_enqueue_and_fetch_due(session):
     await session.commit()
     # second: not due yet
     item = CrmSyncItem(
-        kind=KIND_OUTBOUND, message_id=2,
-        status=CrmSyncStatus.queued, attempts=0,
+        kind=KIND_OUTBOUND,
+        message_id=2,
+        status=CrmSyncStatus.queued,
+        attempts=0,
         next_attempt_at=datetime.now(UTC) + timedelta(hours=1),
     )
     session.add(item)
@@ -82,20 +95,34 @@ async def test_enqueue_and_fetch_due(session):
 async def test_fetch_due_includes_retrying_excludes_terminal(session):
     """reschedule ставит retrying — fetch_due обязан их брать (урок outbox);
     done/failed — никогда."""
-    session.add_all([
-        CrmSyncItem(
-            id=1, kind=KIND_INBOUND, message_id=1, status=CrmSyncStatus.retrying,
-            attempts=1, next_attempt_at=datetime.now(UTC) - timedelta(seconds=30),
-        ),
-        CrmSyncItem(
-            id=2, kind=KIND_INBOUND, message_id=2, status=CrmSyncStatus.done,
-            attempts=0, next_attempt_at=datetime.now(UTC) - timedelta(minutes=5),
-        ),
-        CrmSyncItem(
-            id=3, kind=KIND_INBOUND, message_id=3, status=CrmSyncStatus.failed,
-            attempts=5, next_attempt_at=datetime.now(UTC) - timedelta(minutes=5),
-        ),
-    ])
+    session.add_all(
+        [
+            CrmSyncItem(
+                id=1,
+                kind=KIND_INBOUND,
+                message_id=1,
+                status=CrmSyncStatus.retrying,
+                attempts=1,
+                next_attempt_at=datetime.now(UTC) - timedelta(seconds=30),
+            ),
+            CrmSyncItem(
+                id=2,
+                kind=KIND_INBOUND,
+                message_id=2,
+                status=CrmSyncStatus.done,
+                attempts=0,
+                next_attempt_at=datetime.now(UTC) - timedelta(minutes=5),
+            ),
+            CrmSyncItem(
+                id=3,
+                kind=KIND_INBOUND,
+                message_id=3,
+                status=CrmSyncStatus.failed,
+                attempts=5,
+                next_attempt_at=datetime.now(UTC) - timedelta(minutes=5),
+            ),
+        ]
+    )
     await session.commit()
 
     repo = SqlAlchemyCrmSyncRepository(session)
@@ -107,8 +134,12 @@ async def test_fetch_due_includes_retrying_excludes_terminal(session):
 async def test_mark_done_and_failed_and_reschedule(session):
     session.add(
         CrmSyncItem(
-            id=1, kind=KIND_INBOUND, message_id=1, status=CrmSyncStatus.queued,
-            attempts=0, next_attempt_at=datetime.now(UTC),
+            id=1,
+            kind=KIND_INBOUND,
+            message_id=1,
+            status=CrmSyncStatus.queued,
+            attempts=0,
+            next_attempt_at=datetime.now(UTC),
         )
     )
     await session.commit()
@@ -139,8 +170,12 @@ async def test_reschedule_truncates_long_error(session):
     валит UPDATE на postgres, item остаётся due — hot retry loop каждые 2с."""
     session.add(
         CrmSyncItem(
-            id=1, kind=KIND_INBOUND, message_id=1, status=CrmSyncStatus.queued,
-            attempts=0, next_attempt_at=datetime.now(UTC),
+            id=1,
+            kind=KIND_INBOUND,
+            message_id=1,
+            status=CrmSyncStatus.queued,
+            attempts=0,
+            next_attempt_at=datetime.now(UTC),
         )
     )
     await session.commit()
@@ -174,6 +209,9 @@ async def test_collect_joins_message_dialog_contact_manager(session):
     assert data.message_text == "Привет"
     assert data.sender_name == "Иван"
     assert data.sender_phone == "+7999"
+    assert data.sender_first_name == "Иван"
+    assert data.sender_last_name == "Петров"
+    assert data.sender_username == "ivan_p"
     assert data.assigned_b24_user_id == 15
     assert data.messenger is Messenger.tg
     assert data.crm_contact_id is None
@@ -192,7 +230,10 @@ async def test_apply_inbound_result_updates_all_three_rows(session):
     repo = SqlAlchemyCrmSyncRepository(session)
 
     await repo.apply_inbound_result(
-        100, contact_id=42, deal_id=500, timeline_comment_id=999,
+        100,
+        contact_id=42,
+        deal_id=500,
+        timeline_comment_id=999,
     )
 
     await session.reset()
@@ -216,7 +257,10 @@ async def test_apply_inbound_result_none_fields_untouched(session):
 
     repo = SqlAlchemyCrmSyncRepository(session)
     await repo.apply_inbound_result(
-        100, contact_id=42, deal_id=None, timeline_comment_id=None,
+        100,
+        contact_id=42,
+        deal_id=None,
+        timeline_comment_id=None,
     )
 
     await session.reset()

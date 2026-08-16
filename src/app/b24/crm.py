@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from app.b24.client import Bitrix24Client
+from app.b24.client import Bitrix24Client, Bitrix24Error
 
 # entityTypeId для универсального метода crm.item.add
 ENTITY_LEAD = 1
@@ -37,9 +37,7 @@ class CrmService:
     def __init__(self, client: Bitrix24Client):
         self._client = client
 
-    async def find_contact_by_phone(
-        self, auth_token: str, phone: str
-    ) -> ContactInfo | None:
+    async def find_contact_by_phone(self, auth_token: str, phone: str) -> ContactInfo | None:
         """Поиск контакта по номеру телефона через crm.duplicate.findbyComm.
 
         Реальный ответ findbyComm — dict вида ``{"CONTACT": [ids], "LEAD": [...], ...}``.
@@ -59,7 +57,9 @@ class CrmService:
 
         # Достаём имя контакта через crm.contact.get.
         detail = await self._client.call(
-            "crm.contact.get", auth_token=auth_token, params={"id": contact_id},
+            "crm.contact.get",
+            auth_token=auth_token,
+            params={"id": contact_id},
         )
         if detail is None:
             return ContactInfo(id=contact_id)
@@ -89,7 +89,9 @@ class CrmService:
         """
         try:
             detail = await self._client.call(
-                "crm.contact.get", auth_token=auth_token, params={"id": contact_id},
+                "crm.contact.get",
+                auth_token=auth_token,
+                params={"id": contact_id},
             )
         except Exception:  # noqa: BLE001 - контакт мог быть удалён в B24
             return None
@@ -99,29 +101,63 @@ class CrmService:
         return ContactInfo(id=contact_id, name=name)
 
     async def create_contact(
-        self, auth_token: str, name: str, phone: str,
-        assigned_by_id: int, source: str | None = "telegram",
+        self,
+        auth_token: str,
+        name: str,
+        phone: str,
+        assigned_by_id: int,
+        source: str | None = "telegram",
+        *,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        username: str | None = None,
     ) -> ContactInfo:
+        """Создать контакт (классический crm.contact.add).
+
+        НЕ crm.item.add: универсальный метод молча выбрасывает мульти-поля
+        PHONE/IM (проверено на проде — контакт создавался с HAS_PHONE=N),
+        из-за этого же не работал дедуп findbyComm по телефону. ``name`` —
+        отображаемое имя целиком; при наличии раздельных first/last пишем их
+        в NAME/LAST_NAME (каноника CRM), иначе всё в NAME.
+        """
         fields: dict[str, Any] = {
-            "NAME": name,
+            "NAME": first_name or name,
             "ASSIGNED_BY_ID": assigned_by_id,
-            "PHONE": [{"VALUE": phone, "VALUE_TYPE": "MOBILE"}],
         }
-        # SOURCE_ID должен существовать в справочнике портала; для каналов без
-        # своего источника (MAX) просто не передаём — B24 возьмёт дефолт.
+        if last_name:
+            fields["LAST_NAME"] = last_name
+        if phone:
+            fields["PHONE"] = [{"VALUE": phone, "VALUE_TYPE": "MOBILE"}]
+        if username:
+            fields["IM"] = [{"VALUE": username, "VALUE_TYPE": "TELEGRAM"}]
+        # SOURCE_ID обязан существовать в справочнике портала; для каналов без
+        # своего источника просто не передаём — B24 возьмёт дефолт.
         if source:
             fields["SOURCE_ID"] = source.upper()
-        result = await self._client.call(
-            "crm.item.add",
-            auth_token=auth_token,
-            params={"entityTypeId": ENTITY_CONTACT, "fields": fields},
+        try:
+            result = await self._client.call(
+                "crm.contact.add",
+                auth_token=auth_token,
+                params={"fields": fields},
+            )
+        except Bitrix24Error as exc:
+            # Источника может не быть в справочнике (например, MAX до запуска
+            # scripts/add_max_source.py) — косметика не должна ронять создание
+            # карточки: ретраим один раз без SOURCE_ID.
+            if not source or "SOURCE" not in str(exc).upper():
+                raise
+            result = await self._client.call(
+                "crm.contact.add",
+                auth_token=auth_token,
+                params={"fields": {k: v for k, v in fields.items() if k != "SOURCE_ID"}},
+            )
+        # crm.contact.add возвращает id напрямую (не {"item": {...}}).
+        return ContactInfo(
+            id=int(result),
+            name=" ".join(p for p in (first_name, last_name) if p) or name,
         )
-        item = result.get("item", result) if isinstance(result, dict) else {}
-        return ContactInfo(id=int(item.get("id", 0)), name=item.get("title"))
 
-    async def find_open_deal_for_contact(
-        self, auth_token: str, contact_id: int
-    ) -> DealInfo | None:
+    async def find_open_deal_for_contact(self, auth_token: str, contact_id: int) -> DealInfo | None:
         """Найти ОТКРЫТУЮ сделку контакта (новейшую по id).
 
         Идемпотентность process_inbound: существующий клиент, у которого уже
@@ -145,7 +181,11 @@ class CrmService:
         return DealInfo(id=int(it["id"]), title=it.get("title"))
 
     async def create_deal(
-        self, auth_token: str, title: str, contact_id: int, assigned_by_id: int,
+        self,
+        auth_token: str,
+        title: str,
+        contact_id: int,
+        assigned_by_id: int,
     ) -> DealInfo:
         fields = {
             "TITLE": title,
@@ -162,7 +202,11 @@ class CrmService:
         return DealInfo(id=int(item.get("id", 0)), title=item.get("title"))
 
     async def add_timeline_comment(
-        self, auth_token: str, entity_type: str, entity_id: int, comment: str,
+        self,
+        auth_token: str,
+        entity_type: str,
+        entity_id: int,
+        comment: str,
     ) -> int:
         result = await self._client.call(
             "crm.timeline.comment.add",

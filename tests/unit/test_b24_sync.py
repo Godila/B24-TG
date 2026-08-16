@@ -15,6 +15,32 @@ def _make_sync(crm, im):
 
 
 @pytest.mark.asyncio
+async def test_new_contact_channel_data_passed_to_create():
+    """Split-имя и @username доходят до create_contact (для NAME/LAST_NAME/IM)."""
+    crm = AsyncMock()
+    crm.find_contact_by_phone = AsyncMock(return_value=None)
+    crm.create_contact = AsyncMock(return_value=ContactInfo(id=77, name="Иван"))
+    crm.create_deal = AsyncMock(return_value=DealInfo(id=100, title="TG: Иван"))
+    crm.add_timeline_comment = AsyncMock(return_value=999)
+    im = AsyncMock()
+
+    sync = _make_sync(crm, im)
+    await sync.process_inbound(
+        sender_name="Иван Петров",
+        sender_phone="+79991234567",
+        message_text="Здравствуйте",
+        assigned_b24_user_id=1,
+        sender_first_name="Иван",
+        sender_last_name="Петров",
+        sender_username="ivan_p",
+    )
+    kwargs = crm.create_contact.call_args.kwargs
+    assert kwargs["first_name"] == "Иван"
+    assert kwargs["last_name"] == "Петров"
+    assert kwargs["username"] == "ivan_p"
+
+
+@pytest.mark.asyncio
 async def test_new_contact_creates_contact_and_deal_and_timeline():
     crm = AsyncMock()
     crm.find_contact_by_phone = AsyncMock(return_value=None)  # новый клиент
@@ -27,8 +53,10 @@ async def test_new_contact_creates_contact_and_deal_and_timeline():
 
     sync = _make_sync(crm, im)
     result = await sync.process_inbound(
-        sender_name="Иван", sender_phone="+79991234567",
-        message_text="Здравствуйте", assigned_b24_user_id=1,
+        sender_name="Иван",
+        sender_phone="+79991234567",
+        message_text="Здравствуйте",
+        assigned_b24_user_id=1,
     )
 
     crm.create_contact.assert_awaited_once()
@@ -48,17 +76,17 @@ async def test_existing_contact_reuses_open_deal():
     в неё (раньше deal_id навсегда оставался None)."""
     crm = AsyncMock()
     crm.find_contact_by_phone = AsyncMock(return_value=ContactInfo(id=42, name="Иван"))
-    crm.find_open_deal_for_contact = AsyncMock(
-        return_value=DealInfo(id=100, title="Старая сделка")
-    )
+    crm.find_open_deal_for_contact = AsyncMock(return_value=DealInfo(id=100, title="Старая сделка"))
     crm.add_timeline_comment = AsyncMock(return_value=888)
 
     im = AsyncMock()
 
     sync = _make_sync(crm, im)
     result = await sync.process_inbound(
-        sender_name="Иван", sender_phone="+79991234567",
-        message_text="Ещё вопрос", assigned_b24_user_id=1,
+        sender_name="Иван",
+        sender_phone="+79991234567",
+        message_text="Ещё вопрос",
+        assigned_b24_user_id=1,
     )
 
     crm.create_contact.assert_not_awaited()
@@ -88,8 +116,10 @@ async def test_existing_contact_without_open_deal_comments_into_contact():
 
     sync = _make_sync(crm, im)
     result = await sync.process_inbound(
-        sender_name="Иван", sender_phone="+79991234567",
-        message_text="Вопрос", assigned_b24_user_id=1,
+        sender_name="Иван",
+        sender_phone="+79991234567",
+        message_text="Вопрос",
+        assigned_b24_user_id=1,
     )
 
     crm.create_deal.assert_not_awaited()
@@ -107,8 +137,10 @@ async def test_process_outbound_comments_into_deal():
     sync = _make_sync(crm, AsyncMock())
 
     comment_id = await sync.process_outbound(
-        dialog_deal_id=100, dialog_entity_type="deal",
-        contact_id=42, text="Ответ менеджера",
+        dialog_deal_id=100,
+        dialog_entity_type="deal",
+        contact_id=42,
+        text="Ответ менеджера",
     )
 
     assert comment_id == 555
@@ -127,8 +159,10 @@ async def test_process_outbound_falls_back_to_contact_card():
     sync = _make_sync(crm, AsyncMock())
 
     comment_id = await sync.process_outbound(
-        dialog_deal_id=None, dialog_entity_type=None,
-        contact_id=42, text="Ответ",
+        dialog_deal_id=None,
+        dialog_entity_type=None,
+        contact_id=42,
+        text="Ответ",
     )
 
     assert comment_id == 556
@@ -144,8 +178,10 @@ async def test_process_outbound_without_entities_returns_none():
     sync = _make_sync(crm, AsyncMock())
 
     comment_id = await sync.process_outbound(
-        dialog_deal_id=None, dialog_entity_type=None,
-        contact_id=None, text="Ответ",
+        dialog_deal_id=None,
+        dialog_entity_type=None,
+        contact_id=None,
+        text="Ответ",
     )
 
     assert comment_id is None
@@ -160,7 +196,10 @@ async def test_process_outbound_without_token_returns_none():
     sync = Bitrix24Sync(token_mgr=token_mgr, crm=crm, im=AsyncMock())
 
     comment_id = await sync.process_outbound(
-        dialog_deal_id=1, dialog_entity_type="deal", contact_id=2, text="x",
+        dialog_deal_id=1,
+        dialog_entity_type="deal",
+        contact_id=2,
+        text="x",
     )
 
     assert comment_id is None
@@ -168,6 +207,7 @@ async def test_process_outbound_without_token_returns_none():
 
 
 # --- Режимы таймлайна (app_settings.timeline_mode) ---------------------- #
+
 
 def _crm_new_contact():
     crm = AsyncMock()
@@ -181,9 +221,7 @@ def _crm_new_contact():
 def _crm_existing_contact():
     crm = AsyncMock()
     crm.find_contact_by_phone = AsyncMock(return_value=ContactInfo(id=42, name="Иван"))
-    crm.find_open_deal_for_contact = AsyncMock(
-        return_value=DealInfo(id=100, title="Старая")
-    )
+    crm.find_open_deal_for_contact = AsyncMock(return_value=DealInfo(id=100, title="Старая"))
     crm.add_timeline_comment = AsyncMock(return_value=888)
     return crm
 
@@ -193,8 +231,10 @@ async def test_timeline_mode_first_only_first_message_commented():
     # Первое сообщение нового диалога — комментарий с маркером.
     sync = _make_sync(_crm_new_contact(), AsyncMock())
     result = await sync.process_inbound(
-        sender_name="Иван", sender_phone="+79991234567",
-        message_text="Здравствуйте", assigned_b24_user_id=1,
+        sender_name="Иван",
+        sender_phone="+79991234567",
+        message_text="Здравствуйте",
+        assigned_b24_user_id=1,
         timeline_mode="first",
     )
     sync._crm.add_timeline_comment.assert_awaited_once()
@@ -206,8 +246,10 @@ async def test_timeline_mode_first_only_first_message_commented():
     # Второе сообщение (контакт уже известен) — без комментария.
     sync2 = _make_sync(_crm_existing_contact(), AsyncMock())
     result2 = await sync2.process_inbound(
-        sender_name="Иван", sender_phone="+79991234567",
-        message_text="Ещё вопрос", assigned_b24_user_id=1,
+        sender_name="Иван",
+        sender_phone="+79991234567",
+        message_text="Ещё вопрос",
+        assigned_b24_user_id=1,
         timeline_mode="first",
     )
     sync2._crm.add_timeline_comment.assert_not_awaited()
@@ -218,8 +260,10 @@ async def test_timeline_mode_first_only_first_message_commented():
 async def test_timeline_mode_none_no_comments():
     sync = _make_sync(_crm_new_contact(), AsyncMock())
     result = await sync.process_inbound(
-        sender_name="Иван", sender_phone="+7",
-        message_text="привет", assigned_b24_user_id=1,
+        sender_name="Иван",
+        sender_phone="+7",
+        message_text="привет",
+        assigned_b24_user_id=1,
         timeline_mode="none",
     )
     sync._crm.add_timeline_comment.assert_not_awaited()
@@ -233,8 +277,10 @@ async def test_timeline_mode_none_no_comments():
 async def test_timeline_mode_all_comment_on_every_message():
     sync = _make_sync(_crm_existing_contact(), AsyncMock())
     await sync.process_inbound(
-        sender_name="Иван", sender_phone="+7",
-        message_text="второе сообщение", assigned_b24_user_id=1,
+        sender_name="Иван",
+        sender_phone="+7",
+        message_text="второе сообщение",
+        assigned_b24_user_id=1,
         timeline_mode="all",
     )
     sync._crm.add_timeline_comment.assert_awaited_once()
@@ -252,8 +298,11 @@ async def test_outbound_timeline_mode_first_and_none_skip_comment():
         crm = AsyncMock()
         sync = Bitrix24Sync(token_mgr=token_mgr, crm=crm, im=AsyncMock())
         result = await sync.process_outbound(
-            dialog_deal_id=100, dialog_entity_type="deal",
-            contact_id=42, text="ответ", timeline_mode=mode,
+            dialog_deal_id=100,
+            dialog_entity_type="deal",
+            contact_id=42,
+            text="ответ",
+            timeline_mode=mode,
         )
         assert result is None
         crm.add_timeline_comment.assert_not_awaited()

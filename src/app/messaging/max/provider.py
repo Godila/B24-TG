@@ -34,6 +34,7 @@ from app.messaging.max.protocol import (
 )
 from app.messaging.max.push_parser import (
     contact_display_name,
+    contact_name_parts,
     contact_phone,
     parse_message_push,
 )
@@ -94,13 +95,11 @@ class MaxUserProvider(MessengerProvider):
         self._push_worker: asyncio.Task | None = None
         # Кэши обогащения: chatId → диалог ли; userId → (имя, телефон).
         self._chat_is_dialog_cache: dict[str, bool] = {}
-        self._sender_cache: dict[int, tuple[str | None, str | None]] = {}
+        self._sender_cache: dict[int, tuple[str | None, str | None, str | None, str | None]] = {}
         # Один seam на все случаи (первое подключение И реконнекты) —
         # тесты подменяют фабрику целиком, реальной сети в юнит-тестах нет.
         self._client_factory = client_factory or (
-            lambda: MaxWsClient(
-                url=ws_url, headers=headers, request_timeout=request_timeout
-            )
+            lambda: MaxWsClient(url=ws_url, headers=headers, request_timeout=request_timeout)
         )
         self._client = self._client_factory()
         self._client.on_push(self._on_push)
@@ -227,15 +226,15 @@ class MaxUserProvider(MessengerProvider):
     async def _connect_once(self) -> None:
         await self._client.connect()
         await self._client.request(
-            OP_INIT, init_payload(self._device_id, self._user_agent),
+            OP_INIT,
+            init_payload(self._device_id, self._user_agent),
             timeout=self._request_timeout,
         )
-        await self._client.request(
-            OP_LOGIN, login_payload(self._token), timeout=20.0
-        )
+        await self._client.request(OP_LOGIN, login_payload(self._token), timeout=20.0)
         logger.info(
             "MAX online: device=%s… user_id=%s",
-            self._device_id[:8], self._own_user_id,
+            self._device_id[:8],
+            self._own_user_id,
         )
 
     async def _supervise_loop(self) -> None:
@@ -249,18 +248,14 @@ class MaxUserProvider(MessengerProvider):
                 # Тишина >15с — шлём свой ping (авто-pong покрывает только
                 # серверные пинги).
                 if time.monotonic() - self._client.last_send > self._heartbeat_idle_sec:
-                    await self._client.request(
-                        OP_PING, {"interactive": True}, timeout=10.0
-                    )
+                    await self._client.request(OP_PING, {"interactive": True}, timeout=10.0)
                 await asyncio.sleep(self._heartbeat_tick_sec)
             except asyncio.CancelledError:
                 raise
             except MaxAuthError as exc:
                 self._dead = True
                 await self._safe_close_client()
-                logger.error(
-                    "MAX токен отозван — провайдер мёртв (нужен новый QR): %s", exc
-                )
+                logger.error("MAX токен отозван — провайдер мёртв (нужен новый QR): %s", exc)
                 return
             except Exception as exc:  # noqa: BLE001 - реконнект переживает любой сбой
                 # ГРАБЛЯ: если LOGIN упал при живом транспорте (throttle/
@@ -294,8 +289,7 @@ class MaxUserProvider(MessengerProvider):
             except asyncio.CancelledError:
                 raise
             except Exception:  # одна ошибка не убивает воркер
-                logger.exception("MAX push-обработка упала (chat=%s)",
-                                 parsed.external_chat_id)
+                logger.exception("MAX push-обработка упала (chat=%s)", parsed.external_chat_id)
 
     async def _process_push(self, parsed) -> None:
         assert parsed.content_type is not None
@@ -304,7 +298,9 @@ class MaxUserProvider(MessengerProvider):
             # Лёгкий пуш без chat.type; CHAT_INFO сказал «не DIALOG» (группа).
             logger.info("MAX push пропущен: group_chat_info chat=%s", chat_id)
             return
-        name, phone = await self._resolve_sender(parsed.sender_external_id or "")
+        name, phone, first_name, last_name = await self._resolve_sender(
+            parsed.sender_external_id or ""
+        )
         await self._incoming_queue.put(
             IncomingMessage(
                 messenger=Messenger.max,
@@ -313,6 +309,8 @@ class MaxUserProvider(MessengerProvider):
                 sender_name=name,
                 sender_phone=phone,
                 sender_username=None,
+                sender_first_name=first_name,
+                sender_last_name=last_name,
                 content_type=parsed.content_type,
                 text=parsed.text,
                 external_message_id=parsed.external_message_id,
@@ -336,13 +334,15 @@ class MaxUserProvider(MessengerProvider):
             return False  # нечисловой chatId — точно не наш кейс
         try:
             resp = await self._client.request(
-                OP_CHAT_INFO, {"chatId": numeric},
+                OP_CHAT_INFO,
+                {"chatId": numeric},
                 timeout=self._request_timeout,
             )
         except Exception as exc:  # noqa: BLE001 - enrichment best-effort
             logger.warning(
                 "MAX CHAT_INFO не ответил (chat=%s): %s — считаем диалогом",
-                chat_id, exc,
+                chat_id,
+                exc,
             )
             return True
         chat = (resp.get("payload") or {}).get("chat") or {}
@@ -352,34 +352,37 @@ class MaxUserProvider(MessengerProvider):
 
     async def _resolve_sender(
         self, sender_external_id: str
-    ) -> tuple[str | None, str | None]:
-        """Имя+телефон отправителя (GET_CONTACTS, кэш по userId).
+    ) -> tuple[str | None, str | None, str | None, str | None]:
+        """Имя+телефон+split-имя отправителя (GET_CONTACTS, кэш по userId).
 
-        Best-effort: сбой → (None, None) без кэша — сообщение не теряем,
+        Best-effort: сбой → (None,)*4 без кэша — сообщение не теряем,
         попробуем снова на следующем сообщении.
         """
         try:
             uid = int(sender_external_id)
         except ValueError:
-            return None, None
+            return None, None, None, None
         cached = self._sender_cache.get(uid)
         if cached is not None:
             return cached
         try:
             resp = await self._client.request(
-                OP_GET_CONTACTS, {"contactIds": [uid]},
+                OP_GET_CONTACTS,
+                {"contactIds": [uid]},
                 timeout=self._request_timeout,
             )
         except Exception as exc:  # noqa: BLE001 - enrichment best-effort
             logger.warning(
                 "MAX GET_CONTACTS не ответил (user=%s): %s — имя не найдено",
-                sender_external_id, exc,
+                sender_external_id,
+                exc,
             )
-            return None, None
+            return None, None, None, None
         contacts = (resp.get("payload") or {}).get("contacts") or []
-        name = phone = None
+        name = phone = first = last = None
         if isinstance(contacts, list) and contacts and isinstance(contacts[0], dict):
             name = contact_display_name(contacts[0])
             phone = contact_phone(contacts[0])
-        self._sender_cache[uid] = (name, phone)
-        return name, phone
+            first, last = contact_name_parts(contacts[0])
+        self._sender_cache[uid] = (name, phone, first, last)
+        return name, phone, first, last

@@ -129,9 +129,7 @@ class IncomingHandler:
             await session.commit()
             return message_id
 
-    async def _upsert_contact(
-        self, session: AsyncSession, msg: IncomingMessage
-    ) -> Contact:
+    async def _upsert_contact(self, session: AsyncSession, msg: IncomingMessage) -> Contact:
         """Контакт: upsert по (messenger, external_user_id).
 
         Вызывается повторно после IntegrityError-rollback по диалогу: rollback
@@ -152,6 +150,8 @@ class IncomingHandler:
                 phone=msg.sender_phone,
                 username=msg.sender_username,
                 name=msg.sender_name,
+                first_name=msg.sender_first_name,
+                last_name=msg.sender_last_name,
             )
             session.add(contact)
             try:
@@ -179,4 +179,8 @@ class IncomingHandler:
                 contact.username = msg.sender_username
             if msg.sender_name:
                 contact.name = msg.sender_name
+            if msg.sender_first_name:
+                contact.first_name = msg.sender_first_name
+            if msg.sender_last_name:
+                contact.last_name = msg.sender_last_name
         return contact

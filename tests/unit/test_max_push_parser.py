@@ -59,9 +59,7 @@ def test_self_message_skipped():
 
 
 def test_group_chat_skipped():
-    parsed = parse_message_push(
-        _frame(_chat_payload(chat_type="GROUP")), own_user_id=1
-    )
+    parsed = parse_message_push(_frame(_chat_payload(chat_type="GROUP")), own_user_id=1)
     assert parsed.skip_reason == "group_group"
 
 
@@ -71,16 +69,12 @@ def test_favorites_skipped():
 
 
 def test_service_message_skipped():
-    parsed = parse_message_push(
-        _frame(_chat_payload(msg_type="SERVICE")), own_user_id=1
-    )
+    parsed = parse_message_push(_frame(_chat_payload(msg_type="SERVICE")), own_user_id=1)
     assert parsed.skip_reason == "service_service"
 
 
 def test_activity_push_skipped():
-    parsed = parse_message_push(
-        _frame({"chatId": 1, "userId": 2}, opcode=129), own_user_id=1
-    )
+    parsed = parse_message_push(_frame({"chatId": 1, "userId": 2}, opcode=129), own_user_id=1)
     assert parsed.skip_reason == "activity"
 
 
@@ -90,9 +84,7 @@ def test_unknown_opcode_skipped():
 
 
 def test_numeric_message_id_becomes_str():
-    parsed = parse_message_push(
-        _frame(_chat_payload(msg_id=117099065741753584)), own_user_id=1
-    )
+    parsed = parse_message_push(_frame(_chat_payload(msg_id=117099065741753584)), own_user_id=1)
     assert parsed.external_message_id == "117099065741753584"
 
 
@@ -111,9 +103,7 @@ def test_attach_voice_placeholder():
 
 
 def test_no_last_message_skipped():
-    parsed = parse_message_push(
-        _frame({"chatId": 5, "chat": {"type": "DIALOG"}}), own_user_id=1
-    )
+    parsed = parse_message_push(_frame({"chatId": 5, "chat": {"type": "DIALOG"}}), own_user_id=1)
     assert parsed.skip_reason == "no_message"
 
 
@@ -126,16 +116,21 @@ def test_reply_detected():
 
 # --- Лёгкая форма пуша (поймана живьём 2026-08-16 на e2e) --------------- #
 
+
 def test_light_push_payload_message_parsed():
     """2-е+ сообщения чата: {chatId, unread, message:{...}} без chat-объекта.
 
     Раньше парсер читал только chat.lastMessage — эти сообщения терялись."""
     payload = {
-        "chatId": 53007183, "unread": 1,
+        "chatId": 53007183,
+        "unread": 1,
         "message": {
-            "sender": 349157962, "id": "117106696678554959",
-            "time": 1786906382424, "text": "Геор ты угадал",
-            "type": "USER", "attaches": [],
+            "sender": 349157962,
+            "id": "117106696678554959",
+            "time": 1786906382424,
+            "text": "Геор ты угадал",
+            "type": "USER",
+            "attaches": [],
         },
     }
     parsed = parse_message_push(_frame(payload), own_user_id=401041669)
@@ -156,22 +151,26 @@ def test_full_push_chat_type_known():
 
 # --- Хелперы контакта (GET_CONTACTS, формат пойман живьём 2026-08-16) --- #
 
+
 def test_contact_display_name_prefers_full_name():
     from app.messaging.max.push_parser import contact_display_name
 
-    contact = {"names": [
-        {"name": "Тимур", "type": "ONEME"},
-        {"name": "Тимур Азизов", "type": "FULL_NAME"},
-    ]}
+    contact = {
+        "names": [
+            {"name": "Тимур", "type": "ONEME"},
+            {"name": "Тимур Азизов", "type": "FULL_NAME"},
+        ]
+    }
     assert contact_display_name(contact) == "Тимур Азизов"
 
 
 def test_contact_display_name_first_last_fallback():
     from app.messaging.max.push_parser import contact_display_name
 
-    assert contact_display_name(
-        {"names": [{"firstName": "Тимур", "lastName": "Азизов"}]}
-    ) == "Тимур Азизов"
+    assert (
+        contact_display_name({"names": [{"firstName": "Тимур", "lastName": "Азизов"}]})
+        == "Тимур Азизов"
+    )
     assert contact_display_name({"names": []}) is None
 
 
@@ -181,3 +180,26 @@ def test_contact_phone_extracted():
     contact = {"phones": [{"type": "MOBILE", "number": "+79990001122"}]}
     assert contact_phone(contact) == "+79990001122"
     assert contact_phone({"phones": []}) is None
+
+
+def test_contact_name_parts_prefers_full_name_entry():
+    from app.messaging.max.push_parser import contact_name_parts
+
+    contact = {
+        "names": [
+            {"firstName": "Т.", "type": "ONEME"},
+            {"firstName": "Тимур", "lastName": "Азизов", "type": "FULL_NAME"},
+        ]
+    }
+    assert contact_name_parts(contact) == ("Тимур", "Азизов")
+
+
+def test_contact_name_parts_first_available_entry():
+    from app.messaging.max.push_parser import contact_name_parts
+
+    assert contact_name_parts({"names": [{"firstName": "Тимур", "type": "ONEME"}]}) == (
+        "Тимур",
+        None,
+    )
+    assert contact_name_parts({"names": [{"name": "Тимур"}]}) == (None, None)
+    assert contact_name_parts({}) == (None, None)

@@ -4,9 +4,8 @@
 под Telegram: префикс заголовка сделки, текст уведомления, источник контакта.
 
 SOURCE_ID должен существовать в справочнике портала (crm.status.source);
-у «TELEGRAM» он стандартный, у «MAX» — нет, поэтому пока не передаём
-(контакт получит источник по умолчанию). Задать свой источник MAX можно
-в админке B24 и затем поменять здесь.
+«TELEGRAM» — стандартный, «MAX» добавляется scripts/add_max_source.py
+(пока записи нет, create_contact молча ретраит без источника).
 """
 
 from dataclasses import dataclass
@@ -23,10 +22,14 @@ class B24ChannelProfile:
 
 CHANNEL_PROFILES: dict[Messenger, B24ChannelProfile] = {
     Messenger.tg: B24ChannelProfile(
-        deal_prefix="TG: ", notify_label="Telegram", source_id="telegram",
+        deal_prefix="TG: ",
+        notify_label="Telegram",
+        source_id="telegram",
     ),
     Messenger.max: B24ChannelProfile(
-        deal_prefix="MAX: ", notify_label="MAX", source_id=None,
+        deal_prefix="MAX: ",
+        notify_label="MAX",
+        source_id="MAX",
     ),
 }
 

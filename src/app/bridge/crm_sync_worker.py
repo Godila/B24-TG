@@ -33,34 +33,32 @@ class CrmSyncData:
     """Данные сообщения (Message+Dialog+Contact+Manager), нужные воркеру."""
 
     message_text: str | None
-    sender_name: str | None        # Contact.name (для входящих)
-    sender_phone: str | None       # Contact.phone (для входящих)
-    crm_contact_id: int | None     # Contact.crm_contact_id (для исходящих)
-    crm_deal_id: int | None        # Dialog.crm_deal_id
-    crm_entity_type: str | None    # Dialog.crm_entity_type
+    sender_name: str | None  # Contact.name (для входящих)
+    sender_phone: str | None  # Contact.phone (для входящих)
+    crm_contact_id: int | None  # Contact.crm_contact_id (для исходящих)
+    crm_deal_id: int | None  # Dialog.crm_deal_id
+    crm_entity_type: str | None  # Dialog.crm_entity_type
     assigned_b24_user_id: int | None  # Manager.b24_user_id диалога
-    messenger: Messenger           # канал диалога (тексты/источник CRM)
+    messenger: Messenger  # канал диалога (тексты/источник CRM)
+    sender_first_name: str | None = None  # Contact.first_name (split для CRM NAME)
+    sender_last_name: str | None = None  # Contact.last_name (split для CRM LAST_NAME)
+    sender_username: str | None = None  # Contact.username → IM-поле CRM
 
 
 class CrmSyncRepository:
     """Абстракция доступа к очереди crm_sync (+ данные сообщения)."""
 
-    async def fetch_due(self, limit: int = 20) -> list[CrmSyncItem]:
-        ...
+    async def fetch_due(self, limit: int = 20) -> list[CrmSyncItem]: ...
 
-    async def mark_done(self, item: CrmSyncItem) -> None:
-        ...
+    async def mark_done(self, item: CrmSyncItem) -> None: ...
 
-    async def mark_failed(self, item: CrmSyncItem, error: str) -> None:
-        ...
+    async def mark_failed(self, item: CrmSyncItem, error: str) -> None: ...
 
     async def reschedule(
         self, item: CrmSyncItem, *, delay_seconds: int, error: str | None = None
-    ) -> None:
-        ...
+    ) -> None: ...
 
-    async def enqueue(self, *, kind: str, message_id: int) -> CrmSyncItem:
-        ...
+    async def enqueue(self, *, kind: str, message_id: int) -> CrmSyncItem: ...
 
     async def collect(self, message_id: int) -> CrmSyncData | None:
         """Собрать данные для синхронизации; None — сообщение не найдено."""
@@ -144,7 +142,8 @@ class CrmSyncWorker:
             # Сообщение удалено/не найдено — ретраи бессмысленны.
             logger.warning(
                 "crm_sync item %s: message_id=%s not found — terminal fail",
-                item.id, item.message_id,
+                item.id,
+                item.message_id,
             )
             await self._repo.mark_failed(item, "message_not_found")
             return
@@ -152,9 +151,9 @@ class CrmSyncWorker:
             # Без ответственного менеджера process_inbound вызвать нельзя;
             # менеджер не появится сам — терминально.
             logger.warning(
-                "crm_sync item %s: message_id=%s has no assigned manager — "
-                "terminal fail",
-                item.id, item.message_id,
+                "crm_sync item %s: message_id=%s has no assigned manager — terminal fail",
+                item.id,
+                item.message_id,
             )
             await self._repo.mark_failed(item, "no_assigned_manager")
             return
@@ -169,6 +168,9 @@ class CrmSyncWorker:
                 existing_contact_id=data.crm_contact_id,
                 existing_deal_id=data.crm_deal_id,
                 timeline_mode=timeline_mode,
+                sender_first_name=data.sender_first_name,
+                sender_last_name=data.sender_last_name,
+                sender_username=data.sender_username,
             )
             if result is None:
                 # Нет B24-токена (интеграция не установлена) — ретраибельно:
@@ -192,7 +194,8 @@ class CrmSyncWorker:
         if data is None:
             logger.warning(
                 "crm_sync item %s: message_id=%s not found — terminal fail",
-                item.id, item.message_id,
+                item.id,
+                item.message_id,
             )
             await self._repo.mark_failed(item, "message_not_found")
             return
@@ -221,11 +224,14 @@ class CrmSyncWorker:
         if item.attempts + 1 >= self._max_attempts:
             logger.error(
                 "crm_sync item %s (kind=%s, message_id=%s) failed permanently: %s",
-                item.id, item.kind, item.message_id, error,
+                item.id,
+                item.kind,
+                item.message_id,
+                error,
             )
             await self._repo.mark_failed(item, error)
             return
-        delay = 30 * (2 ** item.attempts)
+        delay = 30 * (2**item.attempts)
         await self._repo.reschedule(item, delay_seconds=delay, error=error)
 
 

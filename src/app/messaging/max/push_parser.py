@@ -57,14 +57,10 @@ def contact_display_name(contact: dict) -> str | None:
             if n.get("name"):
                 return str(n["name"])
         for n in entries:
-            combined = " ".join(
-                p for p in (n.get("firstName"), n.get("lastName")) if p
-            ).strip()
+            combined = " ".join(p for p in (n.get("firstName"), n.get("lastName")) if p).strip()
             if combined:
                 return combined
-    combined = " ".join(
-        p for p in (contact.get("firstName"), contact.get("lastName")) if p
-    ).strip()
+    combined = " ".join(p for p in (contact.get("firstName"), contact.get("lastName")) if p).strip()
     return combined or None
 
 
@@ -76,6 +72,27 @@ def contact_phone(contact: dict) -> str | None:
             if isinstance(p, dict) and p.get("number"):
                 return str(p["number"])
     return None
+
+
+def contact_name_parts(contact: dict) -> tuple[str | None, str | None]:
+    """(firstName, lastName) из объекта contact (ответ GET_CONTACTS).
+
+    Для CRM-карточки (NAME/LAST_NAME по отдельности). Берём из записи
+    names[] с типом FULL_NAME (паспортное имя), иначе из первой записи,
+    где они есть; без split — (None, None) и карточка получает отображаемое
+    имя целиком в NAME.
+    """
+    names = contact.get("names")
+    entries = [n for n in names if isinstance(n, dict)] if isinstance(names, list) else []
+    ordered = sorted(
+        entries,
+        key=lambda n: 0 if str(n.get("type") or "").upper() == "FULL_NAME" else 1,
+    )
+    for n in ordered:
+        first, last = n.get("firstName"), n.get("lastName")
+        if first or last:
+            return (str(first) if first else None, str(last) if last else None)
+    return (None, None)
 
 
 @dataclass(slots=True)
@@ -131,11 +148,7 @@ def parse_message_push(frame: dict, own_user_id: int | None) -> ParsedPush:
     payload = frame.get("payload") or {}
     chat = payload.get("chat") if isinstance(payload.get("chat"), dict) else {}
     # Полный пуш несёт chat.lastMessage; лёгкий (2-е+ сообщения) — payload.message.
-    msg = (
-        chat.get("lastMessage")
-        or payload.get("lastMessage")
-        or payload.get("message")
-    )
+    msg = chat.get("lastMessage") or payload.get("lastMessage") or payload.get("message")
     if not isinstance(msg, dict) or not msg:
         result.skip_reason = "no_message"
         return result

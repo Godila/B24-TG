@@ -61,7 +61,10 @@ async def test_inbound_success_applies_result_and_marks_done():
     sync = AsyncMock()
     sync.process_inbound = AsyncMock(
         return_value=SyncResult(
-            contact_id=42, deal_id=100, is_new=True, timeline_comment_id=999,
+            contact_id=42,
+            deal_id=100,
+            is_new=True,
+            timeline_comment_id=999,
         )
     )
     worker = CrmSyncWorker(repo=repo, b24sync=sync, max_attempts=5)
@@ -73,9 +76,11 @@ async def test_inbound_success_applies_result_and_marks_done():
     assert call["sender_phone"] == "+79991234567"
     assert call["message_text"] == "Привет"
     assert call["assigned_b24_user_id"] == 15
-
     repo.apply_inbound_result.assert_awaited_once_with(
-        11, contact_id=42, deal_id=100, timeline_comment_id=999,
+        11,
+        contact_id=42,
+        deal_id=100,
+        timeline_comment_id=999,
     )
     repo.mark_done.assert_awaited_once()
     repo.reschedule.assert_not_awaited()
@@ -173,9 +178,7 @@ async def test_inbound_no_assigned_manager_is_terminal():
 # ---------------------------------------------------------------------- #
 @pytest.mark.asyncio
 async def test_outbound_success_sets_comment_and_marks_done():
-    repo = _make_repo(
-        [_make_item(kind=KIND_OUTBOUND)], _make_data(message_text="Ответ менеджера")
-    )
+    repo = _make_repo([_make_item(kind=KIND_OUTBOUND)], _make_data(message_text="Ответ менеджера"))
     sync = AsyncMock()
     sync.process_outbound = AsyncMock(return_value=555)
 
@@ -183,8 +186,11 @@ async def test_outbound_success_sets_comment_and_marks_done():
     await worker._process_once()
 
     sync.process_outbound.assert_awaited_once_with(
-        dialog_deal_id=100, dialog_entity_type="deal",
-        contact_id=42, text="Ответ менеджера", timeline_mode="all",
+        dialog_deal_id=100,
+        dialog_entity_type="deal",
+        contact_id=42,
+        text="Ответ менеджера",
+        timeline_mode="all",
     )
     repo.set_timeline_comment.assert_awaited_once_with(11, 555)
     repo.mark_done.assert_awaited_once()
@@ -251,6 +257,26 @@ async def test_worker_passes_timeline_mode_to_sync():
     worker = CrmSyncWorker(repo=repo, b24sync=sync, max_attempts=5)
     await worker._process_once()
 
-    assert (
-        sync.process_inbound.call_args.kwargs.get("timeline_mode") == "first"
+    assert sync.process_inbound.call_args.kwargs.get("timeline_mode") == "first"
+
+
+@pytest.mark.asyncio
+async def test_inbound_passes_channel_profile_fields():
+    """Split-имя и @username из CrmSyncData доходят до process_inbound."""
+    data = _make_data(
+        sender_first_name="Иван",
+        sender_last_name="Петров",
+        sender_username="ivan_p",
     )
+    repo = _make_repo([_make_item()], data)
+    sync = AsyncMock()
+    sync.process_inbound = AsyncMock(
+        return_value=SyncResult(contact_id=42, deal_id=100, is_new=True)
+    )
+    worker = CrmSyncWorker(repo=repo, b24sync=sync, max_attempts=5)
+    await worker._process_once()
+
+    call = sync.process_inbound.call_args.kwargs
+    assert call["sender_first_name"] == "Иван"
+    assert call["sender_last_name"] == "Петров"
+    assert call["sender_username"] == "ivan_p"

@@ -33,8 +33,10 @@ class Contact(Base, TimestampMixin):
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    crm_contact_id: Mapped[int | None] = mapped_column(
-        Integer, nullable=True, index=True
-    )
+    # Раздельные имя/фамилия от канала (для CRM NAME/LAST_NAME); name —
+    # полное отображаемое имя (виджет, уведомления).
+    first_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    crm_contact_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
 
     dialogs: Mapped[list["Dialog"]] = relationship(back_populates="contact")

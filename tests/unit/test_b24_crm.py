@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.b24.client import Bitrix24Error
 from app.b24.crm import CrmService
 
 
@@ -36,17 +37,95 @@ async def test_find_contact_by_phone_not_found():
 @pytest.mark.asyncio
 async def test_create_contact():
     client = AsyncMock()
-    client.call = AsyncMock(return_value={"item": {"id": 77, "title": "Иван Петров"}})
+    client.call = AsyncMock(return_value=77)
     svc = CrmService(client)
     result = await svc.create_contact(
-        auth_token="t", name="Иван Петров", phone="+79991234567",
-        assigned_by_id=1, source="telegram",
+        auth_token="t",
+        name="Иван Петров",
+        phone="+79991234567",
+        assigned_by_id=1,
+        source="telegram",
     )
     assert result.id == 77
     client.call.assert_awaited_once()
     call_kwargs = client.call.call_args
-    assert call_kwargs.args[0] == "crm.item.add"
-    assert call_kwargs.kwargs["params"]["entityTypeId"] == 3  # CONTACT
+    # Классический crm.contact.add (crm.item.add молча теряет PHONE/IM).
+    assert call_kwargs.args[0] == "crm.contact.add"
+    fields = call_kwargs.kwargs["params"]["fields"]
+    assert fields["NAME"] == "Иван Петров"
+    assert fields["PHONE"] == [{"VALUE": "+79991234567", "VALUE_TYPE": "MOBILE"}]
+    assert fields["SOURCE_ID"] == "TELEGRAM"
+    assert "IM" not in fields and "LAST_NAME" not in fields
+
+
+@pytest.mark.asyncio
+async def test_create_contact_split_name_im_and_no_phone():
+    """Split-имя → NAME/LAST_NAME, username → IM; пустой телефон не пишем."""
+    client = AsyncMock()
+    client.call = AsyncMock(return_value=78)
+    svc = CrmService(client)
+    result = await svc.create_contact(
+        auth_token="t",
+        name="Иван Петров",
+        phone="",
+        assigned_by_id=1,
+        source=None,
+        first_name="Иван",
+        last_name="Петров",
+        username="ivan_p",
+    )
+    assert result.id == 78
+    assert result.name == "Иван Петров"
+    fields = client.call.call_args.kwargs["params"]["fields"]
+    assert fields["NAME"] == "Иван"
+    assert fields["LAST_NAME"] == "Петров"
+    assert fields["IM"] == [{"VALUE": "ivan_p", "VALUE_TYPE": "TELEGRAM"}]
+    assert "PHONE" not in fields
+    assert "SOURCE_ID" not in fields
+
+
+@pytest.mark.asyncio
+async def test_create_contact_bad_source_retries_without_source():
+    """Неточного SOURCE_ID (нет в справочнике) — ретрай без источника."""
+    client = AsyncMock()
+
+    async def call(method, auth_token, params=None, **kw):
+        if "SOURCE_ID" in params["fields"]:
+            raise Bitrix24Error(
+                code="ERROR_SOURCE_ID",
+                description="SOURCE_ID is not found in dictionary",
+            )
+        return 79
+
+    client.call = AsyncMock(side_effect=call)
+    svc = CrmService(client)
+    result = await svc.create_contact(
+        auth_token="t",
+        name="Тимур",
+        phone="",
+        assigned_by_id=1,
+        source="MAX",
+    )
+    assert result.id == 79
+    assert client.call.await_count == 2
+    assert "SOURCE_ID" not in client.call.call_args.kwargs["params"]["fields"]
+
+
+@pytest.mark.asyncio
+async def test_create_contact_other_error_not_retried():
+    """Чужая ошибка B24 — ретрая без источника быть не должно."""
+    client = AsyncMock()
+    client.call = AsyncMock(side_effect=Bitrix24Error(code="ACCESS_DENIED", description=""))
+    svc = CrmService(client)
+    with pytest.raises(Bitrix24Error):
+        await svc.create_contact(
+            auth_token="t",
+            name="Иван",
+            phone="+7999",
+            assigned_by_id=1,
+            source="telegram",
+        )
+    assert client.call.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -55,7 +134,10 @@ async def test_create_deal():
     client.call = AsyncMock(return_value={"item": {"id": 100, "title": "Сделка"}})
     svc = CrmService(client)
     result = await svc.create_deal(
-        auth_token="t", title="TG: Иван Петров", contact_id=77, assigned_by_id=1,
+        auth_token="t",
+        title="TG: Иван Петров",
+        contact_id=77,
+        assigned_by_id=1,
     )
     assert result.id == 100
     call_kwargs = client.call.call_args
@@ -98,7 +180,10 @@ async def test_add_timeline_comment():
     client.call = AsyncMock(return_value=999)
     svc = CrmService(client)
     comment_id = await svc.add_timeline_comment(
-        auth_token="t", entity_type="deal", entity_id=100, comment="Текст сообщения",
+        auth_token="t",
+        entity_type="deal",
+        entity_id=100,
+        comment="Текст сообщения",
     )
     assert comment_id == 999
     call_kwargs = client.call.call_args

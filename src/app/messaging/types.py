@@ -35,6 +35,10 @@ class IncomingMessage:
     external_message_id: str | None = None
     timestamp: datetime | None = None
     is_reply: bool = False  # True если это ответ клиента (диалог уже существует)
+    # Раздельные имя/фамилия, если канал дал (TG: first/last; MAX: names[]);
+    # sender_name остаётся полным отображаемым именем (виджет, уведомления).
+    sender_first_name: str | None = None
+    sender_last_name: str | None = None
 
 
 @dataclass

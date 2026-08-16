@@ -25,8 +25,9 @@ class FakeMaxClient:
     (CHAT_INFO/GET_CONTACTS); отсутствующие opcode → пустой payload.
     """
 
-    def __init__(self, *, login_error: Exception | None = None,
-                 scripted: dict[int, dict] | None = None):
+    def __init__(
+        self, *, login_error: Exception | None = None, scripted: dict[int, dict] | None = None
+    ):
         self.requests: list[tuple[int, dict]] = []
         self._login_error = login_error
         self.scripted = scripted or {}
@@ -50,11 +51,12 @@ class FakeMaxClient:
     def on_push(self, cb) -> None:
         self._on_push = cb
 
-    async def request(self, opcode: int, payload: dict | None = None, *, timeout: float | None = None) -> dict:
+    async def request(
+        self, opcode: int, payload: dict | None = None, *, timeout: float | None = None
+    ) -> dict:
         self.requests.append((opcode, payload or {}))
         if opcode in self.scripted:
-            return {"cmd": 1, "seq": 0, "opcode": opcode,
-                    "payload": self.scripted[opcode]}
+            return {"cmd": 1, "seq": 0, "opcode": opcode, "payload": self.scripted[opcode]}
         if opcode == OP_INIT:
             return {"cmd": 1, "seq": 0, "opcode": opcode, "payload": {}}
         if opcode == OP_LOGIN:
@@ -63,7 +65,9 @@ class FakeMaxClient:
             return {"cmd": 1, "seq": 0, "opcode": opcode, "payload": {"profile": {"id": 1}}}
         if opcode == OP_MSG_SEND:
             return {
-                "cmd": 1, "seq": 0, "opcode": opcode,
+                "cmd": 1,
+                "seq": 0,
+                "opcode": opcode,
                 "payload": {"message": {"id": 117099065741753584, "time": 1786789943569}},
             }
         return {"cmd": 1, "seq": 0, "opcode": opcode, "payload": {}}
@@ -149,13 +153,23 @@ async def test_push_becomes_incoming_message():
     await provider.connect()
     try:
         frame = {
-            "ver": 11, "cmd": 0, "seq": 1, "opcode": 128,
+            "ver": 11,
+            "cmd": 0,
+            "seq": 1,
+            "opcode": 128,
             "payload": {
                 "chatId": 422733600,
-                "chat": {"type": "DIALOG", "lastMessage": {
-                    "sender": 248843813, "id": "m1", "time": 1786792936720,
-                    "text": "привет", "type": "USER", "attaches": [],
-                }},
+                "chat": {
+                    "type": "DIALOG",
+                    "lastMessage": {
+                        "sender": 248843813,
+                        "id": "m1",
+                        "time": 1786792936720,
+                        "text": "привет",
+                        "type": "USER",
+                        "attaches": [],
+                    },
+                },
             },
         }
         await fake._on_push(frame)
@@ -177,10 +191,19 @@ async def test_self_push_filtered():
     try:
         frame = {
             "opcode": 128,
-            "payload": {"chatId": 1, "chat": {"type": "DIALOG", "lastMessage": {
-                "sender": 401041669, "id": "m2", "text": "мой эхо",
-                "type": "USER", "attaches": [],
-            }}},
+            "payload": {
+                "chatId": 1,
+                "chat": {
+                    "type": "DIALOG",
+                    "lastMessage": {
+                        "sender": 401041669,
+                        "id": "m2",
+                        "text": "мой эхо",
+                        "type": "USER",
+                        "attaches": [],
+                    },
+                },
+            },
         }
         await fake._on_push(frame)
         assert provider._incoming_queue.empty()
@@ -193,9 +216,16 @@ def _light_push(chat_id: int, sender: int, msg_id: str, text: str) -> dict:
     return {
         "opcode": 128,
         "payload": {
-            "chatId": chat_id, "unread": 1,
-            "message": {"sender": sender, "id": msg_id, "time": 1786906382424,
-                        "text": text, "type": "USER", "attaches": []},
+            "chatId": chat_id,
+            "unread": 1,
+            "message": {
+                "sender": sender,
+                "id": msg_id,
+                "time": 1786906382424,
+                "text": text,
+                "type": "USER",
+                "attaches": [],
+            },
         },
     }
 
@@ -205,14 +235,20 @@ async def test_light_push_enriches_name_and_checks_chat_type():
     """Лёгкий пуш: CHAT_INFO проверяет тип, GET_CONTACTS даёт имя/телефон
 
     (поймано живьём 2026-08-16: 2-е+ сообщения приходят как payload.message)."""
-    fake = FakeMaxClient(scripted={
-        OP_CHAT_INFO: {"chat": {"type": "DIALOG", "id": 53007183}},
-        OP_GET_CONTACTS: {"contacts": [{
-            "id": 349157962,
-            "names": [{"name": "Тимур", "firstName": "Тимур", "type": "ONEME"}],
-            "phones": [{"number": "+79990001122", "type": "MOBILE"}],
-        }]},
-    })
+    fake = FakeMaxClient(
+        scripted={
+            OP_CHAT_INFO: {"chat": {"type": "DIALOG", "id": 53007183}},
+            OP_GET_CONTACTS: {
+                "contacts": [
+                    {
+                        "id": 349157962,
+                        "names": [{"name": "Тимур", "firstName": "Тимур", "type": "ONEME"}],
+                        "phones": [{"number": "+79990001122", "type": "MOBILE"}],
+                    }
+                ]
+            },
+        }
+    )
     provider = _make_provider(fake)
     await provider.connect()
     try:
@@ -220,6 +256,8 @@ async def test_light_push_enriches_name_and_checks_chat_type():
         msg = await asyncio.wait_for(provider._incoming_queue.get(), timeout=1)
         assert msg.sender_name == "Тимур"
         assert msg.sender_phone == "+79990001122"
+        assert msg.sender_first_name == "Тимур"
+        assert msg.sender_last_name is None
         assert msg.external_message_id == "m9"
         # Обогащение спросило и тип чата, и контакт.
         ops = [op for op, _ in fake.requests]
@@ -236,9 +274,11 @@ async def test_light_push_enriches_name_and_checks_chat_type():
 
 @pytest.mark.asyncio
 async def test_light_push_group_filtered_by_chat_info():
-    fake = FakeMaxClient(scripted={
-        OP_CHAT_INFO: {"chat": {"type": "GROUP", "id": 77}},
-    })
+    fake = FakeMaxClient(
+        scripted={
+            OP_CHAT_INFO: {"chat": {"type": "GROUP", "id": 77}},
+        }
+    )
     provider = _make_provider(fake)
     await provider.connect()
     try:
@@ -255,10 +295,12 @@ async def test_push_order_preserved_with_slow_enrichment():
     """Первое сообщение ждёт CHAT_INFO/GET_CONTACTS — второе не должно
 
     обогнать первое в incoming-очереди (воркер последовательный)."""
-    fake = FakeMaxClient(scripted={
-        OP_CHAT_INFO: {"chat": {"type": "DIALOG"}},
-        OP_GET_CONTACTS: {"contacts": [{"names": [{"name": "Тимур"}]}]},
-    })
+    fake = FakeMaxClient(
+        scripted={
+            OP_CHAT_INFO: {"chat": {"type": "DIALOG"}},
+            OP_GET_CONTACTS: {"contacts": [{"names": [{"name": "Тимур"}]}]},
+        }
+    )
     provider = _make_provider(fake)
     await provider.connect()
     try:

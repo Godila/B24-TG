@@ -61,6 +61,9 @@ class Bitrix24Sync:
         existing_contact_id: int | None = None,
         existing_deal_id: int | None = None,
         timeline_mode: str = "all",
+        sender_first_name: str | None = None,
+        sender_last_name: str | None = None,
+        sender_username: str | None = None,
     ) -> SyncResult | None:
         """Входящее сообщение → CRM.
 
@@ -71,6 +74,9 @@ class Bitrix24Sync:
         MAX-клиентов плодил бы дубли), если сделка связана — не ищем открытую.
         ``timeline_mode`` (app_settings): all/first/none — что писать в
         таймлайн (уведомление менеджеру режимом не трогается).
+        ``sender_first_name``/``sender_last_name``/``sender_username`` —
+        дополнительные данные канала: split-имя в NAME/LAST_NAME контакта,
+        @username (TG) — в мульти-поле IM.
         """
         token = await self._token_mgr.get_token()
         if token is None:
@@ -100,6 +106,9 @@ class Bitrix24Sync:
                 phone=sender_phone,
                 assigned_by_id=assigned_b24_user_id,
                 source=profile.source_id,
+                first_name=sender_first_name,
+                last_name=sender_last_name,
+                username=sender_username,
             )
             deal = await self._crm.create_deal(
                 auth,
@@ -119,16 +128,17 @@ class Bitrix24Sync:
         # 3. Запись в timeline по режиму администратора (app_settings).
         #    first: только сообщение, открывшее диалог (is_new); none: ничего.
         comment_id: int | None = None
-        write_comment = timeline_mode == "all" or (
-            timeline_mode == "first" and is_new
-        )
+        write_comment = timeline_mode == "all" or (timeline_mode == "first" and is_new)
         if write_comment:
             comment_text = message_text
             if timeline_mode == "first":
                 comment_text = f"💬 Диалог открыт ({profile.notify_label}): {message_text}"
             if deal_id is not None:
                 comment_id = await self._crm.add_timeline_comment(
-                    auth, entity_type="deal", entity_id=deal_id, comment=comment_text,
+                    auth,
+                    entity_type="deal",
+                    entity_id=deal_id,
+                    comment=comment_text,
                 )
             else:
                 comment_id = await self._crm.add_timeline_comment(
@@ -187,10 +197,16 @@ class Bitrix24Sync:
         if dialog_deal_id is not None:
             entity_type = dialog_entity_type or "deal"
             return await self._crm.add_timeline_comment(
-                auth, entity_type=entity_type, entity_id=dialog_deal_id, comment=comment,
+                auth,
+                entity_type=entity_type,
+                entity_id=dialog_deal_id,
+                comment=comment,
             )
         if contact_id is not None:
             return await self._crm.add_timeline_comment(
-                auth, entity_type="contact", entity_id=contact_id, comment=comment,
+                auth,
+                entity_type="contact",
+                entity_id=contact_id,
+                comment=comment,
             )
         return None

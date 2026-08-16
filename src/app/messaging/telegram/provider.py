@@ -19,8 +19,9 @@ class TelegramProvider(MessengerProvider):
     """Реализация MessengerProvider поверх Telethon (MTProto user-API).
     Один экземпляр = одна TG-сессия (один менеджер)."""
 
-    def __init__(self, api_id: int, api_hash: str, sessions_dir: str | Path,
-                 proxy: tuple | None = None):
+    def __init__(
+        self, api_id: int, api_hash: str, sessions_dir: str | Path, proxy: tuple | None = None
+    ):
         self._api_id = api_id
         self._api_hash = api_hash
         self._sessions_dir = Path(sessions_dir)
@@ -35,7 +36,9 @@ class TelegramProvider(MessengerProvider):
 
     async def connect(self) -> None:
         self._client = TelegramClient(
-            str(self.session_file), self._api_id, self._api_hash,
+            str(self.session_file),
+            self._api_id,
+            self._api_hash,
             proxy=self._proxy,
             # CRITICAL: авто-реконнект Telethon на «TCP жив, сервер рвёт
             # после рукопожатия» молотит реконнектами БЕЗ задержки и БЕЗ
@@ -56,9 +59,7 @@ class TelegramProvider(MessengerProvider):
             raise SessionRevokedError("TG session not authorized — нужен QR-онбординг")
         # incoming=True: только входящие. Без builder Telethon отдаёт сырые Update,
         # а без фильтра исходящие сообщения менеджера эхом шли бы как входящие.
-        self._client.add_event_handler(
-            self._on_new_message, events.NewMessage(incoming=True)
-        )
+        self._client.add_event_handler(self._on_new_message, events.NewMessage(incoming=True))
         logger.info("TelegramProvider connected")
 
     async def disconnect(self) -> None:
@@ -76,9 +77,7 @@ class TelegramProvider(MessengerProvider):
             self._client = None
 
     def is_connected(self) -> bool:
-        return bool(
-            self._client and self._client.is_connected()
-        )
+        return bool(self._client and self._client.is_connected())
 
     async def _on_new_message(self, event) -> None:
         """Handler событий Telethon NewMessage — кладёт в очередь."""
@@ -92,6 +91,8 @@ class TelegramProvider(MessengerProvider):
                 sender_name=self._full_name(sender),
                 sender_phone=getattr(sender, "phone", None),
                 sender_username=getattr(sender, "username", None),
+                sender_first_name=getattr(sender, "first_name", None),
+                sender_last_name=getattr(sender, "last_name", None),
                 content_type=ctype,
                 text=text,
                 external_message_id=str(event.message.id),

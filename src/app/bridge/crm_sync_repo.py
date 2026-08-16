@@ -31,9 +31,7 @@ async def get_timeline_mode(session_factory) -> str:
     """Прочитать app_settings.timeline_mode (нет строки/мусор — дефолт)."""
     async with session_factory() as s:
         row = (
-            await s.execute(
-                select(AppSetting).where(AppSetting.key == TIMELINE_MODE_KEY)
-            )
+            await s.execute(select(AppSetting).where(AppSetting.key == TIMELINE_MODE_KEY))
         ).scalar_one_or_none()
     value = row.value if row is not None else None
     return value if value in TIMELINE_MODES else TIMELINE_MODE_DEFAULT
@@ -45,9 +43,7 @@ async def set_timeline_mode(session_factory, mode: str) -> None:
         raise ValueError(f"bad timeline_mode: {mode!r}")
     async with session_factory() as s:
         row = (
-            await s.execute(
-                select(AppSetting).where(AppSetting.key == TIMELINE_MODE_KEY)
-            )
+            await s.execute(select(AppSetting).where(AppSetting.key == TIMELINE_MODE_KEY))
         ).scalar_one_or_none()
         if row is None:
             s.add(AppSetting(key=TIMELINE_MODE_KEY, value=mode))
@@ -85,11 +81,7 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
         now = datetime.now(UTC)
         stmt = (
             select(CrmSyncItem)
-            .where(
-                CrmSyncItem.status.in_(
-                    [CrmSyncStatus.queued, CrmSyncStatus.retrying]
-                )
-            )
+            .where(CrmSyncItem.status.in_([CrmSyncStatus.queued, CrmSyncStatus.retrying]))
             .where(CrmSyncItem.next_attempt_at <= now)
             .order_by(CrmSyncItem.next_attempt_at)
             .limit(limit)
@@ -145,6 +137,9 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
                 Message.text,
                 Contact.name,
                 Contact.phone,
+                Contact.first_name,
+                Contact.last_name,
+                Contact.username,
                 Contact.crm_contact_id,
                 Dialog.crm_deal_id,
                 Dialog.crm_entity_type,
@@ -163,6 +158,9 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
             message_text=row.text,
             sender_name=row.name,
             sender_phone=row.phone,
+            sender_first_name=row.first_name,
+            sender_last_name=row.last_name,
+            sender_username=row.username,
             crm_contact_id=row.crm_contact_id,
             crm_deal_id=row.crm_deal_id,
             crm_entity_type=row.crm_entity_type,
@@ -187,9 +185,11 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
         dialog_id = await self._session.scalar(
             select(Message.dialog_id).where(Message.id == message_id)
         )
-        contact_pk = await self._session.scalar(
-            select(Dialog.contact_id).where(Dialog.id == dialog_id)
-        ) if dialog_id is not None else None
+        contact_pk = (
+            await self._session.scalar(select(Dialog.contact_id).where(Dialog.id == dialog_id))
+            if dialog_id is not None
+            else None
+        )
 
         if timeline_comment_id is not None:
             await self._session.execute(
@@ -205,17 +205,13 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
             )
         if contact_pk is not None and contact_id is not None:
             await self._session.execute(
-                update(Contact)
-                .where(Contact.id == contact_pk)
-                .values(crm_contact_id=contact_id)
+                update(Contact).where(Contact.id == contact_pk).values(crm_contact_id=contact_id)
             )
         await self._session.commit()
 
     async def set_timeline_comment(self, message_id: int, comment_id: int) -> None:
         await self._session.execute(
-            update(Message)
-            .where(Message.id == message_id)
-            .values(timeline_comment_id=comment_id)
+            update(Message).where(Message.id == message_id).values(timeline_comment_id=comment_id)
         )
         await self._session.commit()
 
@@ -287,6 +283,4 @@ class WorkerCrmSyncRepository(CrmSyncRepository):
 
     async def set_timeline_comment(self, message_id: int, comment_id: int) -> None:
         async with self._session_factory() as s:
-            await SqlAlchemyCrmSyncRepository(s).set_timeline_comment(
-                message_id, comment_id
-            )
+            await SqlAlchemyCrmSyncRepository(s).set_timeline_comment(message_id, comment_id)
