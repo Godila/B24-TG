@@ -23,9 +23,7 @@ async def _test_client(create_app) -> tuple[TestClient, object]:
         from app.models import Base
 
         await conn.run_sync(Base.metadata.create_all)
-    SessionLocal = async_sessionmaker(
-        engine, class_=AsyncSession, expire_on_commit=False
-    )
+    SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     from app.db import get_session
 
@@ -45,6 +43,7 @@ async def client(monkeypatch):
     monkeypatch.setenv("DEV_MODE", "true")
     monkeypatch.setenv("CORS_ORIGINS", "https://b24-x.bitrix24.ru,http://localhost:5173")
     from app.config import get_settings
+
     get_settings.cache_clear()
     from app.web.app import create_app
 
@@ -75,6 +74,7 @@ async def test_cors_disabled_without_origins(monkeypatch):
     """Fail-closed: CORS_ORIGINS пуст → middleware не подключается, заголовков CORS нет."""
     monkeypatch.setenv("CORS_ORIGINS", "")
     from app.config import get_settings
+
     get_settings.cache_clear()
     from app.web.app import create_app
 
@@ -104,14 +104,30 @@ def test_dev_login_sets_cookie_and_redirects(client):
     cookie_header = r.headers.get("set-cookie", "")
     assert "btg_sess=" in cookie_header
     # Redirects to the static chat page.
-    assert "/static/" in r.headers.get("location", "") or "/placement" in r.headers.get("location", "")
+    assert "/static/" in r.headers.get("location", "") or "/placement" in r.headers.get(
+        "location", ""
+    )
+
+
+def test_dev_login_page_inbox_redirects_to_inbox(client):
+    """page=inbox — dev-вход в общий мессенджер без реального B24."""
+    r = client.get(
+        "/dev/login",
+        params={"b24_user_id": "15", "page": "inbox"},
+        follow_redirects=False,
+    )
+    assert r.status_code in (302, 307)
+    assert r.headers.get("location", "") == "/static/inbox.html"
+    assert "btg_sess=" in r.headers.get("set-cookie", "")
 
 
 def test_dev_login_disabled_in_prod(monkeypatch):
     monkeypatch.setenv("DEV_MODE", "false")
     from app.config import get_settings
+
     get_settings.cache_clear()
     from app.web.app import create_app
+
     client = TestClient(create_app())
     r = client.get("/dev/login", params={"b24_user_id": "15"}, follow_redirects=False)
     assert r.status_code == 404

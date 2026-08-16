@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ЧатМост — Чаты</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <!-- Раскладка «Чатов» подключается ПОВЕРХ style.css и переиспользует его
+       переменные/классы (.bubble*, .composer, .channel-badge…). Отдельный
+       файл — нулевой диф стилей прод-виджета сделки. -->
+  <link rel="stylesheet" href="/static/inbox.css">
+  <!-- Alpine.js vendored локально (см. комментарий в placement.html). -->
+  <script defer src="/static/vendor/alpine.min.js"></script>
+</head>
+<body>
+  <div id="inbox" x-data="inboxApp()" x-init="init()">
+    <!-- Левая панель: список диалогов -->
+    <aside class="inbox-list">
+      <div class="inbox-filters">
+        <button type="button" :class="{active: filter==='all'}" @click="filter='all'">Все</button>
+        <button type="button" :class="{active: filter==='tg'}" @click="filter='tg'">TG</button>
+        <button type="button" :class="{active: filter==='max'}" @click="filter='max'">MAX</button>
+      </div>
+      <!-- Supervisor: фильтр по ответственному (UX-11) -->
+      <div class="inbox-filters inbox-filters--managers" x-show="isSupervisor">
+        <button type="button" :class="{active: managerFilter === 0}" @click="managerFilter = 0">Все</button>
+        <template x-for="opt in managerOptions" :key="opt.id">
+          <button type="button" :class="{active: managerFilter === opt.id}"
+                  @click="managerFilter = opt.id" x-text="opt.name"></button>
+        </template>
+        <button type="button" :class="{active: managerFilter === -1}" @click="managerFilter = -1">Без ответственного</button>
+      </div>
+
+      <div class="empty" x-show="!loading && dialogs.length === 0">
+        <span>Здесь появятся диалоги, когда клиенты напишут вам в Telegram или MAX</span>
+      </div>
+      <div class="empty" x-show="!loading && dialogs.length > 0 && filteredDialogs.length === 0">
+        <span>Под текущие фильтры диалогов нет</span>
+      </div>
+
+      <template x-if="unansweredList.length > 0">
+        <div class="inbox-group">
+          <div class="inbox-section-title">Ожидают ответа</div>
+          <template x-for="d in unansweredList" :key="d.id">
+            <button class="dialog-row" type="button" :class="{active: activeId === d.id}"
+                    @click="openDialog(d)">
+              <span class="dialog-avatar" aria-hidden="true" x-text="initials(d.contact_name)"></span>
+              <span class="dialog-body">
+                <span class="dialog-row-top">
+                  <span class="channel-badge" :class="d.messenger" x-text="channelLabel(d.messenger)"></span>
+                  <span class="dialog-title" x-text="d.contact_name || 'Неизвестный'"></span>
+                  <span class="owner-chip" x-show="isSupervisor && !d.is_mine && d.assigned_manager_name"
+                        x-text="d.assigned_manager_name"></span>
+                  <span class="wait-age" :class="{hot: waitAgeHot(d)}" x-text="waitAge(d)"></span>
+                  <span class="badge-unanswered" x-show="d.unanswered_count > 0"
+                        x-text="d.unanswered_count"></span>
+                </span>
+                <span class="dialog-row-bottom">
+                  <span class="dialog-preview" x-text="preview(d)"></span>
+                  <span class="dialog-time" x-text="listTime(d.last_msg_at)"></span>
+                </span>
+              </span>
+            </button>
+          </template>
+        </div>
+      </template>
+
+      <div class="inbox-section-title" x-show="answeredList.length > 0">Диалоги</div>
+      <template x-for="d in answeredList" :key="d.id">
+        <button class="dialog-row" type="button" :class="{active: activeId === d.id}" @click="openDialog(d)">
+          <span class="dialog-avatar" aria-hidden="true" x-text="initials(d.contact_name)"></span>
+          <span class="dialog-body">
+            <span class="dialog-row-top">
+              <span class="channel-badge" :class="d.messenger" x-text="channelLabel(d.messenger)"></span>
+              <span class="dialog-title" x-text="d.contact_name || 'Неизвестный'"></span>
+              <span class="owner-chip" x-show="isSupervisor && !d.is_mine && d.assigned_manager_name"
+                    x-text="d.assigned_manager_name"></span>
+              <span class="wait-age" :class="{hot: waitAgeHot(d)}" x-text="waitAge(d)"></span>
+              <span class="badge-unread" x-show="d.unread_count > 0" x-text="d.unread_count"></span>
+            </span>
+            <span class="dialog-row-bottom">
+              <span class="dialog-preview" x-text="preview(d)"></span>
+              <span class="dialog-time" x-text="listTime(d.last_msg_at)"></span>
+            </span>
+          </span>
+        </button>
+      </template>
+    </aside>
+
+    <!-- Правая панель: чат (разметка панели — копия placement.html; почему
+         копия, а не общая — см. шапку inbox.js) -->
+    <section class="inbox-chat">
+      <header class="chat-header">
+        <div class="contact" x-show="dialog">
+          <span class="contact-name">
+            <span class="channel-badge" :class="dialog?.messenger" x-text="channelLabel(dialog?.messenger)"></span>
+            <span x-text="dialog?.contact_name || 'Неизвестный'"></span>
+            <span class="owner-chip" x-show="isSupervisor && dialog && !dialog.is_mine"
+                  x-text="'отвечает: ' + (dialog?.assigned_manager_name || '—')"></span>
+          </span>
+          <a class="deal-link" x-show="dialog?.deal_url" :href="dialog?.deal_url"
+             target="_blank" rel="noopener">Сделка ↗</a>
+        </div>
+        <div class="status" x-show="!dialog && !loading">
+          <span>Выберите диалог из списка слева</span>
+        </div>
+        <div class="status" x-show="loading">
+          <span>Загрузка…</span>
+        </div>
+      </header>
+
+      <main class="messages" x-ref="messages">
+        <button class="load-older" type="button"
+          x-show="messages.length > 0 && hasMore"
+          @click="loadOlder()">↑ Загрузить ещё</button>
+        <template x-for="msg in messages" :key="msg.id">
+          <div class="bubble" :class="msg.direction === 'out' ? 'bubble-out' : 'bubble-in'">
+            <p class="bubble-text" x-text="msg.text"></p>
+            <span class="bubble-meta">
+              <span x-text="formatTime(msg.created_at)"></span>
+              <span class="status-badge" x-text="statusLabel(msg.direction, msg.status)"></span>
+            </span>
+          </div>
+        </template>
+        <div class="empty" x-show="dialog && messages.length === 0 && !loading">
+          <span>Сообщений пока нет</span>
+        </div>
+        <!-- Пилюля-якорь (UX-05): тихо появляется, если новые сообщения
+             пришли, пока пользователь читает историю выше. -->
+        <button class="jump-new" type="button" x-show="newBelow" @click="jumpNew()">
+          ↓ Новые сообщения
+        </button>
+      </main>
+      <!-- A11y: анонс новых входящих скринридерам (UX-02). -->
+      <div class="sr-only" aria-live="polite" x-text="liveAnnouncement"></div>
+
+      <div class="templates" x-show="canWrite && templates.length > 0" x-data="{ open: false }">
+        <button class="templates-toggle" @click="open = !open" type="button">
+          <span x-text="open ? '▾' : '▸'"></span> Шаблоны (<span x-text="templates.length"></span>)
+        </button>
+        <ul class="templates-list" x-show="open">
+          <template x-for="tpl in templates" :key="tpl.id">
+            <li>
+              <button type="button" @click="useTemplate(tpl.body)" x-text="tpl.title" :title="tpl.body"></button>
+            </li>
+          </template>
+        </ul>
+      </div>
+
+      <div class="status" x-show="dialog && !canWrite" style="padding:8px 14px">
+        <span x-text="dialog?.is_mine
+          ? 'Режим только чтение — отправка сообщений отключена администратором'
+          : 'Чужой диалог — писать может только ответственный менеджер'"></span>
+      </div>
+      <footer class="composer" x-show="canWrite">
+        <textarea
+          x-model="draft"
+          @keydown.enter="if (!$event.shiftKey) { $event.preventDefault(); send(); }"
+          placeholder="Напишите сообщение… (Enter — отправить, Shift+Enter — перенос строки)"
+          rows="2"
+          :disabled="!dialog || sending"></textarea>
+        <button class="send-btn" @click="send()" :disabled="!dialog || !draft.trim() || sending" type="button">
+          <span x-text="sending ? '…' : 'Отправить'"></span>
+        </button>
+      </footer>
+
+      <div class="error-banner" x-show="error" x-text="error" @click="error = ''"></div>
+    </section>
+  </div>
+
+  <script src="/static/inbox.js"></script>
+</body>
+</html>

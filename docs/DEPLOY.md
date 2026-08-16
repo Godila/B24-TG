@@ -18,10 +18,13 @@ VM: `<VM_SSH_TARGET>`, Ubuntu 24.04, 2 vCPU / 2 GB RAM / 40 GB SSD.
 |---|---|---|
 | GET | `https://b24-tg.haragy.top/health` | Health-check (публичный) |
 | POST | `/placement/deal` | B24 placement handler (CRM_DEAL_DETAIL_TAB) — вкладка в карточке сделки |
+| POST | `/placement/chats` | B24 placement handler (второй LEFT_MENU) — общий мессенджер «Чаты» |
 | POST | `/webhook/b24/onappinstall` | Установка приложения. Требует заголовок `X-Webhook-Secret` (= `B24_WEBHOOK_SECRET` из .env): Bitrix24 сам этот заголовок не шлёт, поэтому при ручной переустановке приложения передавай его явно (curl) |
 | GET | `/api/dialogs` | Список диалогов менеджера (нужна сессионная кука) |
 | GET | `/api/dialogs/{id}/messages` | История + poll (`?since=`) |
 | POST | `/api/dialogs/{id}/messages` | Отправить сообщение (→ outbox → Telegram) |
+| GET | `/api/inbox/dialogs` | Список «Чатов» с агрегатами (менеджер — свои; supervisor — все) |
+| POST | `/api/inbox/dialogs/{id}/read` | Гасить непрочитанные (только ответственный) |
 | GET | `/api/templates` | Шаблоны быстрых ответов |
 
 `/dev/login` отключён в prod (`DEV_MODE=false` → 404).
@@ -200,3 +203,27 @@ docker compose logs -f bridge   # ждём "Registered session" / "Bridge starte
   read-only менеджера возвращает 403, виджет прячет поле ввода;
 - безопасность: мутирующие /admin/api и /api роуты сверяют Origin
   (кука SameSite=none для iframe B24 иначе открывала CSRF).
+
+## Общий мессенджер «Чаты» (миграция a9d3f17c5e42)
+
+Миграция только-расширения (`dialogs.last_read_msg_id` + backfill курсором
+= MAX(messages.id) — история до релиза считается прочитанной). Порядок
+деплоя общий («Обновление кода»), но после него ОБЯЗАТЕЛЕН ручной шаг
+регистрации второго LEFT_MENU-пункта (без него «Чаты» не появятся в меню):
+
+```bash
+docker compose exec web python /app/scripts/bind_chats_placement.py
+```
+
+Скрипт идемпотентен (повторный запуск — no-op), биндинг админки не трогает.
+После запуска: пункт «Чаты» в левом меню Битрикс24 (группа «Приложения»).
+
+- вход: пункт «Чаты» левого меню B24 → двухпанельный мессенджер (список
+  слева, чат справа); менеджер видит свои диалоги, supervisor — все
+  (пишет только в свои, чужие — чтение с плашкой);
+- неотвеченные (последнее сообщение входящее) — секцией сверху с красным
+  счётчиком; непрочитанные гаснут при открытии диалога (только владелец);
+- из шапки чата — переход в карточку сделки B24 (`crm_deal_id` есть у
+  диалога после crm_sync);
+- dev-вход без B24: `GET /dev/login?b24_user_id=<id>&page=inbox` (только
+  DEV_MODE=true).

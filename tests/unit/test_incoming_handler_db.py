@@ -49,6 +49,7 @@ CREATE TABLE dialogs (
     title VARCHAR(255),
     status VARCHAR(8) NOT NULL,
     last_msg_at DATETIME,
+    last_read_msg_id INTEGER,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
 )
@@ -64,9 +65,7 @@ async def db():
     )
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    SessionLocal = async_sessionmaker(
-        engine, class_=AsyncSession, expire_on_commit=False
-    )
+    SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     yield SessionLocal
     await engine.dispose()
 
@@ -136,16 +135,12 @@ async def _seed_two_managers(SessionLocal) -> None:
 
 async def _all_dialogs(SessionLocal) -> list[Dialog]:
     async with SessionLocal() as s:
-        return list(
-            (await s.execute(select(Dialog).order_by(Dialog.id))).scalars()
-        )
+        return list((await s.execute(select(Dialog).order_by(Dialog.id))).scalars())
 
 
 async def _all_messages(SessionLocal) -> list[Message]:
     async with SessionLocal() as s:
-        return list(
-            (await s.execute(select(Message).order_by(Message.id))).scalars()
-        )
+        return list((await s.execute(select(Message).order_by(Message.id))).scalars())
 
 
 @pytest.mark.asyncio
@@ -155,12 +150,8 @@ async def test_same_client_two_managers_two_dialogs(db):
     await _seed_two_managers(db)
 
     handler, enqueue = _make_handler(db)
-    await handler.handle(
-        _make_msg(external_message_id="1"), account=_make_account(manager_id=1)
-    )
-    await handler.handle(
-        _make_msg(external_message_id="2"), account=_make_account(manager_id=2)
-    )
+    await handler.handle(_make_msg(external_message_id="1"), account=_make_account(manager_id=1))
+    await handler.handle(_make_msg(external_message_id="2"), account=_make_account(manager_id=2))
 
     dialogs = await _all_dialogs(db)
     assert len(dialogs) == 2
@@ -209,18 +200,14 @@ async def test_concurrent_duplicate_insert_resolved(db):
 
     handler, enqueue = _make_handler(db)
     # Не должно бросить MultipleResultsFound и не должно создать 3-й диалог.
-    await handler.handle(
-        _make_msg(external_message_id="1"), account=_make_account(manager_id=1)
-    )
+    await handler.handle(_make_msg(external_message_id="1"), account=_make_account(manager_id=1))
 
     dialogs = await _all_dialogs(db)
     assert len(dialogs) == 2
     messages = await _all_messages(db)
     assert len(messages) == 1
     assert messages[0].dialog_id == 101  # переиспользован старейший
-    enqueue.assert_awaited_once_with(
-        kind="inbound", message_id=messages[0].id
-    )
+    enqueue.assert_awaited_once_with(kind="inbound", message_id=messages[0].id)
 
 
 @pytest.mark.asyncio
@@ -245,9 +232,7 @@ async def test_existing_dialog_of_other_manager_not_reused(db):
         await s.commit()
 
     handler, enqueue = _make_handler(db)
-    await handler.handle(
-        _make_msg(external_message_id="5"), account=_make_account(manager_id=2)
-    )
+    await handler.handle(_make_msg(external_message_id="5"), account=_make_account(manager_id=2))
 
     dialogs = await _all_dialogs(db)
     assert len(dialogs) == 2
@@ -283,9 +268,7 @@ async def test_integrity_error_race_reuses_existing_dialog(db):
         return _StaleDialogSelectSession(db.kw["bind"], expire_on_commit=False)
 
     handler, enqueue = _make_handler(db, db_factory=stale_factory)
-    await handler.handle(
-        _make_msg(external_message_id="9"), account=_make_account(manager_id=1)
-    )
+    await handler.handle(_make_msg(external_message_id="9"), account=_make_account(manager_id=1))
 
     dialogs = await _all_dialogs(db)
     assert len(dialogs) == 1

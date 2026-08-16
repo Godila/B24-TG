@@ -10,7 +10,16 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import get_settings
-from app.web.routes import admin, admin_api, dialogs, health, placement, templates, webhook
+from app.web.routes import (
+    admin,
+    admin_api,
+    dialogs,
+    health,
+    inbox,
+    placement,
+    templates,
+    webhook,
+)
 from app.web.session import create_session_cookie_params
 
 logger = logging.getLogger(__name__)
@@ -43,6 +52,7 @@ def create_app() -> FastAPI:
     app.include_router(webhook.router)
     app.include_router(placement.router)
     app.include_router(dialogs.router)
+    app.include_router(inbox.router)
     app.include_router(templates.router)
     # Админ-панель: страница + единый API (онбординг обоих каналов и
     # supervisor-панель). Каналы регистрируются сюда же.
@@ -52,10 +62,12 @@ def create_app() -> FastAPI:
     from app.onboarding.max_channel import MaxOnboardingChannel
     from app.onboarding.tg_channel import TgOnboardingChannel
 
-    admin_api.register_channels({
-        Messenger.max: MaxOnboardingChannel(),
-        Messenger.tg: TgOnboardingChannel(),
-    })
+    admin_api.register_channels(
+        {
+            Messenger.max: MaxOnboardingChannel(),
+            Messenger.tg: TgOnboardingChannel(),
+        }
+    )
 
     # --- Dev-логин (только в dev-режиме) ---
     if settings.dev_mode:
@@ -64,17 +76,23 @@ def create_app() -> FastAPI:
         async def dev_login(
             b24_user_id: int = Query(...),
             deal_id: int | None = Query(default=None),
+            page: str = Query(default="chat"),
         ):
-            """Dev: выставить сессионную куку и открыть чат-страницу.
+            """Dev: выставить сессионную куку и открыть страницу приложения.
 
             В prod отключается (маршрут не регистрируется).
             """
+            target = {
+                "chat": "/static/placement.html",
+                "inbox": "/static/inbox.html",
+            }.get(page, "/static/placement.html")
             params = create_session_cookie_params(
-                b24_user_id=b24_user_id, deal_id=deal_id,
+                b24_user_id=b24_user_id,
+                deal_id=deal_id,
                 secret=settings.session_secret,
                 secure=not settings.dev_mode,
             )
-            resp = RedirectResponse(url="/static/placement.html", status_code=302)
+            resp = RedirectResponse(url=target, status_code=302)
             resp.set_cookie(**params)
             return resp
 

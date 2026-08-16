@@ -13,6 +13,7 @@
 Запуск на VM (с доступом к .env):
     docker compose exec web python /app/scripts/register_placement.py
 """
+
 import asyncio
 import os
 
@@ -56,15 +57,21 @@ async def main():
 
     client = Bitrix24Client(client_endpoint=portal)
     try:
-        # placement → (handler, title). Повторный bind той же точки создаёт
-        # ДУБЛИКАТ (две вкладки/два пункта) — поэтому сначала сверяемся.
-        existing: dict[str, tuple[str, str]] = {}
+        # placement → список (handler, title). Повторный bind той же точки
+        # создаёт ДУБЛИКАТ (две вкладки/два пункта) — поэтому сначала
+        # сверяемся. Список, а не dict: LEFT_MENU-биндингов может быть два
+        # («ЧатМост»-админка и «Чаты» — см. bind_chats_placement.py).
+        existing: dict[str, list[tuple[str, str]]] = {}
         try:
-            for b in await client.call(
-                "placement.get", auth_token=token.access_token,
-            ) or []:
-                existing[str(b.get("placement", ""))] = (
-                    str(b.get("handler", "")), str(b.get("title", "")),
+            for b in (
+                await client.call(
+                    "placement.get",
+                    auth_token=token.access_token,
+                )
+                or []
+            ):
+                existing.setdefault(str(b.get("placement", "")), []).append(
+                    (str(b.get("handler", "")), str(b.get("title", ""))),
                 )
         except Exception as e:  # noqa: BLE001 - one-off ops-скрипт
             print(f"placement.get error (продолжаем вслепую): {e}")
@@ -72,27 +79,33 @@ async def main():
         for binding in BINDINGS:
             code = binding["PLACEMENT"]
             handler = binding["HANDLER"]
-            if code in existing:
-                bound_handler, bound_title = existing[code]
-                if bound_handler != handler:
-                    print(f"{code}: привязан к ДРУГОМУ handler'у "
-                          f"({bound_handler}) — пропускаем, разбирайтесь руками")
-                    continue
-                if bound_title == binding["TITLE"]:
-                    print(f"{code}: уже привязан ({bound_title!r}) — ок")
+            bound = existing.get(code, [])
+            mine = [title for h, title in bound if h == handler]
+            foreign = [h for h, _t in bound if h != handler]
+            if mine:
+                if mine[0] == binding["TITLE"]:
+                    print(f"{code}: уже привязан ({mine[0]!r}) — ок")
                     continue
                 # Наш handler, но устаревший заголовок → unbind + bind.
                 try:
                     await client.call(
-                        "placement.unbind", auth_token=token.access_token,
+                        "placement.unbind",
+                        auth_token=token.access_token,
                         params={"PLACEMENT": code, "HANDLER": handler},
                     )
-                    print(f"{code}: отвязан устаревший ({bound_title!r})")
+                    print(f"{code}: отвязан устаревший ({mine[0]!r})")
                 except Exception as e:  # noqa: BLE001
                     print(f"{code}: unbind error: {e} — пробуем bind всё равно")
+            elif foreign:
+                print(
+                    f"{code}: привязан к ДРУГОМУ handler'у "
+                    f"({foreign[0]}) — пропускаем, разбирайтесь руками"
+                )
+                continue
             try:
                 result = await client.call(
-                    "placement.bind", auth_token=token.access_token,
+                    "placement.bind",
+                    auth_token=token.access_token,
                     params=binding,
                 )
                 print(f"{code}: bind result={result} title={binding['TITLE']!r}")

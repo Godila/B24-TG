@@ -4,7 +4,15 @@ import enum
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
@@ -42,20 +50,22 @@ class Dialog(Base, TimestampMixin):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    contact_id: Mapped[int] = mapped_column(
-        ForeignKey("contacts.id"), nullable=False, index=True
-    )
+    contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id"), nullable=False, index=True)
     messenger: Mapped[Messenger] = mapped_column(Enum(Messenger), nullable=False)
     external_chat_id: Mapped[str] = mapped_column(String(128), nullable=False)
     crm_deal_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     crm_entity_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     assigned_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    status: Mapped[DialogStatus] = mapped_column(
-        Enum(DialogStatus), default=DialogStatus.active
-    )
-    last_msg_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
+    status: Mapped[DialogStatus] = mapped_column(Enum(DialogStatus), default=DialogStatus.active)
+    last_msg_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Курсор прочтения ВЛАДЕЛЬЦА: максимальный Message.id на момент открытия
+    # диалога; непрочитанные = inbound с id > курсора. Диалог пер-менеджерный
+    # (один владелец — см. uq_dialogs_chat_per_manager), поэтому курсор — поле
+    # строки, а не отдельная таблица; supervisor просмотр чужого диалога курсор
+    # не двигает. id монотонны — курсор по id корректен без timestamp.
+    last_read_msg_id: Mapped[int | None] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), nullable=True
     )
 
     contact: Mapped["Contact"] = relationship(back_populates="dialogs")

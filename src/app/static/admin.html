@@ -22,10 +22,17 @@
     }
     * { box-sizing: border-box; }
     body {
-      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       max-width: 940px; margin: 0 auto; padding: 24px 16px 60px;
-      background: var(--bg); color: var(--text); font-size: 15px; line-height: 1.45;
+      background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.45;
     }
+
+    /* A11y-пол: видимый фокус с клавиатуры (единый для всех интерактивных) */
+    .btn:focus-visible, .segment button:focus-visible, .chip-x:focus-visible,
+    .toolbar input:focus-visible, .pwinput:focus-visible {
+      outline: 2px solid var(--accent); outline-offset: 2px;
+    }
+    .toolbar input:focus, .pwinput:focus { border-color: var(--accent); outline: none; }
 
     /* --- шапка бренда --- */
     .brand { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; }
@@ -95,7 +102,10 @@
     .btn {
       appearance: none; border: 1px solid transparent; border-radius: 9px;
       padding: 9px 18px; font-size: .9rem; font-weight: 600; cursor: pointer;
-      background: var(--accent); color: #fff; transition: background .15s;
+      background: var(--accent); color: #fff;
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .btn { transition: background .15s; }
     }
     .btn:hover { background: var(--accent-dark); }
     .btn:disabled { opacity: .55; cursor: default; }
@@ -156,6 +166,14 @@
 
     .hint { color: var(--muted); font-size: .85rem; }
     .err-line { color: var(--err-fg); font-size: .85rem; min-height: 1.2em; margin: 6px 0; }
+
+    /* Toast ошибок (UX-09): паттерн error-banner из «Чатов» — вместо alert() */
+    .toast {
+      position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+      background: var(--err-fg); color: #fff; padding: 8px 16px;
+      border-radius: 8px; font-size: 13px; z-index: 20;
+      box-shadow: 0 4px 12px rgba(0,0,0,.2);
+    }
   </style>
 </head>
 <body>
@@ -208,6 +226,15 @@
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw Object.assign(new Error(data.detail || res.status), { data });
       return data;
+    }
+
+    let toastTimer = null;
+    function showToast(text) {
+      const t = document.getElementById("toast");
+      t.textContent = text;
+      t.hidden = false;
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { t.hidden = true; }, 4000);
     }
 
     function reloadAll() {
@@ -284,7 +311,7 @@
       const label = a.messenger.toUpperCase() + " · " +
         (a.status === "active" ? "активен" : a.status === "banned" ? "заблокирован" : "офлайн");
       const x = a.status === "active"
-        ? `<button class="chip-x" data-unlink="${a.id}" title="Отключить аккаунт">×</button>` : "";
+        ? `<button class="chip-x" data-unlink="${a.id}" title="Отключить аккаунт" aria-label="Отключить аккаунт ${a.messenger.toUpperCase()}">×</button>` : "";
       return `<span class="chip ${cls}">${label}${x}</span>`;
     }
 
@@ -325,7 +352,7 @@
         btn.addEventListener("click", async () => {
           btn.disabled = true;
           try { await api(`/admin/api/accounts/${btn.dataset.unlink}/unlink`, { method: "POST" }); }
-          catch (e) { alert(e.message); }
+          catch (e) { showToast("Не получилось отключить: " + e.message); }
           loadSupervisor();
         });
       });
@@ -336,7 +363,7 @@
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body),
-          }); } catch (e) { alert(e.message); }
+          }); } catch (e) { showToast("Не получилось: " + e.message); }
           loadSupervisor();
         });
       });
@@ -364,5 +391,6 @@
     loadSupervisor();
     loadSettings();
   </script>
+  <div id="toast" class="toast" hidden></div>
 </body>
 </html>

@@ -22,8 +22,16 @@ async def test_models_create_tables(tmp_path):
     async with engine.connect() as conn:
         tables = await conn.run_sync(lambda c: inspect(c).get_table_names())
 
-    for name in ["managers", "tg_accounts", "contacts", "dialogs",
-                 "messages", "attachments", "outbox", "templates"]:
+    for name in [
+        "managers",
+        "tg_accounts",
+        "contacts",
+        "dialogs",
+        "messages",
+        "attachments",
+        "outbox",
+        "templates",
+    ]:
         assert name in tables
     await engine.dispose()
 
@@ -52,3 +60,13 @@ def test_outbox_has_initiation_and_chat_id_fields():
     cols = {c.name for c in OutboxItem.__table__.columns}
     assert "is_initiation" in cols
     assert "external_chat_id" in cols
+
+
+def test_dialog_has_last_read_msg_id():
+    """Курсор непрочитанных владельца (общий мессенджер): nullable, без
+    индекса (читается только по PK диалога)."""
+    from app.models import Dialog
+
+    col = Dialog.__table__.c.last_read_msg_id
+    assert col.nullable is True
+    assert col.index is not True

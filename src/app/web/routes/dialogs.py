@@ -12,6 +12,7 @@ from app.models import (
     Contact,
     Dialog,
     Manager,
+    ManagerRole,
     Message,
     MessageDirection,
     MessageStatus,
@@ -22,9 +23,7 @@ from app.web.schemas import DialogOut, MessageOut, SendMessageIn
 
 # verify_origin: прод-кука SameSite=none (iframe B24) прикрепляется к
 # кросс-сайтовым POST — без сверки Origin открыт был бы POST сообщений.
-router = APIRouter(
-    prefix="/api", tags=["dialogs"], dependencies=[Depends(verify_origin)]
-)
+router = APIRouter(prefix="/api", tags=["dialogs"], dependencies=[Depends(verify_origin)])
 
 ManagerDep = Annotated[Manager, Depends(get_current_manager)]
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -47,9 +46,7 @@ def _dialog_dto(dialog: Dialog, contact: Contact | None) -> DialogOut:
 
 
 def _message_dto(msg: Message) -> MessageOut:
-    direction = (
-        msg.direction.value if hasattr(msg.direction, "value") else str(msg.direction)
-    )
+    direction = msg.direction.value if hasattr(msg.direction, "value") else str(msg.direction)
     status = msg.status.value if hasattr(msg.status, "value") else str(msg.status)
     return MessageOut(
         id=msg.id,
@@ -64,17 +61,21 @@ def _message_dto(msg: Message) -> MessageOut:
     )
 
 
-async def _load_dialog_owned(
+async def _load_dialog_accessible(
     session: AsyncSession, dialog_id: int, manager: Manager
 ) -> Dialog:
-    """Диалог существует и принадлежит менеджеру, иначе 404."""
-    result = await session.execute(
-        select(Dialog).where(
-            Dialog.id == dialog_id, Dialog.assigned_user_id == manager.id
-        )
-    )
-    dialog = result.scalar_one_or_none()
+    """Диалог существует и ВИДЕН менеджеру, иначе 404.
+
+    Видимость: владелец ИЛИ supervisor (надзор — читает все диалоги
+    портала, включая неназначенные). 404, а не 403, для невидимых —
+    не раскрываем существование чужих диалогов (контракт виджета сделки).
+    """
+    dialog = (
+        await session.execute(select(Dialog).where(Dialog.id == dialog_id))
+    ).scalar_one_or_none()
     if dialog is None:
+        raise HTTPException(status_code=404, detail="Диалог не найден")
+    if dialog.assigned_user_id != manager.id and manager.role != ManagerRole.supervisor:
         raise HTTPException(status_code=404, detail="Диалог не найден")
     return dialog
 
@@ -105,9 +106,7 @@ async def list_dialogs(
     )
     if deal_id is not None:
         stmt = stmt.where(Dialog.crm_deal_id == deal_id)
-    stmt = stmt.order_by(
-        Dialog.last_msg_at.desc().nullslast(), Dialog.id.desc()
-    )
+    stmt = stmt.order_by(Dialog.last_msg_at.desc().nullslast(), Dialog.id.desc())
     result = await session.execute(stmt)
     return [_dialog_dto(d, c) for d, c in result.all()]
 
@@ -130,7 +129,7 @@ async def list_messages(
     - ``before`` — страница истории старее курсора: DESC (новейшие из старых);
     - без параметров — первичная загрузка: DESC (новейшие N), UI разворачивает сам.
     """
-    await _load_dialog_owned(session, dialog_id, manager)
+    await _load_dialog_accessible(session, dialog_id, manager)
     stmt = select(Message).where(Message.dialog_id == dialog_id)
     if since is not None:
         stmt = stmt.where(Message.id > since).order_by(Message.id.asc())
@@ -150,13 +149,17 @@ async def send_message(
     manager: ManagerDep,
     session: SessionDep,
 ) -> MessageOut:
-    dialog = await _load_dialog_owned(session, dialog_id, manager)
+    dialog = await _load_dialog_accessible(session, dialog_id, manager)
+
+    # Supervisor видит чужой диалог, но писать может только ответственный.
+    # 403 (а не 404): supervisor знает о существовании диалога из списка
+    # «Чатов» — UI нужен явный сигнал прятать composer.
+    if dialog.assigned_user_id != manager.id:
+        raise HTTPException(status_code=403, detail="Писать можно только в свои диалоги")
 
     # Права: read-only менеджер читает историю, но не отправляет.
     if manager.is_readonly:
-        raise HTTPException(
-            status_code=403, detail="Режим только чтение: отправка запрещена"
-        )
+        raise HTTPException(status_code=403, detail="Режим только чтение: отправка запрещена")
 
     # Аккаунт менеджера в канале ДИАЛОГА (для outbox): у менеджера может быть
     # аккаунт в каждом канале — TG и MAX.

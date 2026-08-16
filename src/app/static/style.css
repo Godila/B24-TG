@@ -8,7 +8,8 @@
   --out-bg: #e7f3ff;
   --out-text: #1a3a5c;
   --in-text: #1f1f1f;
-  --meta: #8a94a6;
+  /* Канон DESIGN.md (WCAG AA ≥4.5:1 на белом); было #8a94a6 (~3.2:1). */
+  --meta: #66707d;
   --accent: #2d8cf0;
   --border: #e4e8ee;
   --error: #e5484d;

@@ -144,12 +144,12 @@ function createChannelConnect({ root, channel, labels, onAuthorized }) {
       <div class="channel-card">
         <h3>${labels.title}</h3>
         <div class="state"></div>
-        <button class="start" type="button">${labels.startLabel}</button>
+        <button class="btn start" type="button">${labels.startLabel}</button>
         <div class="loginstate hint"></div>
         <div class="qrbox"></div>
         <div class="pwrow" style="display:none">
           <input class="pwinput" type="password" autocomplete="off" placeholder="2FA-пароль">
-          <button class="pwbtn" type="button">Продолжить</button>
+          <button class="btn btn--sm pwbtn" type="button">Продолжить</button>
         </div>
       </div>`;
     el("start").addEventListener("click", start);

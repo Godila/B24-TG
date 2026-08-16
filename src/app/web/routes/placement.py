@@ -66,9 +66,7 @@ async def _user_id_from_token(access_token: str) -> int | None:
         return None
 
 
-async def _resolve_b24_user(
-    settings, auth: str, auth_id: str
-) -> int | JSONResponse:
+async def _resolve_b24_user(settings, auth: str, auth_id: str) -> int | JSONResponse:
     """Личность пользователя placement-вызова — общий код обоих роутов.
 
     Dev: user_id из legacy AUTH-JSON (локальные тесты виджета без реального
@@ -83,7 +81,8 @@ async def _resolve_b24_user(
             return int(auth_data.get("user_id"))
         except (json.JSONDecodeError, TypeError, ValueError):
             return JSONResponse(
-                {"error": "dev mode: requires AUTH.user_id"}, status_code=400,
+                {"error": "dev mode: requires AUTH.user_id"},
+                status_code=400,
             )
     b24_user_id = await _user_id_from_token(auth_id)
     if b24_user_id is None:
@@ -91,47 +90,83 @@ async def _resolve_b24_user(
     return b24_user_id
 
 
-def _chat_html() -> str:
-    """Прочитать static/placement.html с диска. Если файла нет — заглушка."""
-    settings = get_settings()
-    html_path = Path(settings.static_dir) / "placement.html"
+def _static_html(name: str, title: str, stub_text: str) -> str:
+    """static/<name> с диска; заглушка, если файла нет."""
+    html_path = Path(get_settings().static_dir) / name
     if html_path.is_file():
         return html_path.read_text(encoding="utf-8")
-    logger.warning("placement.html not found at %s — returning stub", html_path)
+    logger.warning("%s not found at %s — returning stub", name, html_path)
     return (
-        '<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">'
-        "<title>Bitrix-TG Чат</title></head>"
-        '<body><div id="chat">Чат недоступен: static/placement.html не найден.</div>'
-        "</body></html>"
+        f'<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">'
+        f"<title>{title}</title></head>"
+        f"<body><div>{stub_text}</div></body></html>"
+    )
+
+
+def _chat_html() -> str:
+    """static/placement.html — чат-виджет сделки."""
+    return _static_html(
+        "placement.html",
+        "ЧатМост — Чат",
+        "Чат недоступен: static/placement.html не найден.",
     )
 
 
 def _set_session_and_respond(
-    b24_user_id: int, deal_id: int | None
+    b24_user_id: int, deal_id: int | None, html: str | None = None
 ) -> HTMLResponse | JSONResponse:
-    """Поставить сессионную куку и вернуть HTML чат-страницы.
+    """Поставить сессионную куку и вернуть HTML-страницу одним ответом.
 
-    Кука ставится в том же ответе, что и HTML — важно для iFrame (редирект
-    на /static/ внутри iFrame мог бы потерять SameSite-контекст).
+    Кука в том же ответе, что и HTML — важно для iFrame (редирект на
+    /static/ внутри iFrame мог бы потерять SameSite-контекст).
+    html=None — чат-виджет сделки: deal_id инжектится как data-deal-id на
+    <body> (URL внутри iframe фиксирован, фронт читает атрибут; dev-вход
+    идёт через ?deal_id= в URL).
     """
+    if html is None:
+        html = _chat_html()
+        if deal_id is not None:
+            html = html.replace("<body>", f'<body data-deal-id="{deal_id}">', 1)
     settings = get_settings()
-    cookie_params = create_session_cookie_params(
-        b24_user_id=b24_user_id, deal_id=deal_id, secret=settings.session_secret,
-        secure=not settings.dev_mode,
+    resp = HTMLResponse(content=html)
+    resp.set_cookie(
+        **create_session_cookie_params(
+            b24_user_id=b24_user_id,
+            deal_id=deal_id,
+            secret=settings.session_secret,
+            secure=not settings.dev_mode,
+        )
     )
-    # deal_id добавляем в URL как query — фронт читает его для фильтра диалогов.
-    body = _chat_html()
-    if deal_id is not None:
-        # Внедряем deal_id через <base> не нужно; фронт читает window.location.
-        # Но placement.html отдаётся как есть — фронт берёт ?deal_id= из URL.
-        # Здесь мы отдаём HTML напрямую (не через redirect), поэтому добавим
-        # deal_id как data-атрибут, который app.js прочтёт.
-        marker = "<body>"
-        inject = f'<body data-deal-id="{deal_id}">'
-        body = body.replace(marker, inject, 1)
-    resp = HTMLResponse(content=body)
-    resp.set_cookie(**cookie_params)
     return resp
+
+
+async def _handle_left_menu_post(
+    placement: str, auth_id: str, auth: str, *, label: str, html: str
+) -> HTMLResponse | JSONResponse:
+    """Общий body LEFT_MENU-хендлеров (админка, «Чаты»).
+
+    B24 различает точки по HANDLER-URL — в теле POST у обоих придёт
+    PLACEMENT=LEFT_MENU. Флоу security-чувствителен (идентификация +
+    постановка куки) и обязан жить в одном месте — копипаста хендлеров
+    разъехалась бы при первой же правке.
+    """
+    if placement != _ADMIN_PLACEMENT_CODE:
+        return JSONResponse(
+            {"error": f"unexpected placement: {placement!r}"},
+            status_code=400,
+        )
+    settings = get_settings()
+    b24_user_id = await _resolve_b24_user(settings, auth, auth_id)
+    if isinstance(b24_user_id, JSONResponse):
+        return b24_user_id
+
+    logger.info(
+        "Placement opened: placement=%s(%s) b24_user_id=%s",
+        placement,
+        label,
+        b24_user_id,
+    )
+    return _set_session_and_respond(b24_user_id, None, html=html)
 
 
 @router.post("/admin", response_model=None)
@@ -146,25 +181,7 @@ async def placement_admin_post(
     AUTH-JSON). Ставит сессионную куку и отдаёт admin.html — страницу
     подключения каналов (менеджеру) и supervisor-панель (администратору).
     """
-    if placement != _ADMIN_PLACEMENT_CODE:
-        return JSONResponse(
-            {"error": f"unexpected placement: {placement!r}"}, status_code=400,
-        )
-    settings = get_settings()
-    b24_user_id = await _resolve_b24_user(settings, auth, auth_id)
-    if isinstance(b24_user_id, JSONResponse):
-        return b24_user_id
-
-    logger.info(
-        "Placement opened: placement=%s b24_user_id=%s", placement, b24_user_id,
-    )
-    cookie_params = create_session_cookie_params(
-        b24_user_id=b24_user_id, deal_id=None,
-        secret=settings.session_secret, secure=not settings.dev_mode,
-    )
-    resp = HTMLResponse(content=_admin_html())
-    resp.set_cookie(**cookie_params)
-    return resp
+    return await _handle_left_menu_post(placement, auth_id, auth, label="admin", html=_admin_html())
 
 
 @router.get("/admin", response_model=None)
@@ -176,17 +193,43 @@ async def placement_admin_get(_manager: ManagerDep) -> HTMLResponse:
 
 
 def _admin_html() -> str:
-    """static/admin.html (админ-панель) с заглушкой при отсутствии."""
-    settings = get_settings()
-    html_path = Path(settings.static_dir) / "admin.html"
-    if html_path.is_file():
-        return html_path.read_text(encoding="utf-8")
-    logger.warning("admin.html not found at %s — returning stub", html_path)
-    return (
-        '<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">'
-        "<title>Bitrix-TG: каналы</title></head>"
-        '<body><div>Панель недоступна: static/admin.html не найден.</div>'
-        "</body></html>"
+    """static/admin.html — панель управления каналами."""
+    return _static_html(
+        "admin.html",
+        "Bitrix-TG: каналы",
+        "Панель недоступна: static/admin.html не найден.",
+    )
+
+
+@router.post("/chats", response_model=None)
+async def placement_chats_post(
+    placement: str = Form(default="", alias="PLACEMENT"),
+    auth_id: str = Form(default="", alias="AUTH_ID"),
+    auth: str = Form(default="", alias="AUTH"),
+) -> HTMLResponse | JSONResponse:
+    """Placement LEFT_MENU (второй обработчик того же типа): «Чаты» —
+    общий мессенджер со всеми диалогами менеджера.
+
+    B24 различает два LEFT_MENU-пункта по HANDLER-URL (в теле обоих
+    придёт PLACEMENT=LEFT_MENU): /placement/admin — панель управления,
+    /placement/chats — этот роут. Кука без deal_id — страница не
+    фильтруется по сделке.
+    """
+    return await _handle_left_menu_post(placement, auth_id, auth, label="chats", html=_inbox_html())
+
+
+@router.get("/chats", response_model=None)
+async def placement_chats_get(_manager: ManagerDep) -> HTMLResponse:
+    """GET-фолбэк (перезагрузка фрейма) — только при живой сессионной куке."""
+    return HTMLResponse(content=_inbox_html())
+
+
+def _inbox_html() -> str:
+    """static/inbox.html — общий мессенджер «Чаты»."""
+    return _static_html(
+        "inbox.html",
+        "ЧатМост: Чаты",
+        "Чаты недоступны: static/inbox.html не найден.",
     )
 
 
@@ -204,7 +247,8 @@ async def placement_deal_post(
     """
     if placement != _PLACEMENT_CODE:
         return JSONResponse(
-            {"error": f"unexpected placement: {placement!r}"}, status_code=400,
+            {"error": f"unexpected placement: {placement!r}"},
+            status_code=400,
         )
     try:
         options = json.loads(placement_options) if placement_options else {}
@@ -220,7 +264,9 @@ async def placement_deal_post(
 
     logger.info(
         "Placement opened: placement=%s deal_id=%s b24_user_id=%s",
-        placement, deal_id, b24_user_id,
+        placement,
+        deal_id,
+        b24_user_id,
     )
     return _set_session_and_respond(b24_user_id=b24_user_id, deal_id=deal_id)
 
