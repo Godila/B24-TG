@@ -113,6 +113,15 @@ python3 scripts/gen_prod_env.py   # нужно пересоздать volume pg_
 # резервная копия БД
 docker compose exec postgres pg_dump -U bitrix_tg bitrix_tg > backup_$(date +%F).sql
 
+# Автоматический ночной бэкап (установлен 2026-08-16)
+# Что кладёт: pg_dump (gzip) + tar docker-volume tg_sessions + .env → /opt/bitrix-tg/backups/,
+# ротация старше 7 дней. Cron: /etc/cron.d/bitrix-tg-backup, 03:30 nightly, лог /var/log/bitrix-tg-backup.log.
+# Выгрузка копии с VM (опционально): создать /etc/bitrix-tg-backup.env с
+#   BACKUP_UPLOAD_DST="user@host:/path/backups"
+# (ssh-ключ root'а должен иметь доступ туда; scp только свежих файлов).
+# Ручной запуск: /opt/bitrix-tg/scripts/backup.sh
+# Ротация docker-логов: json-file max-size=10m × 3 (x-logging в docker-compose.yml).
+
 # обновить сертификат вручную (если автопродление не сработало)
 docker compose stop nginx
 certbot renew

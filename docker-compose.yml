@@ -1,5 +1,14 @@
+# Ротация docker-логов: без лимита json-file растёт бесконечно (bridge
+# с телеметрией каналов — главный генератор). 10М × 3 файла на контейнер.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
+    logging: *default-logging
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: bitrix_tg
@@ -16,6 +25,7 @@ services:
     # Без ports — postgres доступен только внутри docker-сети (безопасно).
 
   web:
+    logging: *default-logging
     build: .
     command: ["python", "-m", "app.main", "web"]
     env_file: .env
@@ -27,6 +37,7 @@ services:
     restart: unless-stopped
 
   bridge:
+    logging: *default-logging
     build: .
     command: ["python", "-m", "app.main", "bridge"]
     env_file: .env
@@ -38,6 +49,7 @@ services:
     restart: unless-stopped
 
   nginx:
+    logging: *default-logging
     image: nginx:alpine
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
@@ -56,6 +68,7 @@ services:
   # пересоздавалась и контейнер молча терял связность. Конфиг с секретом
   # живёт ВНЕ репо: /opt/xray-client/config.json на хосте.
   xray:
+    logging: *default-logging
     image: ghcr.io/xtls/xray-core:latest
     container_name: xray-client
     # Без явной команды образ запускает дефолтный конфиг-каталог с примерами.
