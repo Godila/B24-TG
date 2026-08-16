@@ -4,6 +4,15 @@ from collections.abc import AsyncIterator
 from app.messaging.types import IncomingMessage, SendResult
 
 
+class SessionRevokedError(Exception):
+    """Сессия устройства отозвана (логаут/инвалидация) — ретраи бессмысленны.
+
+    Канально-нейтральный терминальный сигнал: TelegramProvider поднимает его
+    при неавторизованной .session, MaxAuthError у MAX — тот же смысл.
+    AccountSyncWorker по нему переводит аккаунт в offline и алертит
+    «переподключите по QR», вместо бесконечных ретраев «сетевого сбоя»."""
+
+
 class MessengerProvider(ABC):
     """Абстракция над мессенджером.
 

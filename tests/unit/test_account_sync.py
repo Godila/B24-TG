@@ -261,3 +261,46 @@ async def test_register_failure_hook_rate_limits_transient_alerts():
     await hook(acc, MaxAuthError("token revoked"))
     await hook(acc, MaxAuthError("token revoked"))
     assert calls == [42, 42, 42, 42]  # терминальные идут всегда
+
+
+@pytest.mark.asyncio
+async def test_register_failure_hook_tg_revoked_session_terminal():
+    """Мёртвая TG-сессия — терминально: алерт всегда, с честным текстом
+
+    (не «сетевой сбой»); MAX-ветка с MaxAuthError покрыта rate-limit-тестом."""
+    from app.bridge.account_sync import make_register_failure_hook
+    from app.messaging.provider import SessionRevokedError
+
+    calls: list[str] = []
+
+    async def notifier(user_id: int, text: str) -> None:
+        calls.append(text)
+
+    executed: list[object] = []
+
+    class _Ctx:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def execute(self, stmt):
+            executed.append(stmt)
+
+        async def commit(self):
+            return None
+
+    def session_factory():
+        return _Ctx()
+
+    hook = make_register_failure_hook(session_factory, notifier, 42)
+    acc = _account(31, messenger=Messenger.tg)
+
+    await hook(acc, SessionRevokedError("TG session not authorized"))
+    await hook(acc, SessionRevokedError("TG session not authorized"))
+    assert len(calls) == 2  # терминальные — без rate-limit
+    assert "сессия отозвана" in calls[0]
+    assert "QR" in calls[0]
+    # Оффлайн-запись в БД выполнена (аккаунт выпадает из ретраев).
+    assert len(executed) == 2

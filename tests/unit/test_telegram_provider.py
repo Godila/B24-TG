@@ -226,3 +226,22 @@ def test_on_new_message_media_becomes_placeholder():
     msg = asyncio.run(provider._incoming_queue.get())
     assert msg.content_type.value == "photo"
     assert msg.text == "[фото]"
+
+
+def test_connect_unauthorized_session_raises_revoked():
+    """Инвалидированная .session — терминальная SessionRevokedError
+
+    (не RuntimeError): AccountSyncWorker по ней гасит аккаунт в offline
+    и алертит «переподключите по QR», вместо ретраев «сетевого сбоя»."""
+    with patch("app.messaging.telegram.provider.TelegramClient") as mock_tl:
+        client_inst = AsyncMock()
+        client_inst.is_user_authorized = AsyncMock(return_value=False)
+        mock_tl.return_value = client_inst
+
+        from app.messaging.provider import SessionRevokedError
+        from app.messaging.telegram.provider import TelegramProvider
+
+        provider = TelegramProvider(api_id=1, api_hash="x", sessions_dir="/tmp")
+        with pytest.raises(SessionRevokedError):
+            asyncio.run(provider.connect())
+        client_inst.disconnect.assert_awaited_once()

@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.bridge.bootstrap import forward_incoming, load_active_accounts
 from app.bridge.session_manager import SessionManager
 from app.messaging.max.protocol import MaxAuthError
+from app.messaging.provider import SessionRevokedError
 from app.models import Messenger, TgAccount, TgAccountStatus
 
 logger = logging.getLogger(__name__)
@@ -215,21 +216,19 @@ def make_register_failure_hook(
 ) -> RegisterFailureHook:
     """Хук для on_register_failure: status=offline + алерт админу.
 
-    Аккаунт выпадает из active-сета (нет молотилки LOGIN мёртвым токеном),
-    админ получает алерт, менеджер переподключается через /admin/max.
-    Транзиентные сбои ретраятся каждые ~20с — без rate-limit алерты о
-    долговременной сетевой деградации заспамили бы чат, поэтому не-
-    терминальные уведомления идут не чаще раза в transient_alert_repeat_sec.
+    Терминальные (отозванная сессия: MaxAuthError у MAX, SessionRevokedError
+    у TG): аккаунт → offline (выпадает из active-сета, нет молотилки
+    ретраев), алерт «переподключите по QR» — всегда. Транзиентные сбои
+    ретраятся каждые ~20с — без rate-limit алерты о долговременной сетевой
+    деградации заспамили бы чат, поэтому не-терминальные уведомления идут
+    не чаще раза в transient_alert_repeat_sec.
     """
     import time
 
     last_transient_alert: dict[int, float] = {}
 
     async def hook(account: TgAccount, exc: Exception) -> None:
-        # Терминально — только отозванный токен (ретраи бессмысленны и
-        # выжигают LOGIN-бюджет). Транзиентные сбои (сеть/таймаут) аккаунт
-        # в active оставляют — следующий тик воркера попробует снова.
-        terminal = isinstance(exc, MaxAuthError)
+        terminal = isinstance(exc, (MaxAuthError, SessionRevokedError))
         if terminal:
             async with session_factory() as s:
                 await s.execute(
@@ -247,9 +246,10 @@ def make_register_failure_hook(
         try:
             await notifier(
                 admin_user_id,
-                f"⚠️ Bitrix-TG: {account.messenger.value.upper()}-аккаунт "
+                f"⚠️ ЧатМост: {account.messenger.value.upper()}-аккаунт "
                 f"id={account.id} ({account.phone}) не подключается"
-                + (" — сессия отозвана, переподключите (для MAX — /admin/max)"
+                + (" — сессия отозвана, переподключите по QR (пункт «ЧатМост» "
+                   "в меню Битрикс24)"
                    if terminal else " (сетевой сбой, повторим автоматически)")
                 + f": {exc}",
             )

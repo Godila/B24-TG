@@ -8,7 +8,7 @@ from telethon.errors import FloodWaitError
 from telethon.tl import types as tl
 from telethon.tl.types import User
 
-from app.messaging.provider import MessengerProvider
+from app.messaging.provider import MessengerProvider, SessionRevokedError
 from app.messaging.types import ContentType, IncomingMessage, SendResult
 from app.models import Messenger
 
@@ -48,7 +48,12 @@ class TelegramProvider(MessengerProvider):
         )
         await self._client.connect()
         if not await self._client.is_user_authorized():
-            raise RuntimeError("TG session not authorized — run auth_login first")
+            # .session инвалидирована (логаут устройства/смена номера) —
+            # терминально: AccountSyncWorker переведёт аккаунт в offline и
+            # алертит «переподключите по QR», без бесконечных ретраев.
+            # Транспорт уже поднят — закрываем, иначе соединение-зомби.
+            await self.disconnect()
+            raise SessionRevokedError("TG session not authorized — нужен QR-онбординг")
         # incoming=True: только входящие. Без builder Telethon отдаёт сырые Update,
         # а без фильтра исходящие сообщения менеджера эхом шли бы как входящие.
         self._client.add_event_handler(
