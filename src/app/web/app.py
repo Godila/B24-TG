@@ -5,7 +5,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -20,9 +20,70 @@ from app.web.routes import (
     templates,
     webhook,
 )
-from app.web.session import create_session_cookie_params
+from app.web.session import SESSION_COOKIE, create_session_cookie_params, verify_session
 
 logger = logging.getLogger(__name__)
+
+
+_UNREGISTERED_PAGE = """<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ЧатМост</title><style>
+ body{{margin:0;font-family:-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+ background:#f2f4f8;color:#1c2733;display:flex;align-items:center;justify-content:center;
+ height:100vh;font-size:14px}}
+ .card{{background:#fff;border:1px solid #dfe3ea;border-radius:14px;max-width:440px;
+ padding:24px;box-shadow:0 1px 3px rgba(20,30,50,.05)}}
+ .mark{{width:44px;height:44px;border-radius:12px;flex:none;
+ background:linear-gradient(135deg,#2f6fed,#7b5bf2);color:#fff;font-size:22px;font-weight:700;
+ display:flex;align-items:center;justify-content:center;margin-bottom:14px}}
+ h1{{font-size:17px;margin:0 0 8px}}
+ p{{color:#66707d;line-height:1.5;margin:6px 0}}
+ code{{background:#e8edf7;border-radius:6px;padding:2px 8px;color:#1f57c7;font-weight:600}}
+</style></head><body><div class="card"><div class="mark">&#8644;</div>
+<h1>Вы не добавлены в ЧатМост</h1>
+<p>Попросите администратора добавить вас: пункт «ЧатМост» в левом меню
+Битрикс24 &rarr; вкладка «Панель» &rarr; раздел «Менеджеры».</p>
+<p>Ваш ID пользователя Битрикс24: <code>#{user_id}</code> &mdash; сообщите его администратору.</p>
+</div></body></html>"""
+
+_SESSION_EXPIRED_PAGE = """<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ЧатМост</title><style>
+ body{margin:0;font-family:-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+ background:#f2f4f8;color:#1c2733;display:flex;align-items:center;justify-content:center;
+ height:100vh;font-size:14px}
+ .card{background:#fff;border:1px solid #dfe3ea;border-radius:14px;max-width:440px;
+ padding:24px;box-shadow:0 1px 3px rgba(20,30,50,.05)}
+ .mark{width:44px;height:44px;border-radius:12px;flex:none;
+ background:linear-gradient(135deg,#2f6fed,#7b5bf2);color:#fff;font-size:22px;font-weight:700;
+ display:flex;align-items:center;justify-content:center;margin-bottom:14px}
+ h1{font-size:17px;margin:0 0 8px}
+ p{color:#66707d;line-height:1.5;margin:6px 0}
+</style></head><body><div class="card"><div class="mark">&#8644;</div>
+<h1>Сессия истекла</h1>
+<p>Закройте это окно и откройте «ЧатМост» заново из левого меню
+Битрикс24 &mdash; сессия обновится автоматически.</p>
+</div></body></html>"""
+
+
+def _placement_unauthorized_page(request: Request) -> HTMLResponse:
+    """Дружелюбная 401-страница для placement-iframe вместо сырого JSON.
+
+    Placement-GET открывается внутри iframe (оболочка/прямые ссылки):
+    невнесённый сотрудник видел бы голый JSON «Менеджер не найден».
+    Различаем два случая по куке: подписана, но менеджера нет/неактивен
+    → инструкция с его b24_user_id (сообщить админу); куки нет/протухла
+    → «откройте заново из меню» (DESIGN.md: ошибка = направление).
+    """
+    token = request.cookies.get(SESSION_COOKIE)
+    user_id = None
+    if token:
+        payload = verify_session(token, get_settings().session_secret)
+        if payload and isinstance(payload.get("b24_user_id"), int):
+            user_id = payload["b24_user_id"]
+    if user_id is not None:
+        return HTMLResponse(status_code=401, content=_UNREGISTERED_PAGE.format(user_id=user_id))
+    return HTMLResponse(status_code=401, content=_SESSION_EXPIRED_PAGE)
 
 
 def _parse_origins(raw: str) -> list[str]:
@@ -104,8 +165,12 @@ def create_app() -> FastAPI:
         logger.warning("Static dir not found: %s — /static не смонтирован", static_path)
 
     # --- Единый обработчик HTTPException → JSON ---
+    # Исключение: 401 на placement-маршрутах — HTML-страница-инструкция
+    # (iframe пользователя, а не API-клиент; см. _placement_unauthorized_page).
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+        if exc.status_code == 401 and request.url.path.startswith("/placement"):
+            return _placement_unauthorized_page(request)
         return JSONResponse(
             status_code=exc.status_code,
             content={"detail": exc.detail},
