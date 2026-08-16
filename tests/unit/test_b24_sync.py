@@ -87,6 +87,7 @@ async def test_existing_contact_reuses_open_deal():
         sender_phone="+79991234567",
         message_text="Ещё вопрос",
         assigned_b24_user_id=1,
+        timeline_mode="all",
     )
 
     crm.create_contact.assert_not_awaited()
@@ -120,6 +121,7 @@ async def test_existing_contact_without_open_deal_comments_into_contact():
         sender_phone="+79991234567",
         message_text="Вопрос",
         assigned_b24_user_id=1,
+        timeline_mode="all",
     )
 
     crm.create_deal.assert_not_awaited()
@@ -141,6 +143,7 @@ async def test_process_outbound_comments_into_deal():
         dialog_entity_type="deal",
         contact_id=42,
         text="Ответ менеджера",
+        timeline_mode="all",
     )
 
     assert comment_id == 555
@@ -163,6 +166,7 @@ async def test_process_outbound_falls_back_to_contact_card():
         dialog_entity_type=None,
         contact_id=42,
         text="Ответ",
+        timeline_mode="all",
     )
 
     assert comment_id == 556

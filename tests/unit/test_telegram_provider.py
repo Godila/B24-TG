@@ -81,6 +81,7 @@ def test_on_new_message_builds_incoming_message():
     )
     event = SimpleNamespace(
         chat_id=4242,
+        is_private=True,
         is_reply=False,
         message=SimpleNamespace(message="Привет", id=777, date=None),
         get_sender=AsyncMock(return_value=sender),
@@ -94,6 +95,25 @@ def test_on_new_message_builds_incoming_message():
     assert msg.content_type.value == "text"
     assert msg.external_message_id == "777"
     assert msg.external_chat_id == "4242"
+
+
+def test_on_new_message_group_chat_skipped():
+    """Группы/каналы не инжестятся: иначе контакт+сделка в CRM и ответ
+    менеджера уходили бы в группу (MAX фильтрует так же через CHAT_INFO)."""
+    from app.messaging.telegram.provider import TelegramProvider
+
+    provider = TelegramProvider(api_id=1, api_hash="x", sessions_dir="/tmp")
+
+    event = SimpleNamespace(
+        chat_id=-1001234567890,
+        is_private=False,
+        is_reply=False,
+        message=SimpleNamespace(message="из группы", id=778, date=None),
+        get_sender=AsyncMock(return_value=SimpleNamespace(id=1)),
+    )
+
+    asyncio.run(provider._on_new_message(event))
+    assert provider._incoming_queue.empty()
 
 
 def _tg_message(text, media):
@@ -212,6 +232,7 @@ def test_on_new_message_media_becomes_placeholder():
     sender = SimpleNamespace(id=4242, first_name="Иван")
     event = SimpleNamespace(
         chat_id=4242,
+        is_private=True,
         is_reply=False,
         message=SimpleNamespace(
             message="",

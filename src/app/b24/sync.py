@@ -60,7 +60,9 @@ class Bitrix24Sync:
         messenger: Messenger = Messenger.tg,
         existing_contact_id: int | None = None,
         existing_deal_id: int | None = None,
-        timeline_mode: str = "all",
+        # Дефолт — TIMELINE_MODE_DEFAULT (дефолт приложения), а не "all":
+        # вызов без явного режима не должен молча включать самый шумный.
+        timeline_mode: str = TIMELINE_MODE_DEFAULT,
         sender_first_name: str | None = None,
         sender_last_name: str | None = None,
         sender_username: str | None = None,
@@ -175,7 +177,7 @@ class Bitrix24Sync:
         contact_id: int | None,
         text: str,
         *,
-        timeline_mode: str = "all",
+        timeline_mode: str = TIMELINE_MODE_DEFAULT,
     ) -> int | None:
         """Timeline-комментарий для исходящего сообщения (deal или contact-карточка).
 

@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from app.b24.sync import TIMELINE_MODES
 from app.db import async_session
 from app.models import (
     ACTIVE_STATUSES,
@@ -122,7 +123,11 @@ async def onboarding_cancel(channel: Messenger, manager: ManagerDep) -> dict:
 # Панель администратора (SupervisorDep)
 # ---------------------------------------------------------------------- #
 class SettingsIn(BaseModel):
-    timeline_mode: str = Field(pattern="^(all|first|none)$")
+    # Список режимов — единственный источник истины TIMELINE_MODES в
+    # b24/sync.py; regex собираем из него, чтобы не дублировать руками.
+    timeline_mode: str = Field(
+        pattern="^(" + "|".join(TIMELINE_MODES) + ")$"
+    )
 
 
 @router.get("/settings", response_model=None)

@@ -11,8 +11,11 @@
 - split-имя: Contact.first_name/last_name, а для старых строк — эвристика
   «первое слово → NAME, остальное → LAST_NAME» (только когда LAST_NAME пуст).
 
-Обновляет только пустые поля карточки — данные, внесённые менеджерами
-вручную, не трогает. Идемпотентен, запуск на VM:
+PHONE/IM дозаполняются только в пустые поля карточки (ручные данные
+менеджеров не трогаются). Ветка split-имени при пустом LAST_NAME
+ПЕРЕЗАПИСЫВАЕТ NAME (это расщепление, «пустого NAME» не существует) —
+ручные правки имени в карточке будут заменены канальными данными; скрипт
+разовый, запускать после сверки. Идемпотентен, запуск на VM:
     docker compose exec web python /app/scripts/backfill_crm_contacts.py
 """
 
@@ -22,7 +25,7 @@ from typing import Any
 
 from sqlalchemy import select
 
-from app.b24.client import Bitrix24Client
+from app.b24.client import Bitrix24Client, Bitrix24Error
 from app.b24.token_manager import TokenManager
 from app.db import async_session
 from app.models import Contact
@@ -63,13 +66,22 @@ async def main() -> None:
             )
 
         for c in contacts:
-            card = await client.call(
-                "crm.contact.get",
-                auth_token=token.access_token,
-                params={"ID": c.crm_contact_id},
-            )
+            # Per-contact устойчивость: контакт мог быть удалён в B24
+            # (Bitrix24Error от crm.contact.get) или словить rate-limit —
+            # один протухший id не должен обрывать весь прогон.
+            try:
+                card = await client.call(
+                    "crm.contact.get",
+                    auth_token=token.access_token,
+                    params={"ID": c.crm_contact_id},
+                )
+            except Bitrix24Error as exc:
+                print(f"contact row {c.id}: B24 id={c.crm_contact_id} "
+                      f"недоступен ({exc}) — skip")
+                continue
             if not isinstance(card, dict):
-                print(f"contact row {c.id}: B24 id={c.crm_contact_id} недоступен — skip")
+                print(f"contact row {c.id}: B24 id={c.crm_contact_id} "
+                      "вернул не-карточку — skip")
                 continue
 
             fields: dict[str, Any] = {}

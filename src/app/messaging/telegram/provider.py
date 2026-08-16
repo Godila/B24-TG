@@ -82,6 +82,16 @@ class TelegramProvider(MessengerProvider):
     async def _on_new_message(self, event) -> None:
         """Handler событий Telethon NewMessage — кладёт в очередь."""
         try:
+            # Только приватные диалоги: NewMessage(incoming=True) для
+            # user-аккаунта означает «не моё» — без этого фильтра сообщения
+            # групп/каналов инжестятся как «клиенты» (контакт+сделка в CRM,
+            # ответ менеджера уйдёт в группу). MAX-провайдер фильтрует
+            # аналогично (_chat_is_dialog).
+            if not event.is_private:
+                logger.debug(
+                    "TG: скип группового/канального сообщения chat=%s", event.chat_id
+                )
+                return
             sender = await event.get_sender()
             ctype, text = self._content_type_and_text(event.message)
             msg = IncomingMessage(
