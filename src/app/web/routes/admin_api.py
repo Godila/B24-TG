@@ -16,14 +16,15 @@ from sqlalchemy.exc import IntegrityError
 from app.b24.sync import TIMELINE_MODES
 from app.db import async_session
 from app.models import (
-    ACTIVE_STATUSES,
     LoginCommand,
     LoginCommandKind,
+    LoginCommandStatus,
     Manager,
     ManagerRole,
     Messenger,
     TgAccount,
     TgAccountStatus,
+    terminate_active_commands,
 )
 from app.onboarding.protocol import OnboardingChannel
 from app.web.deps import ManagerDep, SupervisorDep, verify_origin
@@ -283,23 +284,14 @@ async def unlink_account(account_id: int, supervisor: SupervisorDep) -> dict:
         if account.messenger == Messenger.tg:
             # Гасим живые логин-команды аккаунта и ставим log_out (одна txn —
             # uq_login_commands_active требует свободной пары).
-            from sqlalchemy import update
-
-            await s.execute(
-                update(LoginCommand)
-                .where(
-                    LoginCommand.account_id == account.id,
-                    LoginCommand.status.in_(ACTIVE_STATUSES),
-                )
-                .values(status="cancelled", password_transit=None)
-            )
+            await terminate_active_commands(s, account_id=account.id)
             s.add(
                 LoginCommand(
                     manager_id=account.manager_id,
                     account_id=account.id,
                     messenger=Messenger.tg,
                     kind=LoginCommandKind.log_out,
-                    status="pending",
+                    status=LoginCommandStatus.pending,
                 )
             )
             await s.commit()

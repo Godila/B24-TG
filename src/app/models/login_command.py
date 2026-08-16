@@ -23,7 +23,9 @@ from sqlalchemy import (
     String,
     Text,
     text,
+    update,
 )
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -106,3 +108,32 @@ class LoginCommand(Base, TimestampMixin):
     deadline_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+async def terminate_active_commands(
+    session: AsyncSession,
+    *,
+    status: LoginCommandStatus = LoginCommandStatus.cancelled,
+    manager_id: int | None = None,
+    account_id: int | None = None,
+    messenger: Messenger | None = None,
+) -> int:
+    """Перевести живые LoginCommand в терминальный статус + стереть 2FA-пароль.
+
+    Единственная точка инварианта uq_login_commands_active: терминализация
+    обязана освобождать partial unique и вычищать password_transit. До
+    выделения хелпера эта логика жила в четырёх копиях (start/cancel/
+    unlink/selfheal) и начала расходиться стилем (enum vs сырые строки).
+    Фильтры комбинируются; None — не фильтровать. Возвращает число строк.
+    """
+    stmt = update(LoginCommand).where(LoginCommand.status.in_(ACTIVE_STATUSES))
+    if manager_id is not None:
+        stmt = stmt.where(LoginCommand.manager_id == manager_id)
+    if account_id is not None:
+        stmt = stmt.where(LoginCommand.account_id == account_id)
+    if messenger is not None:
+        stmt = stmt.where(LoginCommand.messenger == messenger)
+    result = await session.execute(
+        stmt.values(status=status, password_transit=None)
+    )
+    return int(result.rowcount)

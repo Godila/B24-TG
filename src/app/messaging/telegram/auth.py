@@ -13,13 +13,13 @@
 
 import argparse
 import asyncio
-from pathlib import Path
 
 from sqlalchemy import select
 from telethon import TelegramClient
 
 from app.config import get_settings
 from app.db import async_session
+from app.messaging.telegram.paths import account_session_dir
 from app.messaging.telegram.proxy import telethon_proxy
 from app.models import TgAccount
 
@@ -38,8 +38,8 @@ async def login(phone: str) -> int:
         )
         return 1
 
-    # Per-account подпапка — совпадает с SessionManager._build_provider.
-    session_dir = Path(settings.tg_sessions_dir) / f"account_{account.id}"
+    # Конвенция пути — telegram/paths.py (единый контракт с SessionManager).
+    session_dir = account_session_dir(settings.tg_sessions_dir, account.id)
     session_dir.mkdir(parents=True, exist_ok=True)
     session_path = session_dir / "session"
 

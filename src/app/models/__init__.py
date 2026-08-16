@@ -18,6 +18,7 @@ from app.models.login_command import (
     LoginCommand,
     LoginCommandKind,
     LoginCommandStatus,
+    terminate_active_commands,
 )
 from app.models.manager import Manager, ManagerRole
 from app.models.message import Message, MessageDirection, MessageStatus
@@ -54,4 +55,5 @@ __all__ = [
     "TgAccount",
     "TgAccountStatus",
     "TimestampMixin",
+    "terminate_active_commands",
 ]

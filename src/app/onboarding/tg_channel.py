@@ -26,6 +26,7 @@ from app.models import (
     Messenger,
     TgAccount,
     TgAccountStatus,
+    terminate_active_commands,
 )
 from app.onboarding.types import LoginView, OnboardingStatus
 
@@ -91,16 +92,8 @@ class TgOnboardingChannel:
         async with self._session_factory() as s:
             # Терминализируем живые команды менеджера — и освобождаем
             # partial unique, и гасим идущий bridge-флоу (он увидит статус).
-            await s.execute(
-                update(LoginCommand)
-                .where(
-                    LoginCommand.manager_id == manager.id,
-                    LoginCommand.messenger == Messenger.tg,
-                    LoginCommand.status.in_(ACTIVE_STATUSES),
-                )
-                .values(
-                    status=LoginCommandStatus.cancelled, password_transit=None
-                )
+            await terminate_active_commands(
+                s, manager_id=manager.id, messenger=Messenger.tg
             )
             if account is None:
                 account = TgAccount(
@@ -175,15 +168,7 @@ class TgOnboardingChannel:
 
     async def cancel(self, manager_id: int) -> None:
         async with self._session_factory() as s:
-            await s.execute(
-                update(LoginCommand)
-                .where(
-                    LoginCommand.manager_id == manager_id,
-                    LoginCommand.messenger == Messenger.tg,
-                    LoginCommand.status.in_(ACTIVE_STATUSES),
-                )
-                .values(
-                    status=LoginCommandStatus.cancelled, password_transit=None
-                )
+            await terminate_active_commands(
+                s, manager_id=manager_id, messenger=Messenger.tg
             )
             await s.commit()

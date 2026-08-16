@@ -12,9 +12,9 @@ MAX-строки), поэтому outbox-маршрутизация и throttler
 import asyncio
 import logging
 from collections.abc import Callable, Iterable
-from pathlib import Path
 
 from app.messaging.provider import MessengerProvider
+from app.messaging.telegram.paths import account_session_dir
 from app.messaging.telegram.provider import TelegramProvider
 from app.models import Messenger, TgAccount
 
@@ -40,11 +40,10 @@ class SessionManager:
         self._builders.setdefault(Messenger.tg, self._default_tg_builder)
 
     def _default_tg_builder(self, account: TgAccount) -> MessengerProvider:
-        # CRITICAL: per-account session subdirectory.
-        # Иначе все провайдеры разделят один .session-файл
-        # (<dir>/session) и менеджеры будут перезаписывать сессии друг друга.
-        # session_file = <dir>/session, поэтому dir = per-account подпапка.
-        per_account_dir = Path(self._sessions_dir) / f"account_{account.id}"
+        # CRITICAL: per-account session subdirectory (см. telegram/paths.py):
+        # один общий каталог — и менеджеры перезаписывают .session-файлы
+        # друг друга. Конвенцию пути строит единый helper.
+        per_account_dir = account_session_dir(self._sessions_dir, account.id)
         return TelegramProvider(
             self._api_id, self._api_hash, per_account_dir, proxy=self._proxy
         )

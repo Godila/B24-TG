@@ -66,6 +66,31 @@ async def _user_id_from_token(access_token: str) -> int | None:
         return None
 
 
+async def _resolve_b24_user(
+    settings, auth: str, auth_id: str
+) -> int | JSONResponse:
+    """Личность пользователя placement-вызова — общий код обоих роутов.
+
+    Dev: user_id из legacy AUTH-JSON (локальные тесты виджета без реального
+    B24). Прод: ``user.current`` по AUTH_ID (токен выписан конкретному
+    пользователю). Правила идентификации security-чувствительны и должны
+    жить в одном месте — рассинхрон роутов оставил бы дыру.
+    Возвращает b24_user_id или готовый JSONResponse-ошибку (400/403).
+    """
+    if settings.dev_mode:
+        try:
+            auth_data = json.loads(auth) if auth else {}
+            return int(auth_data.get("user_id"))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return JSONResponse(
+                {"error": "dev mode: requires AUTH.user_id"}, status_code=400,
+            )
+    b24_user_id = await _user_id_from_token(auth_id)
+    if b24_user_id is None:
+        return JSONResponse({"error": "Недействительный B24 токен"}, status_code=403)
+    return b24_user_id
+
+
 def _chat_html() -> str:
     """Прочитать static/placement.html с диска. Если файла нет — заглушка."""
     settings = get_settings()
@@ -126,20 +151,9 @@ async def placement_admin_post(
             {"error": f"unexpected placement: {placement!r}"}, status_code=400,
         )
     settings = get_settings()
-    if settings.dev_mode:
-        try:
-            auth_data = json.loads(auth) if auth else {}
-            b24_user_id = int(auth_data.get("user_id"))
-        except (json.JSONDecodeError, TypeError, ValueError):
-            return JSONResponse(
-                {"error": "dev mode: requires AUTH.user_id"}, status_code=400,
-            )
-    else:
-        b24_user_id = await _user_id_from_token(auth_id)
-        if b24_user_id is None:
-            return JSONResponse(
-                {"error": "Недействительный B24 токен"}, status_code=403,
-            )
+    b24_user_id = await _resolve_b24_user(settings, auth, auth_id)
+    if isinstance(b24_user_id, JSONResponse):
+        return b24_user_id
 
     logger.info(
         "Placement opened: placement=%s b24_user_id=%s", placement, b24_user_id,
@@ -200,21 +214,9 @@ async def placement_deal_post(
     deal_id = int(deal_id_raw) if deal_id_raw else None
 
     settings = get_settings()
-    if settings.dev_mode:
-        # Dev: токена нет — берём user_id из AUTH-JSON (наш локальный формат).
-        try:
-            auth_data = json.loads(auth) if auth else {}
-            b24_user_id = int(auth_data.get("user_id"))
-        except (json.JSONDecodeError, TypeError, ValueError):
-            return JSONResponse(
-                {"error": "dev mode: requires AUTH.user_id"}, status_code=400,
-            )
-    else:
-        b24_user_id = await _user_id_from_token(auth_id)
-        if b24_user_id is None:
-            return JSONResponse(
-                {"error": "Недействительный B24 токен"}, status_code=403,
-            )
+    b24_user_id = await _resolve_b24_user(settings, auth, auth_id)
+    if isinstance(b24_user_id, JSONResponse):
+        return b24_user_id
 
     logger.info(
         "Placement opened: placement=%s deal_id=%s b24_user_id=%s",
