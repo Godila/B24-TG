@@ -70,7 +70,10 @@
         var frame = document.getElementById("frame-" + name);
         tab.classList.toggle("active", on);
         tab.setAttribute("aria-selected", on ? "true" : "false");
-        if (on && !frame.dataset.loaded) {
+        // Ленивая загрузка только для вкладок с data-src (у «Чатов» src
+        // прописан сразу — без guard мы затирали его значением undefined
+        // и iframe уходил на /placement/undefined → 404).
+        if (on && frame.dataset.src && !frame.dataset.loaded) {
           frame.src = frame.dataset.src;
           frame.dataset.loaded = "1";
         }
