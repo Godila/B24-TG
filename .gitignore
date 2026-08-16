@@ -37,3 +37,7 @@ Thumbs.db
 
 # ZCode local session state
 .zcode/
+
+# codegraph local index
+codegraph/
+.codegraph/
