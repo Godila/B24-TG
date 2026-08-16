@@ -12,8 +12,48 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.b24.sync import TIMELINE_MODE_DEFAULT, TIMELINE_MODES
 from app.bridge.crm_sync_worker import CrmSyncData, CrmSyncRepository
-from app.models import Contact, CrmSyncItem, CrmSyncStatus, Dialog, Manager, Message
+from app.models import (
+    AppSetting,
+    Contact,
+    CrmSyncItem,
+    CrmSyncStatus,
+    Dialog,
+    Manager,
+    Message,
+)
+
+TIMELINE_MODE_KEY = "timeline_mode"
+
+
+async def get_timeline_mode(session_factory) -> str:
+    """Прочитать app_settings.timeline_mode (нет строки/мусор — дефолт)."""
+    async with session_factory() as s:
+        row = (
+            await s.execute(
+                select(AppSetting).where(AppSetting.key == TIMELINE_MODE_KEY)
+            )
+        ).scalar_one_or_none()
+    value = row.value if row is not None else None
+    return value if value in TIMELINE_MODES else TIMELINE_MODE_DEFAULT
+
+
+async def set_timeline_mode(session_factory, mode: str) -> None:
+    """Upsert app_settings.timeline_mode (режим обязан быть из TIMELINE_MODES)."""
+    if mode not in TIMELINE_MODES:
+        raise ValueError(f"bad timeline_mode: {mode!r}")
+    async with session_factory() as s:
+        row = (
+            await s.execute(
+                select(AppSetting).where(AppSetting.key == TIMELINE_MODE_KEY)
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            s.add(AppSetting(key=TIMELINE_MODE_KEY, value=mode))
+        else:
+            row.value = mode
+        await s.commit()
 
 
 class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
@@ -196,6 +236,9 @@ class WorkerCrmSyncRepository(CrmSyncRepository):
     async def fetch_due(self, limit: int = 20) -> list[CrmSyncItem]:
         async with self._session_factory() as s:
             return await SqlAlchemyCrmSyncRepository(s).fetch_due(limit)
+
+    async def get_timeline_mode(self) -> str:
+        return await get_timeline_mode(self._session_factory)
 
     async def mark_done(self, item: CrmSyncItem) -> None:
         async with self._session_factory() as s:

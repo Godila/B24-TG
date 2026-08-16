@@ -3,38 +3,168 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Bitrix-TG — панель управления</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <title>ЧатМост — панель управления</title>
   <script src="/static/vendor/qrcode.min.js"></script>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 30px auto; padding: 0 16px; background: var(--bg); }
-    h1 { font-size: 1.4rem; }
-    h2 { font-size: 1.1rem; margin-top: 32px; }
-    .cards { display: flex; gap: 16px; flex-wrap: wrap; }
-    .channel-card { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 16px; width: 320px; }
-    .channel-card h3 { margin: 0 0 8px; }
-    button { margin-top: 8px; padding: 8px 16px; font-size: 0.95rem; cursor: pointer; }
-    .qrbox { margin: 12px 0; }
-    .pwrow input { padding: 8px; font-size: 1rem; }
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; }
-    .badge.ok { background: #e6f6e6; color: #1d7a35; }
-    .badge.warn { background: #fdf3d8; color: #8a6d1a; }
-    .badge.err { background: #fde8e8; color: #b3352f; }
-    .badge.wait { background: #eef4fd; color: #2a5fa8; }
-    .hint { color: #666; font-size: 0.88rem; margin-top: 4px; }
-    table { border-collapse: collapse; width: 100%; background: #fff; border: 1px solid var(--border); border-radius: 8px; }
-    th, td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: left; font-size: 0.92rem; }
-    th { background: #f3f5f8; }
-    .toggle { cursor: pointer; }
-    form.inline { display: flex; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
-    form.inline input { padding: 8px; font-size: 0.95rem; }
-    .err-line { color: #b3352f; font-size: 0.85rem; }
+    :root {
+      --bg: #f2f4f8;
+      --card: #ffffff;
+      --border: #dfe3ea;
+      --text: #1c2733;
+      --muted: #66707d;
+      --accent: #2f6fed;
+      --accent-dark: #1f57c7;
+      --danger: #b3352f;
+      --ok-bg: #e6f6e6; --ok-fg: #1d7a35;
+      --warn-bg: #fdf3d8; --warn-fg: #8a6d1a;
+      --err-bg: #fde8e8; --err-fg: #b3352f;
+      --wait-bg: #eef4fd; --wait-fg: #2a5fa8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      max-width: 940px; margin: 0 auto; padding: 24px 16px 60px;
+      background: var(--bg); color: var(--text); font-size: 15px; line-height: 1.45;
+    }
+
+    /* --- шапка бренда --- */
+    .brand { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; }
+    .brand-mark {
+      width: 44px; height: 44px; border-radius: 12px; flex: none;
+      background: linear-gradient(135deg, #2f6fed, #7b5bf2);
+      color: #fff; font-size: 22px; font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 4px 12px rgba(47, 111, 237, .3);
+    }
+    .brand h1 { margin: 0; font-size: 1.45rem; letter-spacing: .2px; }
+    .brand .tag {
+      display: inline-block; margin-left: 10px; padding: 2px 10px; border-radius: 999px;
+      background: #e8edf7; color: var(--accent-dark); font-size: .78rem; font-weight: 600;
+      vertical-align: middle;
+    }
+    .lead { color: var(--muted); margin: 6px 0 26px; font-size: .92rem; }
+
+    h2 {
+      font-size: 1.05rem; margin: 30px 0 12px; display: flex; align-items: center; gap: 8px;
+    }
+    h2 .counter { color: var(--muted); font-weight: 400; font-size: .85rem; }
+
+    /* --- карточки каналов --- */
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+    .channel-card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+      padding: 18px; box-shadow: 0 1px 3px rgba(20, 30, 50, .05);
+    }
+    .channel-card h3 { margin: 0 0 10px; font-size: 1.05rem; display: flex; align-items: center; gap: 8px; }
+    .channel-card h3 .chan-ico {
+      width: 30px; height: 30px; border-radius: 8px; flex: none; font-size: 15px;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    #card-tg  .chan-ico { background: #e5f1fb; }
+    #card-max .chan-ico { background: #f0e9fd; }
+    .qrbox { margin: 14px auto; width: max-content; padding: 10px; background: #fff; border: 1px solid var(--border); border-radius: 12px; }
+    .qrbox img, .qrbox canvas { display: block; }
+    .pwrow { display: flex; gap: 8px; margin: 10px 0; }
+    .pwrow input { flex: 1; min-width: 0; }
+
+    /* --- бейджи/чипы --- */
+    .badge {
+      display: inline-block; padding: 3px 10px; border-radius: 999px;
+      font-size: .78rem; font-weight: 600; white-space: nowrap;
+    }
+    .badge.ok { background: var(--ok-bg); color: var(--ok-fg); }
+    .badge.warn { background: var(--warn-bg); color: var(--warn-fg); }
+    .badge.err { background: var(--err-bg); color: var(--err-fg); }
+    .badge.wait { background: var(--wait-bg); color: var(--wait-fg); }
+
+    .chip {
+      display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px 4px 12px;
+      border-radius: 999px; font-size: .8rem; font-weight: 600; white-space: nowrap;
+      background: var(--ok-bg); color: var(--ok-fg);
+    }
+    .chip.warn { background: var(--warn-bg); color: var(--warn-fg); }
+    .chip.err { background: var(--err-bg); color: var(--err-fg); }
+    .chip-x {
+      border: none; cursor: pointer; background: rgba(0,0,0,.08); color: inherit;
+      width: 18px; height: 18px; border-radius: 50%; font-size: 12px; line-height: 1;
+      display: inline-flex; align-items: center; justify-content: center; padding: 0;
+    }
+    .chip-x:hover { background: rgba(0,0,0,.18); }
+
+    /* --- кнопки --- */
+    .btn {
+      appearance: none; border: 1px solid transparent; border-radius: 9px;
+      padding: 9px 18px; font-size: .9rem; font-weight: 600; cursor: pointer;
+      background: var(--accent); color: #fff; transition: background .15s;
+    }
+    .btn:hover { background: var(--accent-dark); }
+    .btn:disabled { opacity: .55; cursor: default; }
+    .btn--ghost {
+      background: transparent; color: var(--text); border-color: var(--border);
+    }
+    .btn--ghost:hover { background: #eef1f6; }
+    .btn--danger { background: transparent; color: var(--danger); border-color: #ecd2d0; }
+    .btn--danger:hover { background: #fbf0ef; }
+    .btn--sm { padding: 6px 12px; font-size: .8rem; border-radius: 7px; }
+    .channel-card .start { margin-top: 10px; }
+
+    /* --- сегмент-контрол (настройка таймлайна) --- */
+    .settings-card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+      padding: 16px 18px; box-shadow: 0 1px 3px rgba(20,30,50,.05);
+    }
+    .settings-card .set-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .segment { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+    .segment button {
+      appearance: none; border: none; cursor: pointer; padding: 8px 14px;
+      font-size: .85rem; font-weight: 600; background: #fff; color: var(--muted);
+      border-right: 1px solid var(--border);
+    }
+    .segment button:last-child { border-right: none; }
+    .segment button.active { background: var(--accent); color: #fff; }
+    .set-state { font-size: .85rem; color: var(--muted); }
+
+    /* --- менеджеры: ряды-карточки вместо тесной таблицы --- */
+    .manager-list { display: flex; flex-direction: column; gap: 10px; }
+    .manager-row {
+      background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+      padding: 14px 16px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+      box-shadow: 0 1px 3px rgba(20,30,50,.05);
+    }
+    .manager-row.inactive { opacity: .62; }
+    .m-avatar {
+      width: 38px; height: 38px; border-radius: 50%; flex: none;
+      background: #e8edf7; color: var(--accent-dark); font-weight: 700; font-size: .9rem;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .m-main { flex: 1 1 240px; min-width: 0; }
+    .m-name { font-weight: 600; }
+    .m-name .hint { font-weight: 400; margin-left: 6px; }
+    .m-accounts { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; }
+    .m-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+    /* --- форма добавления --- */
+    .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+    .toolbar input {
+      border: 1px solid var(--border); border-radius: 9px; padding: 8px 12px;
+      font-size: .9rem; background: #fff; min-width: 140px;
+    }
+    input.pwinput {
+      border: 1px solid var(--border); border-radius: 9px; padding: 8px 12px;
+      font-size: .9rem; background: #fff;
+    }
+
+    .hint { color: var(--muted); font-size: .85rem; }
+    .err-line { color: var(--err-fg); font-size: .85rem; min-height: 1.2em; margin: 6px 0; }
   </style>
 </head>
 <body>
-  <h1>Панель управления</h1>
-  <p class="hint">Открывается из Bitrix24 (сессионная кука). Менеджеры подключают свои
-    мессенджеры сами; администратор управляет правами и аккаунтами.</p>
+  <div class="brand">
+    <div class="brand-mark">⇄</div>
+    <h1>ЧатМост <span class="tag">панель управления</span></h1>
+  </div>
+  <p class="lead">Мост между мессенджерами и Битрикс24. Подключите свои Telegram и MAX —
+    переписка с клиентами появится в карточках сделок.</p>
 
   <h2>Мои каналы</h2>
   <div class="cards">
@@ -43,21 +173,32 @@
   </div>
 
   <div id="supervisor-zone" style="display:none">
-    <h2>Менеджеры</h2>
-    <form class="inline" id="add-manager">
-      <input id="m-name" placeholder="Имя" required>
-      <input id="m-b24" type="number" placeholder="b24_user_id" required>
-      <button type="submit">Добавить менеджера</button>
+    <h2>Настройки</h2>
+    <div class="settings-card">
+      <div class="set-row">
+        <strong>Дублировать переписку в таймлайн CRM:</strong>
+        <div class="segment" id="timeline-segment">
+          <button data-mode="first" type="button">Только первое сообщение</button>
+          <button data-mode="all" type="button">Все сообщения</button>
+          <button data-mode="none" type="button">Выключено</button>
+        </div>
+        <span class="set-state" id="timeline-state"></span>
+      </div>
+      <p class="hint" style="margin:10px 0 0">
+        «Только первое» — в карточку сделки попадает комментарий о новом диалоге, остальная
+        переписка живёт во вкладке чата. «Все сообщения» — полный аудит в таймлайне.
+        Уведомления менеджеру о новых клиентах работают в любом режиме.
+      </p>
+    </div>
+
+    <h2>Менеджеры <span class="counter" id="managers-count"></span></h2>
+    <form class="toolbar" id="add-manager">
+      <input id="m-name" placeholder="Имя менеджера" required>
+      <input id="m-b24" type="number" placeholder="ID пользователя Битрикс24" required>
+      <button class="btn" type="submit">Добавить</button>
     </form>
     <div id="add-manager-err" class="err-line"></div>
-    <table id="managers-table">
-      <thead>
-        <tr>
-          <th>Менеджер</th><th>b24_user_id</th><th>Права</th><th>Аккаунты</th><th>Действия</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
+    <div class="manager-list" id="managers-list"></div>
   </div>
 
   <script src="/static/admin/channel-connect.js"></script>
@@ -79,7 +220,7 @@
       root: document.getElementById("card-tg"),
       channel: "tg",
       labels: {
-        title: "Telegram",
+        title: "<span class='chan-ico'>✈️</span>Telegram",
         startLabel: "Подключить Telegram",
         scanHint: "Telegram → Настройки → Устройства → Подключить устройство — наведите камеру на QR.",
       },
@@ -89,7 +230,7 @@
       root: document.getElementById("card-max"),
       channel: "max",
       labels: {
-        title: "MAX",
+        title: "<span class='chan-ico'>🅜</span>MAX",
         startLabel: "Подключить MAX",
         scanHint: "MAX → Профиль → Устройства → Войти по QR-коду — наведите камеру.",
       },
@@ -98,35 +239,89 @@
     tg.mount();
     max.mount();
 
-    // ---- Supervisor-зона ----
+    // ---- Настройка таймлайна ----
+    const TIMELINE_LABELS = {
+      first: "только первое сообщение",
+      all: "все сообщения",
+      none: "выключено",
+    };
+    function renderTimelineMode(mode) {
+      document.querySelectorAll("#timeline-segment button").forEach((b) => {
+        b.classList.toggle("active", b.dataset.mode === mode);
+      });
+      document.getElementById("timeline-state").textContent =
+        "сохранено: " + (TIMELINE_LABELS[mode] || mode);
+    }
+    async function loadSettings() {
+      try { renderTimelineMode((await api("/admin/api/settings")).timeline_mode); }
+      catch { /* не supervisor — секция скрыта целиком */ }
+    }
+    document.querySelectorAll("#timeline-segment button").forEach((b) => {
+      b.addEventListener("click", async () => {
+        renderTimelineMode(b.dataset.mode);
+        document.getElementById("timeline-state").textContent = "сохраняем…";
+        try {
+          await api("/admin/api/settings", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ timeline_mode: b.dataset.mode }),
+          });
+          renderTimelineMode(b.dataset.mode);
+        } catch (e) {
+          document.getElementById("timeline-state").textContent = "ошибка: " + e.message;
+        }
+      });
+    });
+
+    // ---- Supervisor-зона: менеджеры ----
+    function initials(name) {
+      return (name || "?").trim().split(/\s+/).slice(0, 2)
+        .map((w) => w[0]).join("").toUpperCase();
+    }
+
+    function accountChip(a) {
+      const cls = a.status === "active" ? "" : a.status === "banned" ? "err" : "warn";
+      const label = a.messenger.toUpperCase() + " · " +
+        (a.status === "active" ? "активен" : a.status === "banned" ? "заблокирован" : "офлайн");
+      const x = a.status === "active"
+        ? `<button class="chip-x" data-unlink="${a.id}" title="Отключить аккаунт">×</button>` : "";
+      return `<span class="chip ${cls}">${label}${x}</span>`;
+    }
+
     async function loadSupervisor() {
       let me;
       try { me = await api("/admin/api/me"); } catch { return; }
       if (me.role !== "supervisor") return;
       document.getElementById("supervisor-zone").style.display = "";
+
       const rows = await api("/admin/api/managers");
-      const tbody = document.querySelector("#managers-table tbody");
-      tbody.innerHTML = "";
+      document.getElementById("managers-count").textContent = "· " + rows.length;
+      const list = document.getElementById("managers-list");
+      list.innerHTML = "";
       for (const m of rows) {
-        const tr = document.createElement("tr");
-        const accounts = m.accounts.map((a) =>
-          `<span class="badge ${a.status === "active" ? "ok" : a.status === "banned" ? "err" : "warn"}">` +
-          `${a.messenger.toUpperCase()} · ${a.status}</span> ` +
-          (a.status !== "active" ? "" :
-            `<button data-unlink="${a.id}" type="button">Отключить</button>`)
-        ).join(" ") || "<span class='hint'>нет</span>";
-        tr.innerHTML = `
-          <td>${m.name}${m.is_active ? "" : " <span class='badge err'>деактивирован</span>"}</td>
-          <td>${m.b24_user_id}</td>
-          <td><button class="toggle" data-patch="${m.id}" data-field="is_readonly"
-               data-value="${!m.is_readonly}" type="button">${m.is_readonly ? "только чтение" : "чтение и запись"}</button></td>
-          <td>${accounts}</td>
-          <td>${m.is_active
-            ? `<button class="toggle" data-patch="${m.id}" data-field="is_active" data-value="false" type="button">Деактивировать</button>`
-            : `<button class="toggle" data-patch="${m.id}" data-field="is_active" data-value="true" type="button">Активировать</button>`}</td>`;
-        tbody.appendChild(tr);
+        const div = document.createElement("div");
+        div.className = "manager-row" + (m.is_active ? "" : " inactive");
+        const accounts = m.accounts.map(accountChip).join("") ||
+          "<span class='hint'>нет подключённых каналов</span>";
+        div.innerHTML = `
+          <div class="m-avatar">${initials(m.name)}</div>
+          <div class="m-main">
+            <div class="m-name">${m.name}<span class="hint">Битрикс24 #${m.b24_user_id}</span>
+              ${m.is_active ? "" : " <span class='badge err'>деактивирован</span>"}</div>
+            <div class="m-accounts">${accounts}</div>
+          </div>
+          <div class="m-actions">
+            <button class="btn btn--ghost btn--sm" data-patch="${m.id}" data-field="is_readonly"
+              data-value="${!m.is_readonly}" type="button"
+              title="Права на отправку сообщений из виджета">
+              ${m.is_readonly ? "🔒 только чтение" : "✏️ чтение и запись"}</button>
+            ${m.is_active
+              ? `<button class="btn btn--danger btn--sm" data-patch="${m.id}" data-field="is_active" data-value="false" type="button">Деактивировать</button>`
+              : `<button class="btn btn--ghost btn--sm" data-patch="${m.id}" data-field="is_active" data-value="true" type="button">Активировать</button>`}
+          </div>`;
+        list.appendChild(div);
       }
-      tbody.querySelectorAll("[data-unlink]").forEach((btn) => {
+      list.querySelectorAll("[data-unlink]").forEach((btn) => {
         btn.addEventListener("click", async () => {
           btn.disabled = true;
           try { await api(`/admin/api/accounts/${btn.dataset.unlink}/unlink`, { method: "POST" }); }
@@ -134,7 +329,7 @@
           loadSupervisor();
         });
       });
-      tbody.querySelectorAll("[data-patch]").forEach((btn) => {
+      list.querySelectorAll("[data-patch]").forEach((btn) => {
         btn.addEventListener("click", async () => {
           const body = {}; body[btn.dataset.field] = btn.dataset.value === "true";
           try { await api(`/admin/api/managers/${btn.dataset.patch}`, {
@@ -167,6 +362,7 @@
     });
 
     loadSupervisor();
+    loadSettings();
   </script>
 </body>
 </html>

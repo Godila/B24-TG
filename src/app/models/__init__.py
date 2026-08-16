@@ -6,6 +6,7 @@ SQLAlchemy смог разрешить строковые forward-refs в ``rela
 ``from app.models import Base, Manager, ...``.
 """
 
+from app.models.app_setting import AppSetting
 from app.models.attachment import Attachment, AttachmentType
 from app.models.b24_token import B24Token
 from app.models.base import Base, TimestampMixin
@@ -28,6 +29,7 @@ __all__ = [
     "ACTIVE_STATUSES",
     "KIND_INBOUND",
     "KIND_OUTBOUND",
+    "AppSetting",
     "Attachment",
     "AttachmentType",
     "B24Token",

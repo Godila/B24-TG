@@ -48,6 +48,7 @@ def _make_repo(items, data) -> AsyncMock:
     repo.reschedule = AsyncMock()
     repo.apply_inbound_result = AsyncMock()
     repo.set_timeline_comment = AsyncMock()
+    repo.get_timeline_mode = AsyncMock(return_value="all")
     return repo
 
 
@@ -183,7 +184,7 @@ async def test_outbound_success_sets_comment_and_marks_done():
 
     sync.process_outbound.assert_awaited_once_with(
         dialog_deal_id=100, dialog_entity_type="deal",
-        contact_id=42, text="Ответ менеджера",
+        contact_id=42, text="Ответ менеджера", timeline_mode="all",
     )
     repo.set_timeline_comment.assert_awaited_once_with(11, 555)
     repo.mark_done.assert_awaited_once()
@@ -234,3 +235,22 @@ async def test_outbound_terminal_after_max_attempts():
 
     repo.mark_failed.assert_awaited_once()
     repo.reschedule.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_worker_passes_timeline_mode_to_sync():
+    """Режим из repo.get_timeline_mode() доезжает до process_inbound."""
+    data = _make_data(message_text="вопрос")
+    repo = _make_repo([_make_item(kind=KIND_INBOUND)], data)
+    repo.get_timeline_mode = AsyncMock(return_value="first")
+    sync = AsyncMock()
+    sync.process_inbound = AsyncMock(
+        return_value=SyncResult(contact_id=42, deal_id=100, is_new=True)
+    )
+
+    worker = CrmSyncWorker(repo=repo, b24sync=sync, max_attempts=5)
+    await worker._process_once()
+
+    assert (
+        sync.process_inbound.call_args.kwargs.get("timeline_mode") == "first"
+    )

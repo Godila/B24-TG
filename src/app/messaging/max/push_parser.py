@@ -1,16 +1,23 @@
 """Толерантный разбор push'ей MAX → IncomingMessage-поля.
 
 Единственная точка знания о структуре входящих (правится по живым логам
-без риска для остального кода). Формат пойман живьём 2026-08-15:
+без риска для остального кода). Форматы пойманы живьём 2026-08-15/16,
+push op=128 (обновление чата) приходит в ДВУХ формах:
 
-    push op=128 (обновление чата):
-      payload = {chatId: int, unread: int, chat: {type: "DIALOG", ...,
-        lastMessage: {sender: int, id: "117099261900910729", time: ms,
-                      text: str, type: "USER", attaches: [], elements: []}}}
+  первое сообщение чата (полный объект):
+    payload = {chatId, unread, chat: {type: "DIALOG", ...,
+      lastMessage: {sender: int, id: "...", time: ms, text, type: "USER",
+                    attaches: [], elements: []}}}
 
-Фильтры v1: только личные диалогы (chat.type == "DIALOG"), только чужие
-сообщения (sender != own_user_id — свой MSG_SEND тоже прилетает chat-update),
-Избранное (chatId == 0) и служебные типы сообщений скипаются.
+  последующие сообщения (лёгкий пуш — пойман 2026-08-16 на e2e):
+    payload = {chatId, unread, message: {sender, id, time, text, type, ...}}
+
+Во второй форме НЕТ chat.type — фильтр групповых чатов для неё делает
+провайдер через CHAT_INFO по незнакомому chatId (см. provider.py).
+
+Фильтры v1: только личные диалоги, только чужие сообщения (sender !=
+own_user_id — свой MSG_SEND тоже прилетает chat-update), Избранное
+(chatId == 0) и служебные типы сообщений скипаются.
 """
 
 from dataclasses import dataclass
@@ -33,6 +40,44 @@ def _as_str(value: Any) -> str | None:
     return str(value)
 
 
+def contact_display_name(contact: dict) -> str | None:
+    """Отображаемое имя из объекта contact (ответ GET_CONTACTS).
+
+    names: [{name, firstName, lastName, type: FULL_NAME|ONEME|...}] —
+    предпочитаем FULL_NAME, иначе первое непустое; конкатенация
+    firstName+lastName как запасной путь.
+    """
+    names = contact.get("names")
+    if isinstance(names, list) and names:
+        entries = [n for n in names if isinstance(n, dict)]
+        for n in entries:
+            if str(n.get("type") or "").upper() == "FULL_NAME" and n.get("name"):
+                return str(n["name"])
+        for n in entries:
+            if n.get("name"):
+                return str(n["name"])
+        for n in entries:
+            combined = " ".join(
+                p for p in (n.get("firstName"), n.get("lastName")) if p
+            ).strip()
+            if combined:
+                return combined
+    combined = " ".join(
+        p for p in (contact.get("firstName"), contact.get("lastName")) if p
+    ).strip()
+    return combined or None
+
+
+def contact_phone(contact: dict) -> str | None:
+    """Первый телефон из contact.phones[{number, type}] (может не быть)."""
+    phones = contact.get("phones")
+    if isinstance(phones, list):
+        for p in phones:
+            if isinstance(p, dict) and p.get("number"):
+                return str(p["number"])
+    return None
+
+
 @dataclass(slots=True)
 class ParsedPush:
     """Результат разбора: либо валидное входящее, либо причина скипа."""
@@ -44,6 +89,10 @@ class ParsedPush:
     timestamp: Any = None
     content_type: ContentType | None = None
     is_reply: bool = False
+    #: True когда chat.type был в пуше (полная форма). В лёгкой форме
+    #: (payload.message) тип чата неизвестен — провайдер проверит его
+    #: через CHAT_INFO по незнакомому chatId.
+    chat_type_known: bool = False
     #: None = сообщение; иначе причина скипа ('favorites'|'group'|'self'|
     #: 'service'|'empty') — провайдер логирует и не кладёт в очередь.
     skip_reason: str | None = "empty"
@@ -81,7 +130,12 @@ def parse_message_push(frame: dict, own_user_id: int | None) -> ParsedPush:
 
     payload = frame.get("payload") or {}
     chat = payload.get("chat") if isinstance(payload.get("chat"), dict) else {}
-    msg = chat.get("lastMessage") or payload.get("lastMessage")
+    # Полный пуш несёт chat.lastMessage; лёгкий (2-е+ сообщения) — payload.message.
+    msg = (
+        chat.get("lastMessage")
+        or payload.get("lastMessage")
+        or payload.get("message")
+    )
     if not isinstance(msg, dict) or not msg:
         result.skip_reason = "no_message"
         return result
@@ -99,7 +153,6 @@ def parse_message_push(frame: dict, own_user_id: int | None) -> ParsedPush:
     if chat_type and chat_type not in _DIALOG_TYPES:
         result.skip_reason = f"group_{chat_type.lower()}"
         return result
-
     sender = _as_str(msg.get("sender"))
     if sender is None:
         result.skip_reason = "no_sender"
@@ -127,5 +180,6 @@ def parse_message_push(frame: dict, own_user_id: int | None) -> ParsedPush:
     result.timestamp = ms_to_datetime(msg.get("time"))
     result.content_type = ctype
     result.is_reply = bool(msg.get("replyTo") or msg.get("replyToId"))
+    result.chat_type_known = bool(chat_type)
     result.skip_reason = None
     return result

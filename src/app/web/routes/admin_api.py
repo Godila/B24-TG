@@ -121,6 +121,29 @@ async def onboarding_cancel(channel: Messenger, manager: ManagerDep) -> dict:
 # ---------------------------------------------------------------------- #
 # Панель администратора (SupervisorDep)
 # ---------------------------------------------------------------------- #
+class SettingsIn(BaseModel):
+    timeline_mode: str = Field(pattern="^(all|first|none)$")
+
+
+@router.get("/settings", response_model=None)
+async def get_settings(supervisor: SupervisorDep) -> dict:
+    """Глобальные настройки приложения (для supervisor-панели)."""
+    from app.bridge.crm_sync_repo import get_timeline_mode
+
+    mode = await get_timeline_mode(async_session)
+    return {"timeline_mode": mode}
+
+
+@router.put("/settings", response_model=None)
+async def put_settings(
+    body: SettingsIn, supervisor: SupervisorDep
+) -> dict:
+    from app.bridge.crm_sync_repo import set_timeline_mode
+
+    await set_timeline_mode(async_session, body.timeline_mode)
+    return {"timeline_mode": body.timeline_mode}
+
+
 def _manager_dto(m: Manager, accounts: list[TgAccount]) -> dict:
     return {
         "id": m.id,

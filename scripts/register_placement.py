@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Регистрация placement-виджетов в Bitrix24 (один раз при установке).
+"""Регистрация placement-виджетов «ЧатМост» в Bitrix24 (один раз при установке).
 
 Биндит обе точки:
-- CRM_DEAL_DETAIL_TAB → /placement/deal — вкладка «Чат» в карточке сделки;
-- LEFT_MENU → /placement/admin — пункт «Мессенджеры» в главном меню
-  портала (админ-панель внутри интерфейса B24; менеджерам — карточки
-  подключения своих каналов, supervisor'у — панель управления).
+- CRM_DEAL_DETAIL_TAB → /placement/deal — вкладка «ЧатМост» в карточке сделки;
+- LEFT_MENU → /placement/admin — пункт «ЧатМост» в главном меню портала
+  (панель управления внутри интерфейса B24).
+
+Идемпотентно и «самообновляемо»: placement.get → если точка не привязана,
+биндим; привязана к нашему handler'у с устаревшим TITLE — unbind+bind
+(заголовок иначе не обновить); привязана к чужому handler'у — предупреждаем.
 
 Запуск на VM (с доступом к .env):
     docker compose exec web python /app/scripts/register_placement.py
@@ -22,19 +25,19 @@ BINDINGS = [
     {
         "PLACEMENT": "CRM_DEAL_DETAIL_TAB",
         "HANDLER": f"{BASE_URL}/placement/deal",
-        "TITLE": "Чат",
+        "TITLE": "ЧатМост",
         "LANG_ALL": {
-            "ru": {"TITLE": "Чат"},
-            "en": {"TITLE": "Chat"},
+            "ru": {"TITLE": "ЧатМост"},
+            "en": {"TITLE": "ChatMost"},
         },
     },
     {
         "PLACEMENT": "LEFT_MENU",
         "HANDLER": f"{BASE_URL}/placement/admin",
-        "TITLE": "Мессенджеры",
+        "TITLE": "ЧатМост",
         "LANG_ALL": {
-            "ru": {"TITLE": "Мессенджеры"},
-            "en": {"TITLE": "Messengers"},
+            "ru": {"TITLE": "ЧатМост"},
+            "en": {"TITLE": "ChatMost"},
         },
     },
 ]
@@ -53,15 +56,16 @@ async def main():
 
     client = Bitrix24Client(client_endpoint=portal)
     try:
-        # Идемпотентность: повторный bind той же точки создаёт ДУБЛИКАТ
-        # (две вкладки/два пункта меню), поэтому сначала смотрим, что уже
-        # привязано, и биндим только отсутствующее.
-        existing: dict[str, str] = {}
+        # placement → (handler, title). Повторный bind той же точки создаёт
+        # ДУБЛИКАТ (две вкладки/два пункта) — поэтому сначала сверяемся.
+        existing: dict[str, tuple[str, str]] = {}
         try:
             for b in await client.call(
                 "placement.get", auth_token=token.access_token,
             ) or []:
-                existing[str(b.get("placement", ""))] = str(b.get("handler", ""))
+                existing[str(b.get("placement", ""))] = (
+                    str(b.get("handler", "")), str(b.get("title", "")),
+                )
         except Exception as e:  # noqa: BLE001 - one-off ops-скрипт
             print(f"placement.get error (продолжаем вслепую): {e}")
 
@@ -69,20 +73,29 @@ async def main():
             code = binding["PLACEMENT"]
             handler = binding["HANDLER"]
             if code in existing:
-                if existing[code] == handler:
-                    print(f"{code}: уже привязан к нашему handler'у — пропускаем")
-                else:
+                bound_handler, bound_title = existing[code]
+                if bound_handler != handler:
                     print(f"{code}: привязан к ДРУГОМУ handler'у "
-                          f"({existing[code]}) — пропускаем, разбирайтесь руками")
-                continue
+                          f"({bound_handler}) — пропускаем, разбирайтесь руками")
+                    continue
+                if bound_title == binding["TITLE"]:
+                    print(f"{code}: уже привязан ({bound_title!r}) — ок")
+                    continue
+                # Наш handler, но устаревший заголовок → unbind + bind.
+                try:
+                    await client.call(
+                        "placement.unbind", auth_token=token.access_token,
+                        params={"PLACEMENT": code, "HANDLER": handler},
+                    )
+                    print(f"{code}: отвязан устаревший ({bound_title!r})")
+                except Exception as e:  # noqa: BLE001
+                    print(f"{code}: unbind error: {e} — пробуем bind всё равно")
             try:
                 result = await client.call(
                     "placement.bind", auth_token=token.access_token,
                     params=binding,
                 )
-                print(f"{code}: bind result={result}")
-                if not result:
-                    print(f"  WARNING: {code} returned False.")
+                print(f"{code}: bind result={result} title={binding['TITLE']!r}")
             except Exception as e:  # noqa: BLE001 - one-off ops-скрипт
                 print(f"{code}: bind error: {e}")
     finally:

@@ -122,3 +122,62 @@ def test_reply_detected():
     payload["chat"]["lastMessage"]["replyTo"] = "12345"
     parsed = parse_message_push(_frame(payload), own_user_id=1)
     assert parsed.is_reply is True
+
+
+# --- Лёгкая форма пуша (поймана живьём 2026-08-16 на e2e) --------------- #
+
+def test_light_push_payload_message_parsed():
+    """2-е+ сообщения чата: {chatId, unread, message:{...}} без chat-объекта.
+
+    Раньше парсер читал только chat.lastMessage — эти сообщения терялись."""
+    payload = {
+        "chatId": 53007183, "unread": 1,
+        "message": {
+            "sender": 349157962, "id": "117106696678554959",
+            "time": 1786906382424, "text": "Геор ты угадал",
+            "type": "USER", "attaches": [],
+        },
+    }
+    parsed = parse_message_push(_frame(payload), own_user_id=401041669)
+    assert parsed.skip_reason is None
+    assert parsed.external_chat_id == "53007183"
+    assert parsed.sender_external_id == "349157962"
+    assert parsed.external_message_id == "117106696678554959"
+    assert parsed.text == "Геор ты угадал"
+    # Тип чата в лёгкой форме неизвестен — провайдер проверит CHAT_INFO.
+    assert parsed.chat_type_known is False
+
+
+def test_full_push_chat_type_known():
+    parsed = parse_message_push(_frame(_chat_payload()), own_user_id=1)
+    assert parsed.skip_reason is None
+    assert parsed.chat_type_known is True
+
+
+# --- Хелперы контакта (GET_CONTACTS, формат пойман живьём 2026-08-16) --- #
+
+def test_contact_display_name_prefers_full_name():
+    from app.messaging.max.push_parser import contact_display_name
+
+    contact = {"names": [
+        {"name": "Тимур", "type": "ONEME"},
+        {"name": "Тимур Азизов", "type": "FULL_NAME"},
+    ]}
+    assert contact_display_name(contact) == "Тимур Азизов"
+
+
+def test_contact_display_name_first_last_fallback():
+    from app.messaging.max.push_parser import contact_display_name
+
+    assert contact_display_name(
+        {"names": [{"firstName": "Тимур", "lastName": "Азизов"}]}
+    ) == "Тимур Азизов"
+    assert contact_display_name({"names": []}) is None
+
+
+def test_contact_phone_extracted():
+    from app.messaging.max.push_parser import contact_phone
+
+    contact = {"phones": [{"type": "MOBILE", "number": "+79990001122"}]}
+    assert contact_phone(contact) == "+79990001122"
+    assert contact_phone({"phones": []}) is None

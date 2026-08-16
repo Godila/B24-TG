@@ -21,6 +21,13 @@ OP_LOGIN = 19
 
 # Чаты и сообщения.
 OP_MSG_SEND = 64
+#: GET_CONTACTS: {contactIds: [int]} → payload.contacts[{names[], phones[]}] —
+#: резолв имён/телефонов отправителей. Проверено живьём 2026-08-16:
+#: принимает userId из push'ей; phones бывает пуст (приватность).
+OP_GET_CONTACTS = 32
+#: CHAT_INFO: {chatId} → payload.chat{type, participants, ...} — тип чата
+#: для «лёгких» push'ей (в payload.message нет chat.type).
+OP_CHAT_INFO = 61
 
 # Push-опкоды (сервер → клиент).
 # 128 = обновление чата: payload {chatId, unread, chat: {type, lastMessage,

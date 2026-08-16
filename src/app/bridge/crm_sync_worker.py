@@ -78,6 +78,14 @@ class CrmSyncRepository:
     async def set_timeline_comment(self, message_id: int, comment_id: int) -> None:
         """Записать timeline_comment_id исходящего сообщения."""
 
+    async def get_timeline_mode(self) -> str:
+        """Режим дублирования в таймлайн (app_settings.timeline_mode).
+
+        Дефолт "all" — чтобы фейки в тестах наследовали прежнее поведение;
+        SQLAlchemy-реализация читает настройку с дефолтом TIMELINE_MODE_DEFAULT.
+        """
+        return "all"
+
 
 class CrmSyncWorker:
     """Воркер очереди crm_sync: poll → CRM-вызовы → retry/backoff."""
@@ -121,14 +129,16 @@ class CrmSyncWorker:
     # Single iteration
     # ------------------------------------------------------------------ #
     async def _process_once(self) -> None:
+        # Режим таймлайна читаем раз на батч (сеттинг меняется редко).
+        timeline_mode = await self._repo.get_timeline_mode()
         items = await self._repo.fetch_due(self._batch_size)
         for item in items:
             if item.kind == KIND_INBOUND:
-                await self._handle_inbound(item)
+                await self._handle_inbound(item, timeline_mode)
             else:
-                await self._handle_outbound(item)
+                await self._handle_outbound(item, timeline_mode)
 
-    async def _handle_inbound(self, item: CrmSyncItem) -> None:
+    async def _handle_inbound(self, item: CrmSyncItem, timeline_mode: str) -> None:
         data = await self._repo.collect(item.message_id)
         if data is None:
             # Сообщение удалено/не найдено — ретраи бессмысленны.
@@ -158,6 +168,7 @@ class CrmSyncWorker:
                 messenger=data.messenger,
                 existing_contact_id=data.crm_contact_id,
                 existing_deal_id=data.crm_deal_id,
+                timeline_mode=timeline_mode,
             )
             if result is None:
                 # Нет B24-токена (интеграция не установлена) — ретраибельно:
@@ -176,7 +187,7 @@ class CrmSyncWorker:
 
         await self._repo.mark_done(item)
 
-    async def _handle_outbound(self, item: CrmSyncItem) -> None:
+    async def _handle_outbound(self, item: CrmSyncItem, timeline_mode: str) -> None:
         data = await self._repo.collect(item.message_id)
         if data is None:
             logger.warning(
@@ -192,6 +203,7 @@ class CrmSyncWorker:
                 dialog_entity_type=data.crm_entity_type,
                 contact_id=data.crm_contact_id,
                 text=data.message_text or "",
+                timeline_mode=timeline_mode,
             )
             if comment_id is not None:
                 await self._repo.set_timeline_comment(item.message_id, comment_id)

@@ -13,6 +13,13 @@ logger = logging.getLogger(__name__)
 # Префикс timeline-комментария исходящего сообщения (spec §8.2 шаг 6).
 OUTBOUND_COMMENT_PREFIX = "💬 Исходящее (менеджер): "
 
+#: Режимы дублирования переписки в таймлайн CRM (app_settings.timeline_mode):
+#:  all   — комментарий на каждое входящее и исходящее (полный аудит, шумно);
+#:  first — только первое сообщение нового диалога («Диалог открыт»);
+#:  none  — в таймлайн не пишем ничего (переписка живёт в виджете).
+TIMELINE_MODES = ("all", "first", "none")
+TIMELINE_MODE_DEFAULT = "first"
+
 
 class SyncResult:
     """Результат обработки входящего сообщения."""
@@ -53,6 +60,7 @@ class Bitrix24Sync:
         messenger: Messenger = Messenger.tg,
         existing_contact_id: int | None = None,
         existing_deal_id: int | None = None,
+        timeline_mode: str = "all",
     ) -> SyncResult | None:
         """Входящее сообщение → CRM.
 
@@ -61,6 +69,8 @@ class Bitrix24Sync:
         уже известные CRM-связи диалога/контакта: если контакт связан,
         пропускаем поиск по телефону (findbyComm по пустому телефону у
         MAX-клиентов плодил бы дубли), если сделка связана — не ищем открытую.
+        ``timeline_mode`` (app_settings): all/first/none — что писать в
+        таймлайн (уведомление менеджеру режимом не трогается).
         """
         token = await self._token_mgr.get_token()
         if token is None:
@@ -106,19 +116,27 @@ class Bitrix24Sync:
             # комментарий уйдёт в карточку контакта, deal_id=None.
             deal_id = deal.id if deal is not None else None
 
-        # 3. Запись в timeline. Если есть сделка — пишем в сделку,
-        #    иначе — в карточку контакта (история диалога сохраняется).
-        if deal_id is not None:
-            comment_id = await self._crm.add_timeline_comment(
-                auth, entity_type="deal", entity_id=deal_id, comment=message_text,
-            )
-        else:
-            comment_id = await self._crm.add_timeline_comment(
-                auth,
-                entity_type="contact",
-                entity_id=contact.id,
-                comment=message_text,
-            )
+        # 3. Запись в timeline по режиму администратора (app_settings).
+        #    first: только сообщение, открывшее диалог (is_new); none: ничего.
+        comment_id: int | None = None
+        write_comment = timeline_mode == "all" or (
+            timeline_mode == "first" and is_new
+        )
+        if write_comment:
+            comment_text = message_text
+            if timeline_mode == "first":
+                comment_text = f"💬 Диалог открыт ({profile.notify_label}): {message_text}"
+            if deal_id is not None:
+                comment_id = await self._crm.add_timeline_comment(
+                    auth, entity_type="deal", entity_id=deal_id, comment=comment_text,
+                )
+            else:
+                comment_id = await self._crm.add_timeline_comment(
+                    auth,
+                    entity_type="contact",
+                    entity_id=contact.id,
+                    comment=comment_text,
+                )
 
         # 4. Уведомление ответственному — ТОЛЬКО первому сообщению нового
         #    клиента (is_new): раньше слалось на каждое входящее (спам
@@ -146,14 +164,19 @@ class Bitrix24Sync:
         dialog_entity_type: str | None,
         contact_id: int | None,
         text: str,
+        *,
+        timeline_mode: str = "all",
     ) -> int | None:
         """Timeline-комментарий для исходящего сообщения (deal или contact-карточка).
 
         Spec §8.2 шаг 6: исходящее сообщение менеджера тоже попадает в
-        историю CRM. Приоритет привязки: сделка диалога → карточка контакта;
-        нет ни той, ни другой — писать некуда, возвращаем None.
+        историю CRM (в режиме ``all``). ``first``/``none`` исходящие в
+        таймлайн не дублируют. Приоритет привязки: сделка диалога → карточка
+        контакта; нет ни той, ни другой — писать некуда, возвращаем None.
         Возвращает ID timeline-комментария или None.
         """
+        if timeline_mode != "all":
+            return None
         token = await self._token_mgr.get_token()
         if token is None:
             logger.error("No B24 token — integration not installed")

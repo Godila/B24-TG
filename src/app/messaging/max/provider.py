@@ -21,6 +21,8 @@ import time
 from collections.abc import AsyncIterator
 
 from app.messaging.max.protocol import (
+    OP_CHAT_INFO,
+    OP_GET_CONTACTS,
     OP_INIT,
     OP_LOGIN,
     OP_MSG_SEND,
@@ -30,7 +32,11 @@ from app.messaging.max.protocol import (
     login_payload,
     msg_send_payload,
 )
-from app.messaging.max.push_parser import parse_message_push
+from app.messaging.max.push_parser import (
+    contact_display_name,
+    contact_phone,
+    parse_message_push,
+)
 from app.messaging.max.ws_client import MaxWsClient
 from app.messaging.provider import MessengerProvider
 from app.messaging.types import IncomingMessage, SendResult
@@ -79,6 +85,16 @@ class MaxUserProvider(MessengerProvider):
         self._stopped = False
         self._dead = False  # токен отозван — реконнект бессмыслен
         self._cid_counter = itertools.count()
+        # Обогащение входящих (имя/тип чата) — НЕ в reader-таске WS: reader
+        # ждёт on_push, а on_push с await request() внутри = дедлок (ответ
+        # не сможет прийти, пока reader занят колбэком). Reader кладёт
+        # распарсенный push в очередь, этот воркер последовательно (порядок
+        # сохраняется) делает CHAT_INFO/GET_CONTACTS и кладёт в incoming.
+        self._push_queue: asyncio.Queue = asyncio.Queue()
+        self._push_worker: asyncio.Task | None = None
+        # Кэши обогащения: chatId → диалог ли; userId → (имя, телефон).
+        self._chat_is_dialog_cache: dict[str, bool] = {}
+        self._sender_cache: dict[int, tuple[str | None, str | None]] = {}
         # Один seam на все случаи (первое подключение И реконнекты) —
         # тесты подменяют фабрику целиком, реальной сети в юнит-тестах нет.
         self._client_factory = client_factory or (
@@ -112,6 +128,7 @@ class MaxUserProvider(MessengerProvider):
             await self._safe_close_client()
             raise
         self._supervisor = asyncio.create_task(self._supervise_loop())
+        self._push_worker = asyncio.create_task(self._push_worker_loop())
 
     async def disconnect(self) -> None:
         self._stopped = True
@@ -124,6 +141,15 @@ class MaxUserProvider(MessengerProvider):
             except Exception:  # защитная сетка отмены
                 logger.debug("supervisor cancel", exc_info=True)
             self._supervisor = None
+        if self._push_worker is not None:
+            self._push_worker.cancel()
+            try:
+                await self._push_worker
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # защитная сетка отмены
+                logger.debug("push worker cancel", exc_info=True)
+            self._push_worker = None
         await self._client.close()
         # Завершаем incoming_stream (forward-таска корректно закончится).
         await self._incoming_queue.put(_STREAM_END)
@@ -250,19 +276,42 @@ class MaxUserProvider(MessengerProvider):
                 self._client.on_push(self._on_push)
 
     async def _on_push(self, frame: dict) -> None:
+        """Reader-колбэк: ТОЛЬКО разбор и складывание в очередь обогащения
+
+        (никаких await request() — дедлок, см. __init__)."""
         parsed = parse_message_push(frame, self._own_user_id)
         if parsed.skip_reason is not None:
             if parsed.skip_reason != "activity":
                 logger.info("MAX push пропущен: %s", parsed.skip_reason)
             return
+        self._push_queue.put_nowait(parsed)
+
+    async def _push_worker_loop(self) -> None:
+        while True:
+            parsed = await self._push_queue.get()
+            try:
+                await self._process_push(parsed)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # одна ошибка не убивает воркер
+                logger.exception("MAX push-обработка упала (chat=%s)",
+                                 parsed.external_chat_id)
+
+    async def _process_push(self, parsed) -> None:
         assert parsed.content_type is not None
+        chat_id = parsed.external_chat_id or ""
+        if not parsed.chat_type_known and not await self._chat_is_dialog(chat_id):
+            # Лёгкий пуш без chat.type; CHAT_INFO сказал «не DIALOG» (группа).
+            logger.info("MAX push пропущен: group_chat_info chat=%s", chat_id)
+            return
+        name, phone = await self._resolve_sender(parsed.sender_external_id or "")
         await self._incoming_queue.put(
             IncomingMessage(
                 messenger=Messenger.max,
-                external_chat_id=parsed.external_chat_id or "",
+                external_chat_id=chat_id,
                 sender_external_id=parsed.sender_external_id or "",
-                sender_name=None,  # в push имён нет; контакт получит имя в CRM
-                sender_phone=None,
+                sender_name=name,
+                sender_phone=phone,
                 sender_username=None,
                 content_type=parsed.content_type,
                 text=parsed.text,
@@ -271,3 +320,66 @@ class MaxUserProvider(MessengerProvider):
                 is_reply=parsed.is_reply,
             )
         )
+
+    async def _chat_is_dialog(self, chat_id: str) -> bool:
+        """Тип чата для лёгких push'ей (CHAT_INFO, кэш по chatId).
+
+        При сбое запроса — fail-open (считаем диалогом и НЕ кэшируем):
+        потерять сообщение клиента хуже, чем редкая утечка группового.
+        """
+        cached = self._chat_is_dialog_cache.get(chat_id)
+        if cached is not None:
+            return cached
+        try:
+            numeric = int(chat_id)
+        except ValueError:
+            return False  # нечисловой chatId — точно не наш кейс
+        try:
+            resp = await self._client.request(
+                OP_CHAT_INFO, {"chatId": numeric},
+                timeout=self._request_timeout,
+            )
+        except Exception as exc:  # noqa: BLE001 - enrichment best-effort
+            logger.warning(
+                "MAX CHAT_INFO не ответил (chat=%s): %s — считаем диалогом",
+                chat_id, exc,
+            )
+            return True
+        chat = (resp.get("payload") or {}).get("chat") or {}
+        is_dialog = str(chat.get("type") or "").upper() == "DIALOG"
+        self._chat_is_dialog_cache[chat_id] = is_dialog
+        return is_dialog
+
+    async def _resolve_sender(
+        self, sender_external_id: str
+    ) -> tuple[str | None, str | None]:
+        """Имя+телефон отправителя (GET_CONTACTS, кэш по userId).
+
+        Best-effort: сбой → (None, None) без кэша — сообщение не теряем,
+        попробуем снова на следующем сообщении.
+        """
+        try:
+            uid = int(sender_external_id)
+        except ValueError:
+            return None, None
+        cached = self._sender_cache.get(uid)
+        if cached is not None:
+            return cached
+        try:
+            resp = await self._client.request(
+                OP_GET_CONTACTS, {"contactIds": [uid]},
+                timeout=self._request_timeout,
+            )
+        except Exception as exc:  # noqa: BLE001 - enrichment best-effort
+            logger.warning(
+                "MAX GET_CONTACTS не ответил (user=%s): %s — имя не найдено",
+                sender_external_id, exc,
+            )
+            return None, None
+        contacts = (resp.get("payload") or {}).get("contacts") or []
+        name = phone = None
+        if isinstance(contacts, list) and contacts and isinstance(contacts[0], dict):
+            name = contact_display_name(contacts[0])
+            phone = contact_phone(contacts[0])
+        self._sender_cache[uid] = (name, phone)
+        return name, phone

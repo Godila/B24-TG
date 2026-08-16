@@ -206,3 +206,34 @@ async def test_unlink_max_wipes_credentials(db):
     async with db() as s:
         acc = await s.get(TgAccount, 8)
     assert acc.token is None and acc.status is TgAccountStatus.offline
+
+
+# ---------------------------------------------------------------------- #
+# Глобальные настройки (timeline_mode)
+# ---------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_settings_default_is_first(db):
+    supervisor = await _manager(db, 1)
+    result = await admin_api.get_settings(supervisor)
+    assert result == {"timeline_mode": "first"}
+
+
+@pytest.mark.asyncio
+async def test_settings_put_updates_mode(db):
+    supervisor = await _manager(db, 1)
+    await admin_api.put_settings(
+        admin_api.SettingsIn(timeline_mode="all"), supervisor
+    )
+    assert (await admin_api.get_settings(supervisor))["timeline_mode"] == "all"
+    # Перезапись другим значением — upsert, не дубль.
+    await admin_api.put_settings(
+        admin_api.SettingsIn(timeline_mode="none"), supervisor
+    )
+    assert (await admin_api.get_settings(supervisor))["timeline_mode"] == "none"
+
+
+def test_settings_put_rejects_bad_mode():
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
+        admin_api.SettingsIn(timeline_mode="sometimes")

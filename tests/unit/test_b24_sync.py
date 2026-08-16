@@ -165,3 +165,95 @@ async def test_process_outbound_without_token_returns_none():
 
     assert comment_id is None
     crm.add_timeline_comment.assert_not_awaited()
+
+
+# --- Режимы таймлайна (app_settings.timeline_mode) ---------------------- #
+
+def _crm_new_contact():
+    crm = AsyncMock()
+    crm.find_contact_by_phone = AsyncMock(return_value=None)
+    crm.create_contact = AsyncMock(return_value=ContactInfo(id=77, name="Иван"))
+    crm.create_deal = AsyncMock(return_value=DealInfo(id=100, title="TG: Иван"))
+    crm.add_timeline_comment = AsyncMock(return_value=999)
+    return crm
+
+
+def _crm_existing_contact():
+    crm = AsyncMock()
+    crm.find_contact_by_phone = AsyncMock(return_value=ContactInfo(id=42, name="Иван"))
+    crm.find_open_deal_for_contact = AsyncMock(
+        return_value=DealInfo(id=100, title="Старая")
+    )
+    crm.add_timeline_comment = AsyncMock(return_value=888)
+    return crm
+
+
+@pytest.mark.asyncio
+async def test_timeline_mode_first_only_first_message_commented():
+    # Первое сообщение нового диалога — комментарий с маркером.
+    sync = _make_sync(_crm_new_contact(), AsyncMock())
+    result = await sync.process_inbound(
+        sender_name="Иван", sender_phone="+79991234567",
+        message_text="Здравствуйте", assigned_b24_user_id=1,
+        timeline_mode="first",
+    )
+    sync._crm.add_timeline_comment.assert_awaited_once()
+    text = sync._crm.add_timeline_comment.call_args.kwargs["comment"]
+    assert text.startswith("💬 Диалог открыт")
+    assert "Здравствуйте" in text
+    assert result.timeline_comment_id == 999
+
+    # Второе сообщение (контакт уже известен) — без комментария.
+    sync2 = _make_sync(_crm_existing_contact(), AsyncMock())
+    result2 = await sync2.process_inbound(
+        sender_name="Иван", sender_phone="+79991234567",
+        message_text="Ещё вопрос", assigned_b24_user_id=1,
+        timeline_mode="first",
+    )
+    sync2._crm.add_timeline_comment.assert_not_awaited()
+    assert result2.timeline_comment_id is None
+
+
+@pytest.mark.asyncio
+async def test_timeline_mode_none_no_comments():
+    sync = _make_sync(_crm_new_contact(), AsyncMock())
+    result = await sync.process_inbound(
+        sender_name="Иван", sender_phone="+7",
+        message_text="привет", assigned_b24_user_id=1,
+        timeline_mode="none",
+    )
+    sync._crm.add_timeline_comment.assert_not_awaited()
+    assert result.timeline_comment_id is None
+    # Контакт и сделка всё равно создаются, уведомление — тоже.
+    sync._crm.create_contact.assert_awaited_once()
+    sync._im.notify_manager.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_timeline_mode_all_comment_on_every_message():
+    sync = _make_sync(_crm_existing_contact(), AsyncMock())
+    await sync.process_inbound(
+        sender_name="Иван", sender_phone="+7",
+        message_text="второе сообщение", assigned_b24_user_id=1,
+        timeline_mode="all",
+    )
+    sync._crm.add_timeline_comment.assert_awaited_once()
+    # Без маркера — обычный текст.
+    assert sync._crm.add_timeline_comment.call_args.kwargs["comment"] == "второе сообщение"
+
+
+@pytest.mark.asyncio
+async def test_outbound_timeline_mode_first_and_none_skip_comment():
+    for mode in ("first", "none"):
+        token_mgr = AsyncMock()
+        token = MagicMock()
+        token.access_token = "tok"
+        token_mgr.get_token = AsyncMock(return_value=token)
+        crm = AsyncMock()
+        sync = Bitrix24Sync(token_mgr=token_mgr, crm=crm, im=AsyncMock())
+        result = await sync.process_outbound(
+            dialog_deal_id=100, dialog_entity_type="deal",
+            contact_id=42, text="ответ", timeline_mode=mode,
+        )
+        assert result is None
+        crm.add_timeline_comment.assert_not_awaited()
