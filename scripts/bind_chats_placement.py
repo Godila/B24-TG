@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Привязка пункта «Чаты» (общий мессенджер) в левое меню Битрикс24.
+"""Приводит левое меню Битрикс24 к единственному пункту «ЧатМост».
 
-B24 позволяет НЕСКОЛЬКО обработчиков одного placement — они различаются
-handler-URL. Тело POST у обоих LEFT_MENU одинаковое (PLACEMENT=LEFT_MENU),
-роуты различаем по URL: /placement/admin (панель управления) и
-/placement/chats (этот пункт, отдаёт static/inbox.html).
+B24 рендерит ОДИН пункт LEFT_MENU на приложение, сколько бы обработчиков
+ни было привязано (живая проверка 2026-08-17: биндинг «Чаты» существовал,
+пункт в меню не появился). Поэтому пункт меню ведёт на оболочку
+/placement/app (вкладки «Чаты»/«Панель»), а legacy-обработчики
+/placement/admin и /placement/chats отвязываем — они остаются рабочими
+ссылками/iframe-источниками, но в меню не дублируются.
 
-Идемпотентно: placement.get → биндинг с нашим handler уже есть? выходим :
-placement.bind. Биндинг админки не трогает. Поиск именно по handler (а не
-по коду placement) — ключей LEFT_MENU теперь два, свёртка в dict по коду
-коллизирует.
+Идемпотентно: bind /placement/app если его нет; unbind legacy-хендлеры,
+если ещё привязаны. CRM_DEAL_DETAIL_TAB не трогает.
 
 Запуск на VM (с доступом к .env):
     docker compose exec web python /app/scripts/bind_chats_placement.py
@@ -22,15 +22,19 @@ from app.b24.client import Bitrix24Client
 from app.b24.token_manager import TokenManager
 
 BASE_URL = "https://b24-tg.haragy.top"
-HANDLER = f"{BASE_URL}/placement/chats"
+HANDLER = f"{BASE_URL}/placement/app"
+LEGACY_HANDLERS = [
+    f"{BASE_URL}/placement/admin",
+    f"{BASE_URL}/placement/chats",
+]
 
 BIND_PARAMS = {
     "PLACEMENT": "LEFT_MENU",
     "HANDLER": HANDLER,
-    "TITLE": "Чаты",
+    "TITLE": "ЧатМост",
     "LANG_ALL": {
-        "ru": {"TITLE": "Чаты"},
-        "en": {"TITLE": "Chats"},
+        "ru": {"TITLE": "ЧатМост"},
+        "en": {"TITLE": "ChatMost"},
     },
 }
 
@@ -55,17 +59,28 @@ async def main() -> None:
             )
             or []
         )
-        # Ключ идемпотентности — handler-URL: LEFT_MENU-биндингов два.
-        ours = [b for b in bindings if str(b.get("handler", "")) == HANDLER]
-        if ours:
-            print(f"OK: пункт «Чаты» уже привязан ({HANDLER}) — ничего не делаем.")
-            return
-        result = await client.call(
-            "placement.bind",
-            auth_token=token.access_token,
-            params=BIND_PARAMS,
-        )
-        print(f"Привязан «Чаты» ({HANDLER}), result={result}")
+        left_menu = [
+            str(b.get("handler", "")) for b in bindings if b.get("placement") == "LEFT_MENU"
+        ]
+
+        if HANDLER in left_menu:
+            print(f"OK: LEFT_MENU уже ведёт на {HANDLER} — ничего не делаем.")
+        else:
+            result = await client.call(
+                "placement.bind",
+                auth_token=token.access_token,
+                params=BIND_PARAMS,
+            )
+            print(f"Привязана оболочка {HANDLER}, result={result}")
+
+        for legacy in LEGACY_HANDLERS:
+            if legacy in left_menu:
+                await client.call(
+                    "placement.unbind",
+                    auth_token=token.access_token,
+                    params={"PLACEMENT": "LEFT_MENU", "HANDLER": legacy},
+                )
+                print(f"Отвязан legacy-обработчик {legacy}")
     finally:
         await client.aclose()
 

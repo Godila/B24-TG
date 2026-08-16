@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ЧатМост</title>
+  <style>
+    /* Оболочка левого меню B24 — токены и паттерны из DESIGN.md
+       (канон = набор панели: сегмент-контрол, фокус-пол, шрифтостек). */
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; height: 100vh; display: flex; flex-direction: column;
+      font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: 14px; background: #f2f4f8; color: #1c2733;
+    }
+    header {
+      display: flex; align-items: center; gap: 16px; padding: 10px 16px;
+      background: #fff; border-bottom: 1px solid #dfe3ea; flex: none;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; }
+    .brand-mark {
+      width: 28px; height: 28px; border-radius: 8px; flex: none;
+      background: linear-gradient(135deg, #2f6fed, #7b5bf2); color: #fff;
+      display: flex; align-items: center; justify-content: center; font-size: 14px;
+    }
+    .tabs { display: inline-flex; border: 1px solid #dfe3ea; border-radius: 10px; overflow: hidden; }
+    .tabs button {
+      appearance: none; border: none; cursor: pointer; padding: 8px 16px;
+      font-size: 14px; font-weight: 600; background: #fff; color: #66707d;
+      border-right: 1px solid #dfe3ea; font-family: inherit;
+    }
+    .tabs button:last-child { border-right: none; }
+    .tabs button.active { background: #2f6fed; color: #fff; }
+    .tabs button:focus-visible { outline: 2px solid #2f6fed; outline-offset: -2px; }
+    main { flex: 1; min-height: 0; }
+    iframe { width: 100%; height: 100%; border: none; display: block; }
+    iframe[hidden] { display: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand"><div class="brand-mark">⇄</div><span>ЧатМост</span></div>
+    <nav class="tabs" aria-label="Разделы ЧатМост">
+      <button type="button" id="tab-chats" aria-controls="frame-chats">Чаты</button>
+      <button type="button" id="tab-panel" aria-controls="frame-panel">Панель</button>
+    </nav>
+  </header>
+  <main>
+    <iframe id="frame-chats" src="/placement/chats" title="Чаты — диалоги с клиентами"></iframe>
+    <!-- Ленивая загрузка: панель грузится при первом открытии вкладки,
+         чтобы её статус-поллинг не работал вхолостую. -->
+    <iframe id="frame-panel" data-src="/placement/admin" title="Панель управления" hidden></iframe>
+  </main>
+  <script>
+    // Bitrix24 показывает ОДИН пункт левого меню на приложение, сколько
+    // бы LEFT_MENU-обработчиков ни было привязано (живая проверка
+    // 2026-08-17). Поэтому «Чаты» и «Панель» — вкладки одной оболочки
+    // /placement/app; выбранная вкладка сохраняется в hash (#panel).
+    var TAB_IDS = { chats: "tab-chats", panel: "tab-panel" };
+
+    function currentTab() {
+      return location.hash === "#panel" ? "panel" : "chats";
+    }
+
+    function render() {
+      var cur = currentTab();
+      Object.keys(TAB_IDS).forEach(function (name) {
+        var on = name === cur;
+        var tab = document.getElementById(TAB_IDS[name]);
+        var frame = document.getElementById("frame-" + name);
+        tab.classList.toggle("active", on);
+        tab.setAttribute("aria-selected", on ? "true" : "false");
+        if (on && !frame.dataset.loaded) {
+          frame.src = frame.dataset.src;
+          frame.dataset.loaded = "1";
+        }
+        frame.hidden = !on;
+      });
+      document.title = cur === "panel" ? "ЧатМост — панель" : "ЧатМост — Чаты";
+    }
+
+    document.getElementById("tab-chats").addEventListener("click", function () {
+      location.hash = "#chats";
+    });
+    document.getElementById("tab-panel").addEventListener("click", function () {
+      location.hash = "#panel";
+    });
+    window.addEventListener("hashchange", render);
+    render();
+  </script>
+</body>
+</html>

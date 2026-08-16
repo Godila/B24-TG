@@ -207,13 +207,12 @@ async def placement_chats_post(
     auth_id: str = Form(default="", alias="AUTH_ID"),
     auth: str = Form(default="", alias="AUTH"),
 ) -> HTMLResponse | JSONResponse:
-    """Placement LEFT_MENU (второй обработчик того же типа): «Чаты» —
-    общий мессенджер со всеми диалогами менеджера.
+    """Страница «Чаты» (общий мессенджер) — вкладка оболочки /placement/app.
 
-    B24 различает два LEFT_MENU-пункта по HANDLER-URL (в теле обоих
-    придёт PLACEMENT=LEFT_MENU): /placement/admin — панель управления,
-    /placement/chats — этот роут. Кука без deal_id — страница не
-    фильтруется по сделке.
+    Исторически второй LEFT_MENU-обработчик; B24 рендерит ОДИН пункт
+    левого меню на приложение (живая проверка 2026-08-17), поэтому пункт
+    меню ведёт на /placement/app, а этот роут остаётся прямой ссылкой
+    и iframe-источником вкладки «Чаты». Кука без deal_id.
     """
     return await _handle_left_menu_post(placement, auth_id, auth, label="chats", html=_inbox_html())
 
@@ -230,6 +229,39 @@ def _inbox_html() -> str:
         "inbox.html",
         "ЧатМост: Чаты",
         "Чаты недоступны: static/inbox.html не найден.",
+    )
+
+
+@router.post("/app", response_model=None)
+async def placement_app_post(
+    placement: str = Form(default="", alias="PLACEMENT"),
+    auth_id: str = Form(default="", alias="AUTH_ID"),
+    auth: str = Form(default="", alias="AUTH"),
+) -> HTMLResponse | JSONResponse:
+    """Placement LEFT_MENU — оболочка «ЧатМост»: вкладки «Чаты»/«Панель».
+
+    Единственный LEFT_MENU-обработчик приложения: B24 показывает один
+    пункт меню на приложение, поэтому обе поверхности живут вкладками
+    одной страницы (app-shell.html + ленивые iframe на /placement/chats
+    и /placement/admin — каждый со своей изоляцией CSS/JS).
+    """
+    return await _handle_left_menu_post(
+        placement, auth_id, auth, label="app", html=_app_shell_html()
+    )
+
+
+@router.get("/app", response_model=None)
+async def placement_app_get(_manager: ManagerDep) -> HTMLResponse:
+    """GET-фолбэк (перезагрузка фрейма) — только при живой сессионной куке."""
+    return HTMLResponse(content=_app_shell_html())
+
+
+def _app_shell_html() -> str:
+    """static/app-shell.html — оболочка вкладок «Чаты»/«Панель»."""
+    return _static_html(
+        "app-shell.html",
+        "ЧатМост",
+        "ЧатМост недоступен: static/app-shell.html не найден.",
     )
 
 
