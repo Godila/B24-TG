@@ -236,10 +236,9 @@ function chatApp() {
 
     // --- Медиа-вложения (синхронизированная копия в inbox.js) ---
 
-    /** Скрепка доступна: свой диалог, канал TG (MAX-эмбляция файлов не
-     *  умеет), не read-only. */
+    /** Скрепка доступна: свой диалог, не read-only (TG и MAX умеют файлы). */
     get canAttach() {
-      return !!this.dialog && this.dialog.messenger === "tg" && !this.readonly;
+      return !!this.dialog && !this.readonly;
     },
 
     pickFile() {
@@ -264,7 +263,7 @@ function chatApp() {
     setFile(f) {
       if (!f) return;
       if (!this.canAttach) {
-        this.error = "Вложения для канала MAX пока не поддерживаются";
+        this.error = "Вложения недоступны в этом диалоге";
         return;
       }
       if (f.size > 25 * 1024 * 1024) {

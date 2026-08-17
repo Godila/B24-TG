@@ -6,7 +6,7 @@
 
 Вся история переписки — в собственной PostgreSQL (чего не делает Wazzup), мультиаккаунтность (у каждого менеджера своя сессия), защита от бана, два канала — Telegram и MAX.
 
-> Работает в production: [b24-tg.haragy.top](https://b24-tg.haragy.top) · TG + MAX активны · 390 тестов green.
+> Работает в production: [b24-tg.haragy.top](https://b24-tg.haragy.top) · TG + MAX активны · 435 тестов green.
 
 ## Возможности
 
@@ -29,7 +29,7 @@
 | Telegram | Telethon (MTProto user-API) |
 | MAX | Bot API (WebSocket, bot token) |
 | Инфра | Docker Compose, nginx (TLS, gzip, кэш статики), Let's Encrypt |
-| Качество | pytest + pytest-asyncio (390 тестов), ruff |
+| Качество | pytest + pytest-asyncio (435 тестов), ruff |
 
 ## Архитектура
 
@@ -101,7 +101,7 @@ cd ChatMost
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 
-pytest -v          # 390 тестов
+pytest -v          # 435 тестов
 ruff check src/ tests/
 ```
 
@@ -128,7 +128,7 @@ Production-деплой описан в [`docs/DEPLOY.md`](docs/DEPLOY.md). Кр
 - **Публичные порты**: только nginx (80/443). Postgres — внутри docker-сети.
 - **Секреты**: генерируются на VM, живут в `.env` (chmod 600, в `.gitignore`). 2FA-пароли каналов — только транзит, не хранятся.
 - **Идемпотентность**: дубли (MTProto redelivery, MAX reconnect) отсеиваются по `(dialog_id, external_message_id)`.
-- **Медиа-вложения**: общий docker-том (в БД только метаданные), раздача через авторизованный API (владелец диалога/supervisor), inline — лишь безопасные MIME (SVG/HTML исключены), кэш `private`; загрузки ≤25 МБ по allowlist.
+- **Медиа-вложения** (TG и MAX): общий docker-том (в БД только метаданные), раздача через авторизованный API (владелец диалога/supervisor), inline — лишь безопасные MIME (SVG/HTML исключены), кэш `private`; загрузки ≤25 МБ по allowlist.
 
 ## Статус
 

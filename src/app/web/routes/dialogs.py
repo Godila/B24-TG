@@ -33,7 +33,6 @@ from app.models import (
     Message,
     MessageDirection,
     MessageStatus,
-    Messenger,
     TgAccount,
 )
 from app.web.deps import get_current_manager, verify_origin
@@ -292,12 +291,6 @@ async def send_media_message(
     невидимая утечка диска).
     """
     dialog, account, is_initiation = await _outbound_context(session, dialog_id, manager)
-
-    # v1: медиа умеет только TG (MAX-эмуляция web-клиента — позже).
-    if dialog.messenger != Messenger.tg:
-        raise HTTPException(
-            status_code=409, detail="Вложения для канала MAX пока не поддерживаются"
-        )
 
     mime = normalize_mime(file.content_type)
     if not mime_allowed_for_upload(mime):

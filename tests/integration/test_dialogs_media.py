@@ -174,7 +174,9 @@ def test_send_media_too_large_413(media_app, monkeypatch):
     assert r.status_code == 413
 
 
-def test_send_media_max_dialog_409(media_app):
+def test_send_media_max_dialog_ok(media_app):
+    """Медиа канало-нейтрально: MAX-диалог проходит тот же путь, что и TG
+    (раньше здесь был 409-гейт «MAX пока не поддерживается»)."""
     client, SessionLocal, _ = media_app
     from app.models import Contact, Dialog, Messenger, TgAccount
 
@@ -202,8 +204,9 @@ def test_send_media_max_dialog_409(media_app):
 
     asyncio.run(seed())
     r = _post_png(client, dialog_id=21)
-    assert r.status_code == 409
-    assert "MAX" in r.json()["detail"]
+    assert r.status_code == 201
+    body = r.json()
+    assert body["attachments"], "вложение должно создаться для MAX-диалога"
 
 
 def test_messages_list_includes_attachments(media_app):

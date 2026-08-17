@@ -505,10 +505,9 @@ function inboxApp() {
 
     // --- Медиа-вложения (синхронизированная копия в app.js) ---
 
-    /** Скрепка доступна: свой диалог (canWrite), канал TG (MAX-эмбляция
-     *  файлов не умеет). */
+    /** Скрепка доступна: свой диалог (canWrite; TG и MAX умеют файлы). */
     get canAttach() {
-      return !!this.dialog && this.dialog.messenger === "tg" && this.canWrite;
+      return !!this.dialog && this.canWrite;
     },
 
     pickFile() {
@@ -533,7 +532,7 @@ function inboxApp() {
     setFile(f) {
       if (!f) return;
       if (!this.canAttach) {
-        this.error = "Вложения для канала MAX пока не поддерживаются";
+        this.error = "Вложения недоступны в этом диалоге";
         return;
       }
       if (f.size > 25 * 1024 * 1024) {
