@@ -203,3 +203,90 @@ def test_contact_name_parts_first_available_entry():
     )
     assert contact_name_parts({"names": [{"name": "Тимур"}]}) == (None, None)
     assert contact_name_parts({}) == (None, None)
+
+
+# --- Вложения: толерантная нормализация MaxAttach ----------------------- #
+# Живые кадры с непустыми attaches не пойманы — парсер обязан переварить
+# варианты имён из реверс-моделей комьюнити (type/_type, baseUrl/url,
+# name/filename, size/fileSize, подтаблицы photo/file/video).
+
+
+def test_attach_type_variant_and_url():
+    payload = _chat_payload(
+        text="",
+        attaches=[{"_type": "PHOTO", "baseUrl": "https://i.oneme.ru/i?r=1", "photoId": 33}],
+    )
+    parsed = parse_message_push(_frame(payload), own_user_id=1)
+    assert parsed.skip_reason is None
+    assert parsed.content_type.value == "photo"
+    assert parsed.text == "[фото]"
+    assert parsed.attach is not None
+    assert parsed.attach.kind == "PHOTO"
+    assert parsed.attach.url == "https://i.oneme.ru/i?r=1"
+    assert parsed.attach.photo_id == 33
+
+
+def test_attach_tolerant_field_names():
+    payload = _chat_payload(
+        text="",
+        attaches=[{"type": "IMAGE", "filename": "shot.PNG", "fileSize": "123",
+                   "mimeType": "image/png; charset=binary"}],
+    )
+    parsed = parse_message_push(_frame(payload), own_user_id=1)
+    attach = parsed.attach
+    assert attach.kind == "PHOTO"  # IMAGE* → PHOTO (нормализация)
+    assert attach.file_name == "shot.PNG"
+    assert attach.size == 123
+    assert attach.mime == "image/png"  # params срезаны
+
+
+def test_attach_nested_subtable():
+    payload = _chat_payload(
+        text="",
+        attaches=[{"type": "FILE", "file": {"fileId": "77", "url": "https://fd.oneme.ru/d"}}],
+    )
+    parsed = parse_message_push(_frame(payload), own_user_id=1)
+    assert parsed.attach.file_id == 77
+    assert parsed.attach.url == "https://fd.oneme.ru/d"
+    # Сырой кадр сохранён для форензики смоука.
+    assert parsed.attach.raw["type"] == "FILE"
+
+
+def test_attach_video_with_ids():
+    payload = _chat_payload(text="", attaches=[{"_type": "VIDEO", "videoId": 5, "duration": 12}])
+    parsed = parse_message_push(_frame(payload), own_user_id=1)
+    assert parsed.content_type.value == "video"
+    assert parsed.text == "[видео]"
+    assert parsed.attach.video_id == 5
+
+
+def test_attach_sticker_and_inline_keyboard_are_file():
+    for raw in ({"type": "STICKER"}, {"_type": "INLINE_KEYBOARD", "buttons": []}):
+        parsed = parse_message_push(
+            _frame(_chat_payload(text="", attaches=[raw])), own_user_id=1
+        )
+        assert parsed.content_type.value == "file"
+        assert parsed.text == "[вложение]"
+
+
+def test_attach_broken_element_still_placeholder():
+    """Битой элемент attaches (не dict) — плейсхолдер, как раньше."""
+    parsed = parse_message_push(
+        _frame(_chat_payload(text="", attaches=["мусор"])), own_user_id=1
+    )
+    assert parsed.content_type.value == "file"
+    assert parsed.text == "[вложение]"
+    assert parsed.attach is not None and parsed.attach.kind == "FILE"
+
+
+def test_text_message_has_no_attach():
+    parsed = parse_message_push(_frame(_chat_payload()), own_user_id=401041669)
+    assert parsed.attach is None
+
+
+def test_attach_caption_preserved_over_placeholder():
+    payload = _chat_payload(text="наш отчёт", attaches=[{"type": "FILE", "fileId": 3}])
+    parsed = parse_message_push(_frame(payload), own_user_id=1)
+    assert parsed.text == "наш отчёт"
+    assert parsed.content_type.value == "file"
+    assert parsed.attach.file_id == 3

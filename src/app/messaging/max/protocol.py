@@ -29,6 +29,25 @@ OP_GET_CONTACTS = 32
 #: для «лёгких» push'ей (в payload.message нет chat.type).
 OP_CHAT_INFO = 61
 
+# Медиа-файлы (реверс комьюнити, тот же транспорт ver=11; смоук уточнит
+# детали — все чтения ответов идут через толерантные экстракторы ниже).
+OP_UPLOAD_NOTIFY = 65
+#: {chatId, type: PHOTO|VIDEO|FILE} — уведомление о начале загрузки
+#: (шлёт vkmax перед upload; обязательность не подтверждена).
+OP_PHOTO_UPLOAD = 80
+#: {count:1, profile:false} → payload.url — URL для multipart-POST фото.
+OP_VIDEO_UPLOAD = 82
+#: {count:1, type:0} → payload.info[0] = {url, videoId, token}; type:
+#: 0=video (1=videoNote, 2=voice — не используем).
+OP_VIDEO_GET = 83
+#: {videoId, chatId, messageId} → словарь качеств {MP4_240…MP4_720}.
+OP_FILE_UPLOAD = 87
+#: {count:1} → payload.info[0] = {url, fileId, token}.
+OP_FILE_GET = 88
+#: {fileId, chatId, messageId} → payload.url — временный подписанный URL.
+OP_UPLOAD_READY = 136
+#: PUSH: сервер обработал upload (внутри payload — fileId/videoId).
+
 # Push-опкоды (сервер → клиент).
 # 128 = обновление чата: payload {chatId, unread, chat: {type, lastMessage,
 #   participants, ...}} — входящее сообщение видно как chat.lastMessage
@@ -94,13 +113,122 @@ def login_payload(token: str) -> dict:
     }
 
 
-def msg_send_payload(chat_id: int, text: str, cid: int) -> dict:
-    """MSG_SEND(64): cid — ms-таймстамп для дедупа повторных отправок."""
+def msg_send_payload(
+    chat_id: int, text: str, cid: int, attaches: list[dict] | None = None
+) -> dict:
+    """MSG_SEND(64): cid — ms-таймстамп для дедупа повторных отправок.
+
+    ``attaches`` — элементы вложений (см. *_attach ниже); пусто = текст.
+    """
     return {
         "chatId": chat_id,
-        "message": {"text": text, "cid": cid, "elements": [], "attaches": []},
+        "message": {
+            "text": text,
+            "cid": cid,
+            "elements": [],
+            "attaches": attaches or [],
+        },
         "notify": True,
     }
+
+
+#: Виды загрузки для upload_notify_payload / MaxMediaClient.upload.
+UPLOAD_KIND_PHOTO = "PHOTO"
+UPLOAD_KIND_VIDEO = "VIDEO"
+UPLOAD_KIND_FILE = "FILE"
+
+
+def upload_notify_payload(chat_id: int, kind: str) -> dict:
+    return {"chatId": chat_id, "type": kind}
+
+
+def photo_upload_payload() -> dict:
+    return {"count": 1, "profile": False}
+
+
+def video_upload_payload() -> dict:
+    return {"count": 1, "type": 0}
+
+
+def file_upload_payload() -> dict:
+    return {"count": 1}
+
+
+def file_get_payload(
+    file_id: int, chat_id: int, message_id: str | int | None
+) -> dict:
+    return {"fileId": file_id, "chatId": chat_id, "messageId": message_id}
+
+
+def video_get_payload(
+    video_id: int, chat_id: int, message_id: str | int | None
+) -> dict:
+    return {"videoId": video_id, "chatId": chat_id, "messageId": message_id}
+
+
+def photo_attach(photo_token: str) -> dict:
+    """Элемент attaches[] для отправленного фото."""
+    return {"_type": "PHOTO", "photoToken": photo_token}
+
+
+def file_attach(file_id: int) -> dict:
+    """Элемент attaches[] для отправленного файла."""
+    return {"_type": "FILE", "fileId": file_id}
+
+
+def video_attach(video_id: int, token: str | None) -> dict:
+    """Элемент attaches[] для отправленного видео."""
+    attach: dict = {"_type": "VIDEO", "videoId": video_id}
+    if token:
+        attach["token"] = token
+    return attach
+
+
+def to_int(value: object) -> int | None:
+    """int-подобное значение → int (id приходят и числом, и строкой-цифрой)."""
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def photo_upload_url(payload: dict) -> str | None:
+    """URL загрузки из ответа OP_PHOTO_UPLOAD (payload.url)."""
+    url = payload.get("url")
+    return str(url) if url else None
+
+
+def upload_slot(payload: dict) -> tuple[str, int | None, str | None] | None:
+    """(url, fileId|videoId, token) из ответа OP_FILE_UPLOAD/OP_VIDEO_UPLOAD.
+
+    Какой именно id пришёл — знает вызывающий (он выбирал опкод).
+    Толерантно: info[0] отсутствует/пуст → None.
+    """
+    info = payload.get("info")
+    if isinstance(info, list) and info and isinstance(info[0], dict):
+        slot = info[0]
+        raw_id = slot.get("fileId", slot.get("videoId"))
+        url = str(slot.get("url") or "") or None
+        return url, to_int(raw_id), str(slot.get("token") or "") or None
+    return None
+
+
+def photo_upload_token(payload: dict) -> str | None:
+    """Токен загруженного фото: {"photos": {"<id>": {"token": …}}} — первый."""
+    photos = payload.get("photos")
+    if isinstance(photos, dict):
+        for value in photos.values():
+            if isinstance(value, dict) and value.get("token"):
+                return str(value["token"])
+    return None
+
+
+def download_url(payload: dict) -> str | None:
+    """Подписанный временный URL из ответа OP_FILE_GET (payload.url)."""
+    url = payload.get("url")
+    return str(url) if url else None
 
 
 def ms_to_datetime(ms: float | None) -> datetime | None:

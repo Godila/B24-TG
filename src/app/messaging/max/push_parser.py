@@ -20,18 +20,108 @@ own_user_id — свой MSG_SEND тоже прилетает chat-update), Из
 (chatId == 0) и служебные типы сообщений скипаются.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
+from app.media.storage import normalize_mime, sanitize_file_name
 from app.messaging.max.protocol import (
     OP_CHAT_ACTIVITY,
     OP_CHAT_UPDATE,
     ms_to_datetime,
+    to_int,
 )
 from app.messaging.types import ContentType
 
 #: Значения chat.type, которые считаем личным диалогом клиент↔менеджер.
 _DIALOG_TYPES = {"DIALOG"}
+
+#: Префиксы типов вложений → нормализованный вид (kind).
+_KIND_PREFIXES = (
+    ("IMAGE", "PHOTO"),
+    ("PHOTO", "PHOTO"),
+    ("VIDEO", "VIDEO"),
+    ("AUDIO", "AUDIO"),
+    ("FILE", "FILE"),
+    ("STICKER", "STICKER"),
+)
+
+
+@dataclass(slots=True)
+class MaxAttach:
+    """Нормализованное вложение входящего сообщения (только attaches[0]).
+
+    Живые кадры с непустыми attaches пока не пойманы — поля читаются
+    ТОЛЕРАНТНО к вариантам имён (type/_type, baseUrl/url, name/filename,
+    size, mimeType) и к подтаблицам photo/file/video (модели комьюнити
+    вкладывают id/url туда). ``raw`` хранит исходник: по логам смоука
+    правится именно сюда, не задевая остальное.
+    """
+
+    kind: str | None  # PHOTO|VIDEO|AUDIO|FILE|STICKER|<как пришло, upper>
+    url: str | None = None  # baseUrl|url — прямой CDN (фото, аудио)
+    photo_id: int | None = None
+    file_id: int | None = None
+    video_id: int | None = None
+    token: str | None = None
+    file_name: str | None = None
+    size: int | None = None  # declared размер из вложения
+    mime: str | None = None
+    raw: dict = field(default_factory=dict)
+
+
+def _pick(source: dict, *keys: str) -> object | None:
+    """Первое непустое значение по списку ключей-кандидатов."""
+    for key in keys:
+        value = source.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _normalize_kind(kind_raw: str) -> str | None:
+    for prefix, normalized in _KIND_PREFIXES:
+        if kind_raw.startswith(prefix):
+            return normalized
+    return kind_raw or None
+
+
+def extract_attach(msg: dict) -> MaxAttach | None:
+    """Первое вложение сообщения → нормализованный MaxAttach (best-effort).
+
+    Не бросает исключений; None = вложения нет/нечитаемо (сообщение живёт
+    как текст). Форма не подтверждена живьём — расширение кандидатов имён
+    после смоука правится здесь.
+    """
+    attaches = msg.get("attaches")
+    if not isinstance(attaches, list) or not attaches:
+        return None
+    raw = attaches[0]
+    if not isinstance(raw, dict):
+        # Битый элемент: считаем неизвестным вложением — плейсхолдер, как
+        # классификатор делал раньше (сообщение не молчит).
+        return MaxAttach(kind="FILE")
+    source = raw
+    for sub in ("photo", "file", "video", "audio"):
+        nested = raw.get(sub)
+        if isinstance(nested, dict):
+            source = {**raw, **nested}
+            break
+
+    kind_raw = str(_pick(source, "_type", "type", "kind") or "").upper()
+    file_name_raw = _as_str(_pick(source, "name", "filename", "fileName"))
+    mime_raw = _as_str(_pick(source, "mimeType", "mime", "contentType"))
+    return MaxAttach(
+        kind=_normalize_kind(kind_raw),
+        url=_as_str(_pick(source, "baseUrl", "url")),
+        photo_id=to_int(_pick(source, "photoId")),
+        file_id=to_int(_pick(source, "fileId")),
+        video_id=to_int(_pick(source, "videoId")),
+        token=_as_str(_pick(source, "token", "photoToken")),
+        file_name=sanitize_file_name(file_name_raw),
+        size=to_int(_pick(source, "size", "fileSize")),
+        mime=normalize_mime(mime_raw),
+        raw=raw,
+    )
 
 
 def _as_str(value: Any) -> str | None:
@@ -106,6 +196,9 @@ class ParsedPush:
     timestamp: Any = None
     content_type: ContentType | None = None
     is_reply: bool = False
+    #: Нормализованное первое вложение (None = текстовое сообщение) —
+    #: провайдер скачивает по нему файл (media.py).
+    attach: MaxAttach | None = None
     #: True когда chat.type был в пуше (полная форма). В лёгкой форме
     #: (payload.message) тип чата неизвестен — провайдер проверит его
     #: через CHAT_INFO по незнакомому chatId.
@@ -115,22 +208,20 @@ class ParsedPush:
     skip_reason: str | None = "empty"
 
 
-def _content_type_and_text(msg: dict) -> tuple[ContentType, str | None]:
+def _content_type_and_text(
+    attach: MaxAttach | None, text: str | None
+) -> tuple[ContentType, str | None]:
     """Тип контента: как у TG — медиа без текста не теряется, а плейсхолдер."""
-    text = msg.get("text") or None
-    attaches = msg.get("attaches")
-    if not isinstance(attaches, list) or not attaches:
+    if attach is None or attach.kind is None:
         return ContentType.text, text
-    first = attaches[0] if isinstance(attaches[0], dict) else {}
-    kind = str(first.get("type") or "").upper()
-    # Известные типы вложений web-клиента: IMAGE/VIDEO/AUDIO/FILE.
-    if kind.startswith("IMAGE"):
+    if attach.kind == "PHOTO":
         return ContentType.photo, text or "[фото]"
-    if kind.startswith("VIDEO"):
+    if attach.kind == "VIDEO":
         return ContentType.video, text or "[видео]"
-    if kind.startswith("AUDIO"):
+    if attach.kind == "AUDIO":
         return ContentType.voice, text or "[голосовое сообщение]"
-    # INLINE_KEYBOARD (боты) и прочее — файл-плейсхолдер, текст важнее.
+    # STICKER, INLINE_KEYBOARD (боты) и прочее — файл-плейсхолдер,
+    # текст важнее.
     return ContentType.file, text or "[вложение]"
 
 
@@ -181,7 +272,8 @@ def parse_message_push(frame: dict, own_user_id: int | None) -> ParsedPush:
         return result
 
     external_id = _as_str(msg.get("id"))
-    ctype, text = _content_type_and_text(msg)
+    attach = extract_attach(msg)
+    ctype, text = _content_type_and_text(attach, msg.get("text") or None)
     if external_id is None and text is None:
         result.skip_reason = "empty"
         return result
@@ -192,6 +284,7 @@ def parse_message_push(frame: dict, own_user_id: int | None) -> ParsedPush:
     result.text = text
     result.timestamp = ms_to_datetime(msg.get("time"))
     result.content_type = ctype
+    result.attach = attach
     result.is_reply = bool(msg.get("replyTo") or msg.get("replyToId"))
     result.chat_type_known = bool(chat_type)
     result.skip_reason = None
