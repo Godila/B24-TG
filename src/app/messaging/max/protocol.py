@@ -209,7 +209,11 @@ def upload_slot(payload: dict) -> tuple[str, int | None, str | None] | None:
     info = payload.get("info")
     if isinstance(info, list) and info and isinstance(info[0], dict):
         slot = info[0]
-        raw_id = slot.get("fileId", slot.get("videoId"))
+        # Явный "fileId": null (Java-стеки сериализуют nulls) не должен
+        # перебивать валидный videoId.
+        raw_id = slot.get("fileId")
+        if raw_id is None:
+            raw_id = slot.get("videoId")
         url = str(slot.get("url") or "") or None
         return url, to_int(raw_id), str(slot.get("token") or "") or None
     return None

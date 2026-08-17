@@ -48,15 +48,23 @@ class FakeWs:
         return {"cmd": 1, "seq": 1, "opcode": opcode, "payload": self.scripted.get(opcode, {})}
 
 
-def _client(tmp_path, ws, waiter=None, handler=None, *, limit=None, ready_timeout=5.0):
+def _client(tmp_path, ws, waiter=None, handler=None, *, storage=None, limit=None, ready_timeout=5.0):
+    if storage is None:
+        storage = MediaStorage(tmp_path / "media", max_size_bytes=limit)
     return MaxMediaClient(
-        storage=MediaStorage(tmp_path / "media", max_size_bytes=limit),
+        storage=storage,
         ws_request=ws,
         waiter=waiter or UploadWaiter(),
         headers={"Origin": "https://web.max.ru"},
         upload_ready_timeout_sec=ready_timeout,
         http_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
+
+
+def _assert_incoming_empty(storage: MediaStorage) -> None:
+    """in/ пуст (частичных файлов не осталось)."""
+    in_dir = storage.root / "in"
+    assert not (in_dir.exists() and list(in_dir.iterdir()))
 
 
 def _ok_json(request: httpx.Request) -> httpx.Response:
@@ -279,6 +287,46 @@ async def test_upload_http_500_raises(tmp_path):
     await client.aclose()
 
 
+# --- Ошибочные ветки upload-слотов (дрейф схемы — куда «ляжет» смоук) --- #
+
+
+@pytest.mark.asyncio
+async def test_upload_slot_without_info_raises_and_cleans_waiter(tmp_path):
+    ws = FakeWs(scripted={OP_FILE_UPLOAD: {}})
+    waiter = UploadWaiter()
+    client = _client(tmp_path, ws, waiter=waiter, handler=_ok_json)
+    path = tmp_path / "f.bin"
+    path.write_bytes(b"data")
+    with pytest.raises(MaxMediaError):
+        await client.upload(chat_id=1, kind="FILE", path=path, mime=None, file_name=None)
+    await client.aclose()
+    assert waiter._pending == {}
+
+
+@pytest.mark.asyncio
+async def test_upload_slot_without_url_raises(tmp_path):
+    ws = FakeWs(scripted={OP_FILE_UPLOAD: {"info": [{"fileId": 5}]}})  # нет url
+    waiter = UploadWaiter()
+    client = _client(tmp_path, ws, waiter=waiter, handler=_ok_json)
+    path = tmp_path / "f.bin"
+    path.write_bytes(b"data")
+    with pytest.raises(MaxMediaError):
+        await client.upload(chat_id=1, kind="FILE", path=path, mime=None, file_name=None)
+    await client.aclose()
+    assert waiter._pending == {}  # регистрация не дошла до POST
+
+
+@pytest.mark.asyncio
+async def test_download_op88_without_url_returns_none(tmp_path):
+    ws = FakeWs(scripted={OP_FILE_GET: {}})  # сервер не дал подписанный URL
+    client = _client(tmp_path, ws, handler=_ok_json)
+    payload = await client.download(
+        MaxAttach(kind="FILE", file_id=9), chat_id=1, message_id="m"
+    )
+    await client.aclose()
+    assert payload is None
+
+
 # ---------------------------------------------------------------------- #
 # Download
 # ---------------------------------------------------------------------- #
@@ -291,7 +339,7 @@ async def test_download_photo_direct_cdn_url(tmp_path):
         return httpx.Response(200, content=PHOTO_BYTES, headers={"Content-Type": "image/jpeg"})
 
     storage = MediaStorage(tmp_path / "media")
-    client = _client(tmp_path, ws, handler=handler)
+    client = _client(tmp_path, ws, handler=handler, storage=storage)
     try:
         payload = await client.download(
             MaxAttach(kind="PHOTO", url="https://i.oneme.ru/i?r=abc"), chat_id=1, message_id="m1"
@@ -317,7 +365,7 @@ async def test_download_file_via_op88(tmp_path):
         return httpx.Response(200, content=b"PDFDATA", headers={"Content-Type": "application/octet-stream"})
 
     storage = MediaStorage(tmp_path / "media")
-    client = _client(tmp_path, ws, handler=handler)
+    client = _client(tmp_path, ws, handler=handler, storage=storage)
     try:
         payload = await client.download(
             MaxAttach(kind="FILE", file_id=9, file_name="report.pdf", size=100),
@@ -415,7 +463,7 @@ async def test_download_content_length_oversize_returns_none(tmp_path):
         return httpx.Response(200, content=b"x" * 200)
 
     storage = MediaStorage(tmp_path / "media", max_size_bytes=100)
-    client = _client(tmp_path, ws, handler=handler, limit=100)
+    client = _client(tmp_path, ws, handler=handler, storage=storage)
     try:
         payload = await client.download(
             MaxAttach(kind="FILE", file_id=9), chat_id=1, message_id="m"
@@ -423,7 +471,7 @@ async def test_download_content_length_oversize_returns_none(tmp_path):
     finally:
         await client.aclose()
     assert payload is None
-    assert not list((storage.root / "in").glob("*")) if (storage.root / "in").exists() else True
+    _assert_incoming_empty(storage)
 
 
 @pytest.mark.asyncio
@@ -438,7 +486,7 @@ async def test_download_actual_oversize_stream_cleans_partial(tmp_path):
         return httpx.Response(200, content=chunks())
 
     storage = MediaStorage(tmp_path / "media", max_size_bytes=100)
-    client = _client(tmp_path, ws, handler=handler, limit=100)
+    client = _client(tmp_path, ws, handler=handler, storage=storage)
     try:
         payload = await client.download(
             MaxAttach(kind="FILE", file_id=9), chat_id=1, message_id="m"
@@ -446,8 +494,7 @@ async def test_download_actual_oversize_stream_cleans_partial(tmp_path):
     finally:
         await client.aclose()
     assert payload is None
-    in_dir = storage.root / "in"
-    assert not list(in_dir.glob("*")) if in_dir.exists() else True
+    _assert_incoming_empty(storage)
 
 
 @pytest.mark.asyncio

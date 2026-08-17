@@ -6,12 +6,14 @@
 документация сообщества: github.com/pr0bel1230/max-api-docs + собственный
 спайк scripts/spike_max_login.py (S0 пройден 2026-08-15).
 
-Структура пакета (protocol ← ws_client ← {provider, login}; factory — сборка):
+Структура пакета (protocol ← ws_client ← {provider, login, media}; factory — сборка):
 
 * ``protocol`` — опкоды, фреймы, типизированные ошибки cmd=3, токены;
 * ``ws_client`` — транспорт: seq-матчинг, авто-pong, seam для тестов;
 * ``push_parser`` — толерантный разбор входящих push'ей (единственная точка
   знания об их формате — правится по живым логам);
+* ``media`` — HTTP-механика вложений: upload (op 80/82/87 → multipart-POST
+  → push 136) и download (CDN-GET / op 88 / op 83); единственный httpx;
 * ``provider`` — MaxUserProvider: долгоживущее соединение, supervise-цикл
   с backoff, heartbeat, отправка MSG_SEND;
 * ``login`` — MaxQrLoginFlow: QR-онбординг (+2FA) для web-процесса;

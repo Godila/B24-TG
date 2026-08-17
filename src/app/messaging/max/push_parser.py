@@ -30,7 +30,7 @@ from app.messaging.max.protocol import (
     ms_to_datetime,
     to_int,
 )
-from app.messaging.types import ContentType
+from app.messaging.types import MEDIA_PLACEHOLDERS, ContentType
 
 #: Значения chat.type, которые считаем личным диалогом клиент↔менеджер.
 _DIALOG_TYPES = {"DIALOG"}
@@ -59,10 +59,8 @@ class MaxAttach:
 
     kind: str | None  # PHOTO|VIDEO|AUDIO|FILE|STICKER|<как пришло, upper>
     url: str | None = None  # baseUrl|url — прямой CDN (фото, аудио)
-    photo_id: int | None = None
     file_id: int | None = None
     video_id: int | None = None
-    token: str | None = None
     file_name: str | None = None
     size: int | None = None  # declared размер из вложения
     mime: str | None = None
@@ -113,10 +111,8 @@ def extract_attach(msg: dict) -> MaxAttach | None:
     return MaxAttach(
         kind=_normalize_kind(kind_raw),
         url=_as_str(_pick(source, "baseUrl", "url")),
-        photo_id=to_int(_pick(source, "photoId")),
         file_id=to_int(_pick(source, "fileId")),
         video_id=to_int(_pick(source, "videoId")),
-        token=_as_str(_pick(source, "token", "photoToken")),
         file_name=sanitize_file_name(file_name_raw),
         size=to_int(_pick(source, "size", "fileSize")),
         mime=normalize_mime(mime_raw),
@@ -211,17 +207,23 @@ class ParsedPush:
 def _content_type_and_text(
     attach: MaxAttach | None, text: str | None
 ) -> tuple[ContentType, str | None]:
-    """Тип контента: как у TG — медиа без текста не теряется, а плейсхолдер."""
+    """Тип контента: как у TG — медиа без текста не теряется, а плейсхолдер
+    из MEDIA_PLACEHOLDERS (единый источник — их видит B24/превью «Чатов»)."""
     if attach is None or attach.kind is None:
         return ContentType.text, text
     if attach.kind == "PHOTO":
-        return ContentType.photo, text or "[фото]"
+        return ContentType.photo, text or MEDIA_PLACEHOLDERS[ContentType.photo]
     if attach.kind == "VIDEO":
-        return ContentType.video, text or "[видео]"
+        return ContentType.video, text or MEDIA_PLACEHOLDERS[ContentType.video]
     if attach.kind == "AUDIO":
-        return ContentType.voice, text or "[голосовое сообщение]"
-    # STICKER, INLINE_KEYBOARD (боты) и прочее — файл-плейсхолдер,
-    # текст важнее.
+        return ContentType.voice, text or MEDIA_PLACEHOLDERS[ContentType.voice]
+    if attach.kind == "FILE":
+        return ContentType.file, text or MEDIA_PLACEHOLDERS[ContentType.file]
+    if attach.kind == "STICKER":
+        # Скачивания нет (формат не рендерится) — только плейсхолдер, как TG.
+        return ContentType.sticker, text or MEDIA_PLACEHOLDERS[ContentType.sticker]
+    # INLINE_KEYBOARD (боты) и неизвестные виды — текст важнее; отдельного
+    # плейсхолдера нет (паритет с TG-fallback для unknown).
     return ContentType.file, text or "[вложение]"
 
 

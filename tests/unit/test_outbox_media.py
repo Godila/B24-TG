@@ -123,7 +123,7 @@ async def test_attachment_unsupported_channel_fails_terminal(tmp_path):
     item.attachment = _attachment(rel, type_=AttachmentType.file)
 
     provider = AsyncMock()
-    provider.supports_media = MagicMock(return_value=False)  # MAX-like
+    provider.supports_media = MagicMock(return_value=False)  # канал без медиа
 
     worker, repo = _make_worker(tmp_path, item, provider)
     await worker._process_once()

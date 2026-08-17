@@ -30,8 +30,8 @@ MEDIA_PLACEHOLDERS: dict["ContentType", str] = {
 class MediaPayload:
     """Медиа-файл, уже сохранённый на диск провайдером (общий том media).
 
-    Канало-нейтрально: TG создаёт в момент ``download_media``; MAX (будущее)
-    будет создавать при скачивании своего вложения. ``path`` —
+    Канало-нейтрально: TG создаёт в момент ``download_media``, MAX — при
+    скачивании своего вложения (MaxMediaClient.download). ``path`` —
     относительный путь внутри медиа-тома (POSIX), резолвит MediaStorage.
     """
 

@@ -223,7 +223,7 @@ def test_attach_type_variant_and_url():
     assert parsed.attach is not None
     assert parsed.attach.kind == "PHOTO"
     assert parsed.attach.url == "https://i.oneme.ru/i?r=1"
-    assert parsed.attach.photo_id == 33
+    assert parsed.attach.raw["photoId"] == 33  # сырой кадр хранит всё
 
 
 def test_attach_tolerant_field_names():
@@ -260,22 +260,32 @@ def test_attach_video_with_ids():
     assert parsed.attach.video_id == 5
 
 
-def test_attach_sticker_and_inline_keyboard_are_file():
-    for raw in ({"type": "STICKER"}, {"_type": "INLINE_KEYBOARD", "buttons": []}):
-        parsed = parse_message_push(
-            _frame(_chat_payload(text="", attaches=[raw])), own_user_id=1
-        )
-        assert parsed.content_type.value == "file"
-        assert parsed.text == "[вложение]"
+def test_attach_sticker_placeholder_no_download_path():
+    """Стикер — отдельный плейсхолдер (как TG), скачивания нет."""
+    parsed = parse_message_push(
+        _frame(_chat_payload(text="", attaches=[{"type": "STICKER"}])), own_user_id=1
+    )
+    assert parsed.content_type.value == "sticker"
+    assert parsed.text == "[стикер]"
+    assert parsed.attach.kind == "STICKER"
+
+
+def test_attach_inline_keyboard_is_file():
+    parsed = parse_message_push(
+        _frame(_chat_payload(text="", attaches=[{"_type": "INLINE_KEYBOARD", "buttons": []}])),
+        own_user_id=1,
+    )
+    assert parsed.content_type.value == "file"
+    assert parsed.text == "[вложение]"
 
 
 def test_attach_broken_element_still_placeholder():
-    """Битой элемент attaches (не dict) — плейсхолдер, как раньше."""
+    """Битой элемент attaches (не dict) — файл-плейсхолдер, как раньше."""
     parsed = parse_message_push(
         _frame(_chat_payload(text="", attaches=["мусор"])), own_user_id=1
     )
     assert parsed.content_type.value == "file"
-    assert parsed.text == "[вложение]"
+    assert parsed.text == "[файл]"
     assert parsed.attach is not None and parsed.attach.kind == "FILE"
 
 

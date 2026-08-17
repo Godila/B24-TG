@@ -6,13 +6,13 @@
 
 Вся история переписки — в собственной PostgreSQL (чего не делает Wazzup), мультиаккаунтность (у каждого менеджера своя сессия), защита от бана, два канала — Telegram и MAX.
 
-> Работает в production: [b24-tg.haragy.top](https://b24-tg.haragy.top) · TG + MAX активны · 435 тестов green.
+> Работает в production: [b24-tg.haragy.top](https://b24-tg.haragy.top) · TG + MAX активны · 439 тестов green.
 
 ## Возможности
 
 - 💬 **«Чаты» — общий мессенджер** — пункт левого меню Битрикс24: все диалоги менеджера в одном окне (как в Wazzup). Неотвеченные сверху с возрастом ожидания, счётчик в заголовке вкладки, звук на новый входящий, пагинация списка.
 - 📩 **Виджет в карточке сделки** — вкладка чата через Placement (iFrame): история и ответы не выходя из CRM.
-- 👥 **Личные аккаунты, не боты** — Telegram (MTProto/Telethon, можно писать первым) и MAX (официальный Bot API, WebSocket). Один менеджер = свой аккаунт в каждом канале; подключение по QR прямо из панели.
+- 👥 **Личные аккаунты, не боты** — Telegram (MTProto/Telethon, можно писать первым) и MAX (эмуляция web-клиента, WebSocket). Один менеджер = свой аккаунт в каждом канале; подключение по QR прямо из панели.
 - 🔁 **Двусторонняя синхронизация с CRM** — входящее → матчинг по номеру → Контакт/Сделка (создание или дедуп) → комментарий в timeline → уведомление менеджеру.
 - 🛡️ **Защита от бана (4 слоя)** — раздельные throttle для ответов/инициаций, outbox-очередь с retry+backoff, обработка FloodWait, health-чек сессий с самолечением.
 - 🔧 **Панель управления** — в том же пункте меню: менеджеры и роли (supervisor видит все диалоги), подключение каналов по QR, шаблоны ответов, режим read-only.
@@ -27,9 +27,9 @@
 | БД | PostgreSQL 16, SQLAlchemy 2.0 async, Alembic |
 | Очереди | Outbox + crm_sync (обе в Postgres) |
 | Telegram | Telethon (MTProto user-API) |
-| MAX | Bot API (WebSocket, bot token) |
+| MAX | эмуляция web-клиента (WebSocket ver=11, QR-вход) |
 | Инфра | Docker Compose, nginx (TLS, gzip, кэш статики), Let's Encrypt |
-| Качество | pytest + pytest-asyncio (435 тестов), ruff |
+| Качество | pytest + pytest-asyncio (439 тестов), ruff |
 
 ## Архитектура
 
@@ -101,7 +101,7 @@ cd ChatMost
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 
-pytest -v          # 435 тестов
+pytest -v          # 439 тестов
 ruff check src/ tests/
 ```
 

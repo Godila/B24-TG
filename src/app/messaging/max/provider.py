@@ -264,6 +264,9 @@ class MaxUserProvider(MessengerProvider):
                 timeout=self._media_send_timeout,
             )
         except TimeoutError:  # вкл. «136 не пришёл» и висящий upload
+            logger.error(
+                "MAX send_media timeout chat=%s file=%s", external_chat_id, file_name or path.name
+            )
             return SendResult(success=False, error="send_timeout")
         except Exception as exc:  # noqa: BLE001 - маппинг+лог в _send_exc_result
             return self._send_exc_result(exc)

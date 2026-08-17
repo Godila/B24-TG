@@ -167,6 +167,13 @@ def fallback_mime(attach: MaxAttach) -> str | None:
     return None
 
 
+#: FILE/VIDEO различаются только опкодом slot-запроса и формой attach.
+_SLOT_UPLOADS = {
+    "FILE": (OP_FILE_UPLOAD, file_upload_payload),
+    "VIDEO": (OP_VIDEO_UPLOAD, video_upload_payload),
+}
+
+
 class MaxMediaClient:
     """HTTP-механика медиа MAX поверх WS-сессии провайдера.
 
@@ -238,14 +245,8 @@ class MaxMediaClient:
         """
         if kind == "PHOTO":
             return [await self._upload_photo(path=path, mime=mime, file_name=file_name)]
-        if kind == "VIDEO":
-            return [
-                await self._upload_video(
-                    chat_id=chat_id, path=path, mime=mime, file_name=file_name
-                )
-            ]
         return [
-            await self._upload_file(chat_id=chat_id, path=path, mime=mime, file_name=file_name)
+            await self._upload_slot(chat_id=chat_id, kind=kind, path=path, mime=mime, file_name=file_name)
         ]
 
     async def _notify_upload(self, chat_id: int, kind: str) -> None:
@@ -271,40 +272,28 @@ class MaxMediaClient:
             raise MaxMediaError(f"photo upload без token: {str(body)[:200]}")
         return photo_attach(token)
 
-    async def _upload_file(self, *, chat_id: int, path: Path, mime: str | None, file_name: str | None) -> dict:
-        await self._notify_upload(chat_id, "FILE")
-        resp = await self._ws_request(OP_FILE_UPLOAD, file_upload_payload())
+    async def _upload_slot(self, *, chat_id: int, kind: str, path: Path, mime: str | None, file_name: str | None) -> dict:
+        """Общий пайплайн FILE/VIDEO: slot-запрос → multipart-POST → 136."""
+        opcode, make_payload = _SLOT_UPLOADS[kind]
+        await self._notify_upload(chat_id, kind)
+        resp = await self._ws_request(opcode, make_payload())
         slot = upload_slot(resp.get("payload") or {})
         if slot is None:
-            raise MaxMediaError(f"OP_FILE_UPLOAD без info[0]: {str(resp.get('payload'))[:200]}")
-        url, file_id, _token = slot
-        if not url or file_id is None:
-            raise MaxMediaError(f"OP_FILE_UPLOAD без url/fileId: {str(resp.get('payload'))[:200]}")
+            raise MaxMediaError(f"{kind}-upload без info[0]: {str(resp.get('payload'))[:200]}")
+        url, item_id, token = slot
+        if not url or item_id is None:
+            raise MaxMediaError(f"{kind}-upload без url/id: {str(resp.get('payload'))[:200]}")
         # Регистрация ДО POST: 136 может прийти, пока POST ещё идёт.
-        fut = self._waiter.expect("file", file_id)
+        waiter_kind = kind.lower()
+        fut = self._waiter.expect(waiter_kind, item_id)
         try:
             await self._post_multipart(url, path=path, mime=mime, file_name=file_name)
             await asyncio.wait_for(fut, self._upload_ready_timeout)
         finally:
-            self._waiter.abandon("file", file_id)
-        return file_attach(file_id)
-
-    async def _upload_video(self, *, chat_id: int, path: Path, mime: str | None, file_name: str | None) -> dict:
-        await self._notify_upload(chat_id, "VIDEO")
-        resp = await self._ws_request(OP_VIDEO_UPLOAD, video_upload_payload())
-        slot = upload_slot(resp.get("payload") or {})
-        if slot is None:
-            raise MaxMediaError(f"OP_VIDEO_UPLOAD без info[0]: {str(resp.get('payload'))[:200]}")
-        url, video_id, token = slot
-        if not url or video_id is None:
-            raise MaxMediaError(f"OP_VIDEO_UPLOAD без url/videoId: {str(resp.get('payload'))[:200]}")
-        fut = self._waiter.expect("video", video_id)
-        try:
-            await self._post_multipart(url, path=path, mime=mime, file_name=file_name)
-            await asyncio.wait_for(fut, self._upload_ready_timeout)
-        finally:
-            self._waiter.abandon("video", video_id)
-        return video_attach(video_id, token)
+            self._waiter.abandon(waiter_kind, item_id)
+        if kind == "VIDEO":
+            return video_attach(item_id, token)
+        return file_attach(item_id)
 
     async def _post_multipart(
         self, url: str, *, path: Path, mime: str | None, file_name: str | None
@@ -342,11 +331,9 @@ class MaxMediaClient:
         размер проверяется до сети, фактический после; путь пишет
         MediaStorage (uuid-имя); любая ошибка → None, сообщение не теряется.
         """
-        if attach.size is not None and (
-            self._storage.max_size_bytes is not None
-            and attach.size > self._storage.max_size_bytes
-        ):
-            logger.info(
+        limit = self._storage.max_size_bytes
+        if attach.size is not None and limit is not None and attach.size > limit:
+            logger.warning(
                 "MAX вложение больше лимита (size=%s, kind=%s) — плейсхолдер",
                 attach.size,
                 attach.kind,
@@ -381,8 +368,11 @@ class MaxMediaClient:
                     size=size,
                     file_name=attach.file_name,
                 )
-            except Exception:
-                absolute.unlink(missing_ok=True)  # частичный файл — мусор
+            except BaseException:
+                # Частичный файл — мусор; BaseException, т.к. отмену
+                # (wait_for-таймаут/disconnect) Exception не ловит, а файл
+                # уже создан — иначе сирота на томе.
+                absolute.unlink(missing_ok=True)
                 raise
         except Exception:
             logger.warning(

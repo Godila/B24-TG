@@ -69,7 +69,8 @@ class MessengerProvider(ABC):
         is_initiation: bool = False,
     ) -> SendResult:
         """Отправить медиа-файл с общего тома. Канал без поддержки медиа
-        (MAX в v1) наследует этот дефолт — элемент честно падает в failed."""
+        (провайдер без MediaStorage) наследует этот дефолт — элемент честно
+        падает в failed."""
         return SendResult(success=False, error="media_not_supported")
 
     def is_dead(self) -> bool:
