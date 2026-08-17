@@ -274,3 +274,22 @@ html, body {
   flex-shrink: 0;
 }
 .file-chip-x:hover { color: var(--error); }
+
+/* Лайтбокс фото: просмотр внутри страницы (не новая вкладка) */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(15, 23, 32, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  cursor: zoom-out;
+}
+.lightbox img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 8px;
+  object-fit: contain;
+}

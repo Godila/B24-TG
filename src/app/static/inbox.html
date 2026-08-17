@@ -128,7 +128,8 @@
             <template x-for="att in (msg.attachments || [])" :key="att.id">
               <div class="bubble-attachment" :class="'att-' + attKind(att)">
                 <a x-show="attKind(att) === 'photo'" class="att-photo" :href="attSrc(att)"
-                  target="_blank" rel="noopener" :title="att.file_name || 'Открыть фото'">
+                  target="_blank" rel="noopener" :title="att.file_name || 'Открыть фото'"
+                  @click.prevent="openAttachment(att)">
                   <img :src="attSrc(att)" :alt="att.file_name || 'Фото-вложение'" loading="lazy">
                 </a>
                 <video x-show="attKind(att) === 'video'" controls preload="metadata"
@@ -136,7 +137,8 @@
                 <audio x-show="attKind(att) === 'audio'" controls preload="metadata"
                   :src="attSrc(att)"></audio>
                 <a x-show="attKind(att) === 'file'" class="bubble-file" :href="attSrc(att)"
-                  target="_blank" rel="noopener" download>
+                  target="_blank" rel="noopener" download
+                  @click.prevent="openAttachment(att)">
                   <span class="bubble-file-name" x-text="fileLabel(att)"></span>
                 </a>
               </div>
@@ -203,6 +205,13 @@
       </footer>
 
       <div class="error-banner" x-show="error" x-text="error" @click="error = ''"></div>
+
+      <!-- Лайтбокс фото: просмотр внутри страницы (верхнеуровневая вкладка
+           не видит партиционированную сессионную куку iframe-контекста). -->
+      <div class="lightbox" x-show="lightboxSrc" @click="closeLightbox()"
+        @keydown.escape.window="closeLightbox()" role="dialog" aria-label="Просмотр изображения">
+        <img :src="lightboxSrc" alt="">
+      </div>
     </section>
   </div>
 

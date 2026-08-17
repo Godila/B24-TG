@@ -19,6 +19,7 @@ function chatApp() {
     draft: "",
     pendingFile: null,
     pendingFileUrl: null,
+    lightboxSrc: null,
     dialog: null,
     dialogs: [],
     messages: [],
@@ -379,6 +380,48 @@ function chatApp() {
       if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " КБ";
       if (bytes < 1024 * 1024 * 1024) return (bytes / 1048576).toFixed(1) + " МБ";
       return (bytes / 1073741824).toFixed(2) + " ГБ";
+    },
+
+    /** Открыть вложение: фото — лайтбокс внутри страницы, остальное —
+     *  скачивание. НИКОГДА не target=_blank: сессионная кука живёт в
+     *  партиционированной банке iframe-контекста, верхнеуровневая
+     *  навигация её не видит (401 «Не авторизован»). */
+    openAttachment(att) {
+      if (this.attKind(att) === "photo") {
+        this.lightboxSrc = this.attSrc(att);
+        return;
+      }
+      this.downloadAttachment(att);
+    },
+
+    closeLightbox() {
+      this.lightboxSrc = null;
+    },
+
+    /** Скачивание через fetch в контексте страницы (кука прикрепляется,
+     *  как у poll) → blob → программный клик по <a download>. */
+    async downloadAttachment(att) {
+      const url = this.attSrc(att);
+      if (!url) return;
+      if (url.startsWith("blob:")) {
+        window.open(url, "_blank", "noopener");
+        return;
+      }
+      try {
+        const res = await fetch(url, { credentials: "same-origin" });
+        if (!res.ok) throw new Error(`Не удалось скачать файл (${res.status})`);
+        const blob = await res.blob();
+        const objUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = objUrl;
+        a.download = att.file_name || "attachment";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(objUrl), 10000);
+      } catch (e) {
+        this.showError(e);
+      }
     },
 
     scrollBottom() {
