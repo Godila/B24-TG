@@ -1,17 +1,22 @@
-# Bitrix-TG
+<p align="center"><img src="assets/logo/logo-512x279.png" width="320" alt="ЧатМост"></p>
 
-**Замена сервиса Wazzup:** интеграция личных аккаунтов Telegram (MTProto) с облачной CRM Bitrix24. Менеджеры ведут переписку с клиентами прямо из карточки сделки, не покидая Bitrix24.
+# ЧатМост
 
-Промышленное решение с собственной БД (вся история переписки, чего не делает Wazzup), защитой от бана Telegram и мультиаккаунтностью — у каждого менеджера своя TG-симка, своя сессия.
+**Мост между мессенджерами и Bitrix24** — замена сервиса Wazzup на собственных мощах. Личные аккаунты Telegram и MAX подключаются к облачной CRM: менеджеры ведут переписку с клиентами прямо из Битрикс24, не покидая карточку сделки.
+
+Вся история переписки — в собственной PostgreSQL (чего не делает Wazzup), мультиаккаунтность (у каждого менеджера своя сессия), защита от бана, два канала — Telegram и MAX.
+
+> Работает в production: [b24-tg.haragy.top](https://b24-tg.haragy.top) · TG + MAX активны · 309 тестов green.
 
 ## Возможности
 
-- 📩 **Виджет в карточке сделки Bitrix24** — вкладка «Telegram-чат» через Placement (iFrame). Менеджер видит историю и пишет ответы не выходя из CRM.
-- 👤 **Личные TG-аккаунты** (не бот) — MTProto/Telethon, может писать первым. Один менеджер = одна симка = одна сессия.
-- 🔁 **Двусторонняя синхронизация с CRM** — входящее сообщение → авто-матчинг по номеру → создание Контакта/Сделки → запись в timeline → уведомление менеджеру.
-- 🛡️ **Защита от бана (4 слоя)** — раздельные throttle для ответов/инициаций, outbox-очередь с retry+backoff, обработка FloodWait, health-чек сессий.
-- 💾 **Полное хранение переписки** — своя Postgres + дублирование в timeline Bitrix24.
-- 🧩 **Расширяемо под другие мессенджеры** — абстракция `MessengerProvider`, готова точка расширения под MAX.
+- 💬 **«Чаты» — общий мессенджер** — пункт левого меню Битрикс24: все диалоги менеджера в одном окне (как в Wazzup). Неотвеченные сверху с возрастом ожидания, счётчик в заголовке вкладки, звук на новый входящий, пагинация списка.
+- 📩 **Виджет в карточке сделки** — вкладка чата через Placement (iFrame): история и ответы не выходя из CRM.
+- 👥 **Личные аккаунты, не боты** — Telegram (MTProto/Telethon, можно писать первым) и MAX (официальный Bot API, WebSocket). Один менеджер = свой аккаунт в каждом канале; подключение по QR прямо из панели.
+- 🔁 **Двусторонняя синхронизация с CRM** — входящее → матчинг по номеру → Контакт/Сделка (создание или дедуп) → комментарий в timeline → уведомление менеджеру.
+- 🛡️ **Защита от бана (4 слоя)** — раздельные throttle для ответов/инициаций, outbox-очередь с retry+backoff, обработка FloodWait, health-чек сессий с самолечением.
+- 🔧 **Панель управления** — в том же пункте меню: менеджеры и роли (supervisor видит все диалоги), подключение каналов по QR, шаблоны ответов, режим read-only.
+- 💾 **Вся история у вас** — PostgreSQL + дублирование в timeline Битрикс24; ежедневные автобэкапы (pg_dump + сессии, ротация 7 дней).
 
 ## Стек
 
@@ -20,10 +25,11 @@
 | Язык | Python 3.11 |
 | Web | FastAPI, Uvicorn, Vanilla JS + Alpine.js (без сборщика) |
 | БД | PostgreSQL 16, SQLAlchemy 2.0 async, Alembic |
-| Очередь | Outbox-паттерн + crm_sync-очередь (обе в Postgres) |
+| Очереди | Outbox + crm_sync (обе в Postgres) |
 | Telegram | Telethon (MTProto user-API) |
-| Инфра | Docker Compose, nginx, Let's Encrypt |
-| Качество | pytest + pytest-asyncio (148 тестов), ruff, TDD |
+| MAX | Bot API (WebSocket, bot token) |
+| Инфра | Docker Compose, nginx (TLS, gzip, кэш статики), Let's Encrypt |
+| Качество | pytest + pytest-asyncio (309 тестов), ruff |
 
 ## Архитектура
 
@@ -34,7 +40,7 @@ flowchart LR
     subgraph VM["VM (docker compose)"]
         N["nginx<br/>TLS + reverse-proxy"]
         WEB["web<br/>FastAPI"]
-        BRIDGE["bridge<br/>Telethon + outbox-воркер"]
+        BRIDGE["bridge<br/>Telethon + MAX-WS + outbox-воркер"]
         PG[("Postgres")]
 
         N --> WEB
@@ -45,75 +51,60 @@ flowchart LR
     B24["Bitrix24<br/>(CRM + placement)"] -.placement iFrame.-> N
     N -.webhook/REST.-> B24
     BRIDGE -.MTProto.-> TG["Telegram"]
+    BRIDGE -.Bot API WS.-> MAX["MAX"]
     TG -.входящие.-> BRIDGE
+    MAX -.входящие.-> BRIDGE
 ```
 
-- **web** — FastAPI: виджет placement, REST API (диалоги, сообщения, шаблоны), webhook B24.
-- **bridge** — пул Telethon-сессий: ловит входящие → синхронизирует с CRM → пишет в БД; крутит outbox-воркер для исходящих.
-- Общаются через Postgres (outbox- и crm_sync-таблицы).
+- **web** — FastAPI: placement-обработчики (оболочка «Чаты/Панель», виджет сделки), REST API (диалоги, сообщения, шаблоны), webhook B24, статика.
+- **bridge** — пул сессий мессенджеров: входящие → синхронизация с CRM → БД; outbox-воркер для исходящих; health-чек с самолечением.
+- Общаются через Postgres (outbox- и crm_sync-таблицы) — компоненты заменяемы независимо.
 
 ### Поток входящего сообщения
 ```
-Telegram → bridge (Telethon event) → IncomingHandler
+Telegram/MAX → bridge (event) → IncomingHandler
   → Bitrix24Sync: findbyComm → создать Контакт/Сделку → timeline → notify менеджеру
-  → persist в Postgres (Contact/Dialog/Message, идемпотентно по tg_message_id)
-  → менеджер видит в виджете (poll каждые 3 сек)
+  → persist в Postgres (Contact/Dialog/Message, идемпотентно по external_message_id)
+  → менеджер видит в «Чатах»/виджете (poll 3 сек)
 ```
 
 ### Поток исходящего сообщения
 ```
-Менеджер пишет в виджете → POST /api/dialogs/{id}/messages
-  → создаёт Message(out, pending) + OutboxItem(queued) [одна транзакция]
-  → OutboxWorker: throttle-проверка → TelegramProvider.send_message → FloodWait/retry
-  → Telethon отправляет → статус доставки
+Менеджер пишет → POST /api/dialogs/{id}/messages
+  → Message(out, pending) + OutboxItem(queued) в одной транзакции
+  → OutboxWorker: throttle → провайдер канала → FloodWait/retry/backoff
+  → статусы доставки (⏳ → ✓ → ✓✓) в UI
 ```
 
 ## Структура проекта
 
 ```
 src/app/
-├── b24/                  # Интеграция Bitrix24
-│   ├── client.py         #   async REST-клиент (httpx)
-│   ├── token_manager.py  #   OAuth-токены + авто-refresh
-│   ├── crm.py            #   CRM-операции (контакт, сделка, timeline)
-│   ├── im.py             #   уведомления менеджеру + event.bind
-│   └── sync.py           #   оркестрация: матчинг → создание → timeline
-├── bridge/               # Фоновая обработка
-│   ├── session_manager.py    # пул Telethon-сессий (по одной на аккаунт)
-│   ├── throttler.py          # анти-бан: 2 политики (ответы/инициации)
-│   ├── outbox_worker.py      # очередь отправки (6 путей: success/flood/throttle/...)
-│   ├── outbox_repo_*.py      # репозиторий outbox (SQLAlchemy + воркер-adapter)
-│   ├── incoming_handler.py   # связка: TG-сообщение → CRM + БД
-│   ├── bootstrap.py          # запуск: загрузка аккаунтов, подписки, воркер
-│   └── health_checker.py     # мониторинг сессий
-├── messaging/            # Абстракция мессенджеров
-│   ├── provider.py       #   MessengerProvider (точка расширения под MAX)
-│   ├── types.py          #   IncomingMessage, SendResult, DeliveryStatus
-│   └── telegram/         #   реализация на Telethon
-├── models/               # ORM (10 таблиц)
-├── web/                  # FastAPI
-│   ├── routes/           #   health, webhook, placement, dialogs, templates
-│   ├── session.py        #   HMAC-сессионная кука
-│   ├── deps.py           #   get_current_manager
-│   └── app.py            #   factory + CORS + StaticFiles + exception handler
-├── static/               # Фронтенд (Vanilla JS + Alpine.js)
+├── b24/                  # Интеграция Bitrix24 (REST-клиент, OAuth, CRM, timeline, sync)
+├── bridge/               # Фоновая обработка (сессии, throttler, outbox, incoming, health)
+├── messaging/            # Абстракция MessengerProvider + telegram/ (MTProto) и max/ (Bot API)
+├── models/               # ORM
+├── web/                  # FastAPI (routes, сессии, deps, exception-страницы)
+├── static/               # Фронтенд (Alpine.js, бренд-ассеты в static/brand/)
 └── main.py               # entrypoint: web | bridge | auth
+assets/logo/              # Исходники логотипа (мастер + все размеры/негативы)
+docs/DESIGN.md            # Дизайн-система (линза, токены, компоненты, реестр UX)
+docs/DEPLOY.md            # Production-деплой
 ```
 
 ## Разработка
 
 ```bash
-git clone https://github.com/Godila/B24-TG.git
-cd B24-TG
+git clone https://github.com/Godila/ChatMost.git
+cd ChatMost
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 
-# тесты + линт
-pytest -v          # 148 тестов
+pytest -v          # 309 тестов
 ruff check src/ tests/
 ```
 
-Переменные окружения — см. `.env.example`. Для локальной разработки можно работать без реального Telegram (моки httpx) и без B24 (dev-режим).
+Переменные окружения — см. `.env.example`. Локальная разработка работает без реальных мессенджеров (моки httpx) и без B24 (dev-режим с AUTH-JSON).
 
 ## Развёртывание
 
@@ -121,44 +112,29 @@ Production-деплой описан в [`docs/DEPLOY.md`](docs/DEPLOY.md). Кр
 
 1. VM с публичным IP + домен с A-записью.
 2. Локальное OAuth-приложение в Bitrix24 (scopes: `crm`, `im`, `placement`, `user`).
-3. `git clone` на VM, сгенерировать `.env` (`scripts/gen_prod_env.py` — случайные секреты).
+3. `git clone` на VM, сгенерировать `.env` (`scripts/gen_prod_env.py`).
 4. `docker compose up -d --build` + `alembic upgrade head`.
-5. Let's Encrypt TLS + `placement.bind` (скрипт `scripts/register_placement.py`).
-6. Подключить реальный TG-аккаунт (см. ниже).
+5. Let's Encrypt TLS + `placement.bind` (скрипт `scripts/bind_chats_placement.py`).
+6. Подключить аккаунты менеджеров — QR-онбординг из вкладки «Панель».
 
-### Подключение Telegram-аккаунта (для реальной отправки/приёма)
-
-```bash
-# 1. Получить api_id/api_hash на https://my.telegram.org → в .env
-# 2. Первый вход (номер → SMS-код → 2FA)
-docker compose exec web python -m app.main auth
-# 3. Активировать аккаунт в БД
-docker compose exec postgres psql -U bitrix_tg -d bitrix_tg -c \
-  "UPDATE tg_accounts SET status='active', phone='<номер>' WHERE id=1;"
-# 4. Перезапустить bridge — подхватит аккаунт
-docker compose restart bridge
-```
-
-В логах bridge должно появиться: `Registered session for account_id=1`.
+⚠️ После каждого деплоя `docker compose restart nginx` — иначе держит старый IP пересозданного web-контейнера (502).
 
 ## Безопасность
 
-- **Auth виджета**: B24 передаёт `user_id` + `access_token` → проверка токена через `user.current` → HMAC-подписанная сессионная кука (httponly, SameSite=Lax). Никаких паролей в UI.
+- **Auth**: placement-вызов B24 → проверка AUTH_ID через `user.current` (с TTL-кэшем токена) → HMAC-подписанная сессионная кука (httponly, SameSite=none для iframe). Деактивированный менеджер отрезается на каждом API-запросе.
+- **Права**: менеджер видит только свои диалоги; supervisor — все, но пишет только в свои. Чужие диалоги — 404 без раскрытия существования.
+- **CSRF**: сверка Origin на всех мутирующих запросах (кука SameSite=none летит и кросс-сайтовым POST).
 - **Публичные порты**: только nginx (80/443). Postgres — внутри docker-сети.
-- **Секреты**: генерируются случайно на VM (`SESSION_SECRET`, `POSTGRES_PASSWORD`, `B24_WEBHOOK_SECRET`), хранятся в `.env` (chmod 600, в `.gitignore`).
-- **Идемпотентность**: дубли сообщений (MTProto redelivery) отсеиваются по `(dialog_id, tg_message_id)`.
+- **Секреты**: генерируются на VM, живут в `.env` (chmod 600, в `.gitignore`). 2FA-пароли каналов — только транзит, не хранятся.
+- **Идемпотентность**: дубли (MTProto redelivery, MAX reconnect) отсеиваются по `(dialog_id, external_message_id)`.
 
 ## Статус
 
-| Фаза | Содержание | Статус |
+| Этап | Содержание | Статус |
 |---|---|---|
-| 1 | Фундамент (модели, провайдеры, outbox, throttler) | ✅ |
-| 2 | Bitrix24Sync (OAuth, CRM, timeline, вебхуки) | ✅ |
-| 3 | Web UI + placement-виджет | ✅ |
-| 4 | Деплой (nginx, TLS, placement.bind) | ✅ |
-| 5 | Активация bridge-конвейера | ✅ |
-
-Вся инфраструктура готова и работает в production. Для end-to-end обмена сообщениями остаётся подключить реальный Telegram-аккаунт (см. раздел выше).
+| Фазы 1–5 | Фундамент → CRM-синк → Web UI → деплой → активация bridge | ✅ |
+| Прод | b24-tg.haragy.top: TG + MAX активны, e2e в обе стороны | ✅ работает |
+| Эксплуатация | Автобэкапы, ротация логов, selfheal сессий, алерты в B24 | ✅ |
 
 ## Лицензия
 

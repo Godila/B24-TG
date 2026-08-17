@@ -27,19 +27,19 @@ logger = logging.getLogger(__name__)
 
 _UNREGISTERED_PAGE = """<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ЧатМост</title><style>
+<title>ЧатМост</title><link rel="icon" href="/static/brand/favicon.ico" sizes="48x48">
+<style>
  body{{margin:0;font-family:-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
  background:#f2f4f8;color:#1c2733;display:flex;align-items:center;justify-content:center;
  height:100vh;font-size:14px}}
  .card{{background:#fff;border:1px solid #dfe3ea;border-radius:14px;max-width:440px;
  padding:24px;box-shadow:0 1px 3px rgba(20,30,50,.05)}}
- .mark{{width:44px;height:44px;border-radius:12px;flex:none;
- background:linear-gradient(135deg,#2f6fed,#7b5bf2);color:#fff;font-size:22px;font-weight:700;
- display:flex;align-items:center;justify-content:center;margin-bottom:14px}}
+ .mark{{height:44px;width:auto;flex:none;display:block;margin-bottom:14px}}
  h1{{font-size:17px;margin:0 0 8px}}
  p{{color:#66707d;line-height:1.5;margin:6px 0}}
  code{{background:#e8edf7;border-radius:6px;padding:2px 8px;color:#1f57c7;font-weight:600}}
-</style></head><body><div class="card"><div class="mark">&#8644;</div>
+</style></head><body><div class="card">
+<img class="mark" src="/static/brand/logo-128x69.png" alt="" aria-hidden="true">
 <h1>Вы не добавлены в ЧатМост</h1>
 <p>Попросите администратора добавить вас: пункт «ЧатМост» в левом меню
 Битрикс24 &rarr; вкладка «Панель» &rarr; раздел «Менеджеры».</p>
@@ -48,18 +48,18 @@ _UNREGISTERED_PAGE = """<!DOCTYPE html><html lang="ru"><head><meta charset="utf-
 
 _SESSION_EXPIRED_PAGE = """<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ЧатМост</title><style>
+<title>ЧатМост</title><link rel="icon" href="/static/brand/favicon.ico" sizes="48x48">
+<style>
  body{margin:0;font-family:-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
  background:#f2f4f8;color:#1c2733;display:flex;align-items:center;justify-content:center;
  height:100vh;font-size:14px}
  .card{background:#fff;border:1px solid #dfe3ea;border-radius:14px;max-width:440px;
  padding:24px;box-shadow:0 1px 3px rgba(20,30,50,.05)}
- .mark{width:44px;height:44px;border-radius:12px;flex:none;
- background:linear-gradient(135deg,#2f6fed,#7b5bf2);color:#fff;font-size:22px;font-weight:700;
- display:flex;align-items:center;justify-content:center;margin-bottom:14px}
+ .mark{height:44px;width:auto;flex:none;display:block;margin-bottom:14px}
  h1{font-size:17px;margin:0 0 8px}
  p{color:#66707d;line-height:1.5;margin:6px 0}
-</style></head><body><div class="card"><div class="mark">&#8644;</div>
+</style></head><body><div class="card">
+<img class="mark" src="/static/brand/logo-128x69.png" alt="" aria-hidden="true">
 <h1>Сессия истекла</h1>
 <p>Закройте это окно и откройте «ЧатМост» заново из левого меню
 Битрикс24 &mdash; сессия обновится автоматически.</p>

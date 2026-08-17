@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ЧатМост</title>
+  <link rel="icon" href="/static/brand/favicon.ico" sizes="48x48">
+  <link rel="apple-touch-icon" href="/static/brand/logo-square-192x192.png">
   <style>
     /* Оболочка левого меню B24 — токены и паттерны из DESIGN.md
        (канон = набор панели: сегмент-контрол, фокус-пол, шрифтостек). */
@@ -18,11 +20,8 @@
       background: #fff; border-bottom: 1px solid #dfe3ea; flex: none;
     }
     .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; }
-    .brand-mark {
-      width: 28px; height: 28px; border-radius: 8px; flex: none;
-      background: linear-gradient(135deg, #2f6fed, #7b5bf2); color: #fff;
-      display: flex; align-items: center; justify-content: center; font-size: 14px;
-    }
+    /* Бренд-знак: пузырь с арками моста (assets/logo), h=28 на шапке. */
+    .brand img { height: 28px; width: auto; display: block; }
     .tabs { display: inline-flex; border: 1px solid #dfe3ea; border-radius: 10px; overflow: hidden; }
     .tabs button {
       appearance: none; border: none; cursor: pointer; padding: 8px 16px;
@@ -39,7 +38,7 @@
 </head>
 <body>
   <header>
-    <div class="brand"><div class="brand-mark">⇄</div><span>ЧатМост</span></div>
+    <div class="brand"><img src="/static/brand/logo-64x34.png" alt="" aria-hidden="true"><span>ЧатМост</span></div>
     <nav class="tabs" aria-label="Разделы ЧатМост">
       <button type="button" id="tab-chats" aria-controls="frame-chats">Чаты</button>
       <button type="button" id="tab-panel" aria-controls="frame-panel">Панель</button>

@@ -30,6 +30,14 @@ VM: `<VM_SSH_TARGET>`, Ubuntu 24.04, 2 vCPU / 2 GB RAM / 40 GB SSD.
 
 `/dev/login` отключён в prod (`DEV_MODE=false` → 404).
 
+### Иконка приложения в левом меню Битрикс24 (один раз, вручную)
+
+`placement.bind` не принимает параметр иконки — пункт левого меню показывает
+иконку САМОГО приложения. Загружается вручную на портале:
+**Разработчикам → ваше приложение → Иконка**, файл
+`src/app/static/brand/chatmost-dark-square-192x192.png` (тёмный вариант —
+левое меню Битрикс24 тёмное). Все размеры и исходники — `assets/logo/`.
+
 CORS: с Plan 001 умолчание `CORS_ORIGINS` — пустое (CORS отключён, только same-origin).
 На VM `.env` уже содержит `CORS_ORIGINS=https://b24-ye2jjz.bitrix24.ru,https://b24-tg.haragy.top`
 (генерируется `scripts/gen_prod_env.py`) — поведение прода не меняется.

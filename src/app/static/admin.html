@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ЧатМост — панель управления</title>
+  <link rel="icon" href="/static/brand/favicon.ico" sizes="48x48">
+  <link rel="apple-touch-icon" href="/static/brand/logo-square-192x192.png">
   <script src="/static/vendor/qrcode.min.js"></script>
   <style>
     :root {
@@ -34,14 +36,10 @@
     }
     .toolbar input:focus, .pwinput:focus { border-color: var(--accent); outline: none; }
 
-    /* --- шапка бренда --- */
+    /* --- шапка бренда: знак ЧатМост (пузырь с арками моста) --- */
     .brand { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; }
     .brand-mark {
-      width: 44px; height: 44px; border-radius: 12px; flex: none;
-      background: linear-gradient(135deg, #2f6fed, #7b5bf2);
-      color: #fff; font-size: 22px; font-weight: 700;
-      display: flex; align-items: center; justify-content: center;
-      box-shadow: 0 4px 12px rgba(47, 111, 237, .3);
+      height: 44px; width: auto; flex: none; display: block;
     }
     .brand h1 { margin: 0; font-size: 1.45rem; letter-spacing: .2px; }
     .brand .tag {
@@ -178,7 +176,7 @@
 </head>
 <body>
   <div class="brand">
-    <div class="brand-mark">⇄</div>
+    <img class="brand-mark" src="/static/brand/logo-128x69.png" alt="" aria-hidden="true">
     <h1>ЧатМост <span class="tag">панель управления</span></h1>
   </div>
   <p class="lead">Мост между мессенджерами и Битрикс24. Подключите свои Telegram и MAX —
