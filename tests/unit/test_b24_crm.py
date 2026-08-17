@@ -214,3 +214,44 @@ async def test_add_timeline_comment_without_files_has_no_files_key():
     svc = CrmService(client)
     await svc.add_timeline_comment(auth_token="t", entity_type="deal", entity_id=7, comment="текст")
     assert "FILES" not in client.call.call_args.kwargs["params"]["fields"]
+
+
+@pytest.mark.asyncio
+async def test_get_contact_null_fields_regression():
+    """B24 шлёт явные null для незаполненных NAME/LAST_NAME (поймано в проде:
+    контакт «Тимур» без фамилии ронял каждый входящий CRM-синк конкатенацией
+    str + None). Имя собирается только из непустых частей."""
+    client = AsyncMock()
+    client.call = AsyncMock(
+        return_value={"ID": "9", "NAME": "Тимур", "LAST_NAME": None}
+    )
+    svc = CrmService(client)
+    contact = await svc.get_contact(auth_token="t", contact_id=9)
+    assert contact is not None
+    assert contact.name == "Тимур"
+
+    client.call = AsyncMock(return_value={"ID": "7", "NAME": None, "LAST_NAME": None})
+    contact = await svc.get_contact(auth_token="t", contact_id=7)
+    assert contact is not None
+    assert contact.name is None
+
+    client.call = AsyncMock(
+        return_value={"ID": "3", "NAME": None, "LAST_NAME": "Азизов"}
+    )
+    contact = await svc.get_contact(auth_token="t", contact_id=3)
+    assert contact.name == "Азизов"
+
+
+@pytest.mark.asyncio
+async def test_find_contact_by_phone_null_last_name_regression():
+    client = AsyncMock()
+    client.call = AsyncMock(
+        side_effect=[
+            {"CONTACT": [9]},
+            {"ID": "9", "NAME": "Тимур", "LAST_NAME": None},
+        ]
+    )
+    svc = CrmService(client)
+    contact = await svc.find_contact_by_phone(auth_token="t", phone="+7999")
+    assert contact is not None
+    assert contact.name == "Тимур"

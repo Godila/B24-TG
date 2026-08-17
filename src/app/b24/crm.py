@@ -31,6 +31,17 @@ class DealInfo:
         self.title = title
 
 
+def _contact_display_name(detail: dict) -> str | None:
+    """Имя контакта из ответа crm.contact.get: NAME + LAST_NAME.
+
+    ГРАБЛЯ (поймана в проде 2026-08-17): B24 для незаполненного поля
+    возвращает явный JSON-null («LAST_NAME»: null) — ``dict.get(key, "")``
+    даёт пустую строку только при ОТСУТСТВИИ ключа, а null проходит
+    как None и ронял конкатенацию «str + None». Пропускаем пустые части.
+    """
+    return " ".join(p for p in (detail.get("NAME"), detail.get("LAST_NAME")) if p).strip() or None
+
+
 class CrmService:
     """CRM-операции Bitrix24 поверх Bitrix24Client."""
 
@@ -63,8 +74,7 @@ class CrmService:
         )
         if detail is None:
             return ContactInfo(id=contact_id)
-        name = (detail.get("NAME", "") + " " + detail.get("LAST_NAME", "")).strip() or None
-        return ContactInfo(id=contact_id, name=name)
+        return ContactInfo(id=contact_id, name=_contact_display_name(detail))
 
     @staticmethod
     def _extract_contact_id(result: Any) -> int | None:
@@ -97,8 +107,7 @@ class CrmService:
             return None
         if not isinstance(detail, dict):
             return None
-        name = (detail.get("NAME", "") + " " + detail.get("LAST_NAME", "")).strip() or None
-        return ContactInfo(id=contact_id, name=name)
+        return ContactInfo(id=contact_id, name=_contact_display_name(detail))
 
     async def create_contact(
         self,
