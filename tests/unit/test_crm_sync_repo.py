@@ -282,3 +282,57 @@ async def test_set_timeline_comment(session):
     await session.reset()
     message = await session.get(Message, 100)
     assert message.timeline_comment_id == 555
+
+
+@pytest.mark.asyncio
+async def test_collect_returns_attachments(session):
+    """collect() отдаёт метаданные вложений (воркер читает файлы по file_path)."""
+    message_id = await _seed_message(session)
+    from app.models import Attachment, AttachmentType
+
+    session.add(
+        Attachment(
+            message_id=message_id,
+            type=AttachmentType.photo,
+            file_path="in/abc.jpg",
+            mime_type="image/jpeg",
+            size=1234,
+            file_name=None,
+        )
+    )
+    await session.commit()
+
+    data = await SqlAlchemyCrmSyncRepository(session).collect(message_id)
+    assert data is not None
+    assert len(data.attachments) == 1
+    att = data.attachments[0]
+    assert att.file_path == "in/abc.jpg"
+    assert att.mime_type == "image/jpeg"
+    assert att.size == 1234
+
+
+@pytest.mark.asyncio
+async def test_collect_without_attachments_empty_list(session):
+    message_id = await _seed_message(session)
+    data = await SqlAlchemyCrmSyncRepository(session).collect(message_id)
+    assert data is not None
+    assert data.attachments == []
+
+
+@pytest.mark.asyncio
+async def test_media_to_timeline_setting_roundtrip(session):
+    """app_settings.media_to_timeline: off по умолчанию, upertится."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.bridge.crm_sync_repo import (
+        get_media_to_timeline,
+        set_media_to_timeline,
+    )
+
+    factory = async_sessionmaker(bind=session.bind, expire_on_commit=False)
+
+    assert await get_media_to_timeline(factory) is False
+    await set_media_to_timeline(factory, True)
+    assert await get_media_to_timeline(factory) is True
+    await set_media_to_timeline(factory, False)
+    assert await get_media_to_timeline(factory) is False

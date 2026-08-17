@@ -89,9 +89,7 @@ async def me(manager: ManagerDep) -> dict:
 
 
 @router.post("/onboarding/{channel}/start", response_model=None)
-async def onboarding_start(
-    channel: Messenger, manager: ManagerDep, *, force: bool = False
-) -> dict:
+async def onboarding_start(channel: Messenger, manager: ManagerDep, *, force: bool = False) -> dict:
     return await _channel(channel).start(manager, force=force)
 
 
@@ -104,9 +102,7 @@ async def onboarding_status(channel: Messenger, manager: ManagerDep) -> dict:
 
 
 @router.post("/onboarding/{channel}/password", response_model=None)
-async def onboarding_password(
-    channel: Messenger, body: PasswordIn, manager: ManagerDep
-) -> dict:
+async def onboarding_password(channel: Messenger, body: PasswordIn, manager: ManagerDep) -> dict:
     if not await _channel(channel).submit_password(manager.id, body.password):
         raise HTTPException(
             status_code=409, detail="логин не ждёт пароль (статус не password_required)"
@@ -126,28 +122,37 @@ async def onboarding_cancel(channel: Messenger, manager: ManagerDep) -> dict:
 class SettingsIn(BaseModel):
     # Список режимов — единственный источник истины TIMELINE_MODES в
     # b24/sync.py; regex собираем из него, чтобы не дублировать руками.
-    timeline_mode: str = Field(
-        pattern="^(" + "|".join(TIMELINE_MODES) + ")$"
-    )
+    # Оба поля опциональны: PUT применяет только переданные (панель шлёт
+    # тот контрол, который меняли).
+    timeline_mode: str | None = Field(default=None, pattern="^(" + "|".join(TIMELINE_MODES) + ")$")
+    media_to_timeline: bool | None = None
 
 
 @router.get("/settings", response_model=None)
 async def get_settings(supervisor: SupervisorDep) -> dict:
     """Глобальные настройки приложения (для supervisor-панели)."""
-    from app.bridge.crm_sync_repo import get_timeline_mode
+    from app.bridge.crm_sync_repo import get_media_to_timeline, get_timeline_mode
 
-    mode = await get_timeline_mode(async_session)
-    return {"timeline_mode": mode}
+    return {
+        "timeline_mode": await get_timeline_mode(async_session),
+        "media_to_timeline": await get_media_to_timeline(async_session),
+    }
 
 
 @router.put("/settings", response_model=None)
-async def put_settings(
-    body: SettingsIn, supervisor: SupervisorDep
-) -> dict:
-    from app.bridge.crm_sync_repo import set_timeline_mode
+async def put_settings(body: SettingsIn, supervisor: SupervisorDep) -> dict:
+    from app.bridge.crm_sync_repo import set_media_to_timeline, set_timeline_mode
 
-    await set_timeline_mode(async_session, body.timeline_mode)
-    return {"timeline_mode": body.timeline_mode}
+    if body.timeline_mode is None and body.media_to_timeline is None:
+        raise HTTPException(status_code=422, detail="Нечего обновлять")
+    if body.timeline_mode is not None:
+        await set_timeline_mode(async_session, body.timeline_mode)
+    if body.media_to_timeline is not None:
+        await set_media_to_timeline(async_session, body.media_to_timeline)
+    return {
+        "timeline_mode": body.timeline_mode,
+        "media_to_timeline": body.media_to_timeline,
+    }
 
 
 def _manager_dto(m: Manager, accounts: list[TgAccount]) -> dict:
@@ -174,15 +179,9 @@ def _manager_dto(m: Manager, accounts: list[TgAccount]) -> dict:
 @router.get("/managers", response_model=None)
 async def list_managers(supervisor: SupervisorDep) -> list[dict]:
     async with async_session() as s:
-        managers = (
-            (await s.execute(select(Manager).order_by(Manager.id))).scalars().all()
-        )
+        managers = (await s.execute(select(Manager).order_by(Manager.id))).scalars().all()
         accounts = (
-            (
-                await s.execute(
-                    select(TgAccount).order_by(TgAccount.manager_id, TgAccount.id)
-                )
-            )
+            (await s.execute(select(TgAccount).order_by(TgAccount.manager_id, TgAccount.id)))
             .scalars()
             .all()
         )
@@ -193,14 +192,10 @@ async def list_managers(supervisor: SupervisorDep) -> list[dict]:
 
 
 @router.post("/managers", status_code=201, response_model=None)
-async def create_manager(
-    body: ManagerCreateIn, supervisor: SupervisorDep
-) -> dict:
+async def create_manager(body: ManagerCreateIn, supervisor: SupervisorDep) -> dict:
     async with async_session() as s:
         existing = (
-            await s.execute(
-                select(Manager).where(Manager.b24_user_id == body.b24_user_id)
-            )
+            await s.execute(select(Manager).where(Manager.b24_user_id == body.b24_user_id))
         ).scalar_one_or_none()
         if existing is not None:
             raise HTTPException(
@@ -220,15 +215,15 @@ async def create_manager(
             raise HTTPException(status_code=409, detail="дубликат b24_user_id") from None
         logger.info(
             "Менеджер создан: id=%s b24_user_id=%s (by supervisor %s)",
-            m.id, body.b24_user_id, supervisor.id,
+            m.id,
+            body.b24_user_id,
+            supervisor.id,
         )
         return _manager_dto(m, [])
 
 
 @router.patch("/managers/{manager_id}", response_model=None)
-async def patch_manager(
-    manager_id: int, body: ManagerPatchIn, supervisor: SupervisorDep
-) -> dict:
+async def patch_manager(manager_id: int, body: ManagerPatchIn, supervisor: SupervisorDep) -> dict:
     async with async_session() as s:
         m = await s.get(Manager, manager_id)
         if m is None:
@@ -237,13 +232,17 @@ async def patch_manager(
             # Деактивация = запрет входа; активные аккаунты продолжили бы
             # переписку — честнее потребовать сначала отвязать их.
             active_accounts = (
-                await s.execute(
-                    select(TgAccount).where(
-                        TgAccount.manager_id == m.id,
-                        TgAccount.status == TgAccountStatus.active,
+                (
+                    await s.execute(
+                        select(TgAccount).where(
+                            TgAccount.manager_id == m.id,
+                            TgAccount.status == TgAccountStatus.active,
+                        )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             if active_accounts:
                 channels = ", ".join(a.messenger.value.upper() for a in active_accounts)
                 raise HTTPException(
@@ -258,17 +257,13 @@ async def patch_manager(
             m.is_readonly = body.is_readonly
         await s.commit()
         accounts = (
-            (
-                await s.execute(
-                    select(TgAccount).where(TgAccount.manager_id == m.id)
-                )
-            )
-            .scalars()
-            .all()
+            (await s.execute(select(TgAccount).where(TgAccount.manager_id == m.id))).scalars().all()
         )
         logger.info(
             "Менеджер изменён: id=%s patch=%s (by supervisor %s)",
-            m.id, body.model_dump(exclude_none=True), supervisor.id,
+            m.id,
+            body.model_dump(exclude_none=True),
+            supervisor.id,
         )
         return _manager_dto(m, list(accounts))
 
@@ -297,7 +292,8 @@ async def unlink_account(account_id: int, supervisor: SupervisorDep) -> dict:
             await s.commit()
             logger.info(
                 "TG отвязка запланирована: account_id=%s (by supervisor %s)",
-                account.id, supervisor.id,
+                account.id,
+                supervisor.id,
             )
             return {"status": "logout_scheduled"}
         account.status = TgAccountStatus.offline
@@ -306,6 +302,7 @@ async def unlink_account(account_id: int, supervisor: SupervisorDep) -> dict:
         await s.commit()
         logger.info(
             "MAX аккаунт деактивирован: account_id=%s (by supervisor %s)",
-            account.id, supervisor.id,
+            account.id,
+            supervisor.id,
         )
         return {"status": "deactivated"}

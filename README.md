@@ -6,7 +6,7 @@
 
 Вся история переписки — в собственной PostgreSQL (чего не делает Wazzup), мультиаккаунтность (у каждого менеджера своя сессия), защита от бана, два канала — Telegram и MAX.
 
-> Работает в production: [b24-tg.haragy.top](https://b24-tg.haragy.top) · TG + MAX активны · 380 тестов green.
+> Работает в production: [b24-tg.haragy.top](https://b24-tg.haragy.top) · TG + MAX активны · 390 тестов green.
 
 ## Возможности
 
@@ -29,7 +29,7 @@
 | Telegram | Telethon (MTProto user-API) |
 | MAX | Bot API (WebSocket, bot token) |
 | Инфра | Docker Compose, nginx (TLS, gzip, кэш статики), Let's Encrypt |
-| Качество | pytest + pytest-asyncio (380 тестов), ruff |
+| Качество | pytest + pytest-asyncio (390 тестов), ruff |
 
 ## Архитектура
 
@@ -101,7 +101,7 @@ cd ChatMost
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 
-pytest -v          # 380 тестов
+pytest -v          # 390 тестов
 ruff check src/ tests/
 ```
 

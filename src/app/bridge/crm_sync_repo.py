@@ -13,9 +13,10 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.b24.sync import TIMELINE_MODE_DEFAULT, TIMELINE_MODES
-from app.bridge.crm_sync_worker import CrmSyncData, CrmSyncRepository
+from app.bridge.crm_sync_worker import AttachmentMeta, CrmSyncData, CrmSyncRepository
 from app.models import (
     AppSetting,
+    Attachment,
     Contact,
     CrmSyncItem,
     CrmSyncStatus,
@@ -25,6 +26,10 @@ from app.models import (
 )
 
 TIMELINE_MODE_KEY = "timeline_mode"
+#: Грузить ли файлы вложений в timeline-комментарии CRM (FILES у
+#: crm.timeline.comment.add): "on" | "off". По умолчанию выключено —
+#: диск/квота портала B24 дороже текст-метки «[фото]».
+MEDIA_TO_TIMELINE_KEY = "media_to_timeline"
 
 
 async def get_timeline_mode(session_factory) -> str:
@@ -49,6 +54,29 @@ async def set_timeline_mode(session_factory, mode: str) -> None:
             s.add(AppSetting(key=TIMELINE_MODE_KEY, value=mode))
         else:
             row.value = mode
+        await s.commit()
+
+
+async def get_media_to_timeline(session_factory) -> bool:
+    """Прочитать app_settings.media_to_timeline (нет строки/мусор — выкл)."""
+    async with session_factory() as s:
+        row = (
+            await s.execute(select(AppSetting).where(AppSetting.key == MEDIA_TO_TIMELINE_KEY))
+        ).scalar_one_or_none()
+    return row is not None and row.value == "on"
+
+
+async def set_media_to_timeline(session_factory, enabled: bool) -> None:
+    """Upsert app_settings.media_to_timeline."""
+    value = "on" if enabled else "off"
+    async with session_factory() as s:
+        row = (
+            await s.execute(select(AppSetting).where(AppSetting.key == MEDIA_TO_TIMELINE_KEY))
+        ).scalar_one_or_none()
+        if row is None:
+            s.add(AppSetting(key=MEDIA_TO_TIMELINE_KEY, value=value))
+        else:
+            row.value = value
         await s.commit()
 
 
@@ -154,6 +182,19 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
         row = (await self._session.execute(stmt)).one_or_none()
         if row is None:
             return None
+        # Вложения сообщения: файлы читает воркер из медиа-тома по file_path.
+        att_rows = (
+            await self._session.execute(
+                select(
+                    Attachment.file_path,
+                    Attachment.file_name,
+                    Attachment.mime_type,
+                    Attachment.size,
+                )
+                .where(Attachment.message_id == message_id)
+                .order_by(Attachment.id)
+            )
+        ).all()
         return CrmSyncData(
             message_text=row.text,
             sender_name=row.name,
@@ -166,6 +207,15 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
             crm_entity_type=row.crm_entity_type,
             assigned_b24_user_id=row.b24_user_id,
             messenger=row.messenger,
+            attachments=[
+                AttachmentMeta(
+                    file_path=a.file_path,
+                    file_name=a.file_name,
+                    mime_type=a.mime_type,
+                    size=a.size,
+                )
+                for a in att_rows
+            ],
         )
 
     async def apply_inbound_result(
@@ -235,6 +285,9 @@ class WorkerCrmSyncRepository(CrmSyncRepository):
 
     async def get_timeline_mode(self) -> str:
         return await get_timeline_mode(self._session_factory)
+
+    async def get_media_to_timeline(self) -> bool:
+        return await get_media_to_timeline(self._session_factory)
 
     async def mark_done(self, item: CrmSyncItem) -> None:
         async with self._session_factory() as s:

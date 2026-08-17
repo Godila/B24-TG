@@ -188,3 +188,29 @@ async def test_add_timeline_comment():
     assert comment_id == 999
     call_kwargs = client.call.call_args
     assert call_kwargs.args[0] == "crm.timeline.comment.add"
+
+
+@pytest.mark.asyncio
+async def test_add_timeline_comment_with_files():
+    """files → FILES=[[имя, base64]] в fields: файл попадает в карточку CRM."""
+    client = AsyncMock()
+    client.call = AsyncMock(return_value=1001)
+    svc = CrmService(client)
+    await svc.add_timeline_comment(
+        auth_token="t",
+        entity_type="deal",
+        entity_id=7,
+        comment="[фото]",
+        files=[("photo.jpg", "QUJD")],
+    )
+    fields = client.call.call_args.kwargs["params"]["fields"]
+    assert fields["FILES"] == [["photo.jpg", "QUJD"]]
+
+
+@pytest.mark.asyncio
+async def test_add_timeline_comment_without_files_has_no_files_key():
+    client = AsyncMock()
+    client.call = AsyncMock(return_value=1002)
+    svc = CrmService(client)
+    await svc.add_timeline_comment(auth_token="t", entity_type="deal", entity_id=7, comment="текст")
+    assert "FILES" not in client.call.call_args.kwargs["params"]["fields"]

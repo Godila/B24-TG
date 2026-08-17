@@ -207,16 +207,24 @@ class CrmService:
         entity_type: str,
         entity_id: int,
         comment: str,
+        files: list[tuple[str, str]] | None = None,
     ) -> int:
+        """Комментарий в таймлайн CRM; ``files`` — [(имя, base64)] вложений.
+
+        FILES у crm.timeline.comment.add принимает пары [имя, контент]:
+        файл попадает прямо в карточку (сделки/контакта), а не только
+        текст-метка. None/пустой список — прежнее текстовое поведение.
+        """
+        fields: dict[str, Any] = {
+            "ENTITY_TYPE": entity_type,
+            "ENTITY_ID": entity_id,
+            "COMMENT": comment,
+        }
+        if files:
+            fields["FILES"] = [[name, content] for name, content in files]
         result = await self._client.call(
             "crm.timeline.comment.add",
             auth_token=auth_token,
-            params={
-                "fields": {
-                    "ENTITY_TYPE": entity_type,
-                    "ENTITY_ID": entity_id,
-                    "COMMENT": comment,
-                }
-            },
+            params={"fields": fields},
         )
         return int(result)

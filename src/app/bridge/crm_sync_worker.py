@@ -18,14 +18,34 @@ mark_failed/reschedule/enqueue + сборка данных сообщения и
 """
 
 import asyncio
+import base64
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from app.b24.sync import Bitrix24Sync
 from app.models import KIND_INBOUND, CrmSyncItem, Messenger
 
+if TYPE_CHECKING:  # pragma: no cover - только для type-checker
+    from app.media.storage import MediaStorage
+
 logger = logging.getLogger(__name__)
+
+#: Значение по умолчанию для лимита файла в timeline-комментарий B24
+#: (переопределяется настройкой media_timeline_max_bytes из config).
+MEDIA_TIMELINE_MAX_BYTES_DEFAULT = 5 * 1024 * 1024
+
+
+@dataclass(slots=True)
+class AttachmentMeta:
+    """Метаданные вложения сообщения (файл читает воркер из медиа-тома)."""
+
+    file_path: str  # относительный путь в медиа-томе
+    file_name: str | None = None
+    mime_type: str | None = None
+    size: int | None = None
 
 
 @dataclass(slots=True)
@@ -43,6 +63,7 @@ class CrmSyncData:
     sender_first_name: str | None = None  # Contact.first_name (split для CRM NAME)
     sender_last_name: str | None = None  # Contact.last_name (split для CRM LAST_NAME)
     sender_username: str | None = None  # Contact.username → IM-поле CRM
+    attachments: list[AttachmentMeta] | None = None  # вложения сообщения
 
 
 class CrmSyncRepository:
@@ -84,6 +105,11 @@ class CrmSyncRepository:
         """
         return "all"
 
+    async def get_media_to_timeline(self) -> bool:
+        """Грузить ли файлы вложений в timeline-комментарии (default: нет —
+        фейки в тестах наследуют прежнее текст-меточное поведение)."""
+        return False
+
 
 class CrmSyncWorker:
     """Воркер очереди crm_sync: poll → CRM-вызовы → retry/backoff."""
@@ -95,12 +121,17 @@ class CrmSyncWorker:
         max_attempts: int = 5,
         poll_interval: float = 2,
         batch_size: int = 20,
+        media_storage: "MediaStorage | None" = None,
+        media_timeline_max_bytes: int = MEDIA_TIMELINE_MAX_BYTES_DEFAULT,
     ):
         self._repo = repo
         self._b24sync = b24sync
         self._max_attempts = max_attempts
         self._poll_interval = poll_interval
         self._batch_size = batch_size
+        # Медиа-том (bridge): чтение файлов вложений для timeline-комментариев.
+        self._media_storage = media_storage
+        self._media_timeline_max_bytes = media_timeline_max_bytes
         self._running = False
 
     # ------------------------------------------------------------------ #
@@ -127,16 +158,56 @@ class CrmSyncWorker:
     # Single iteration
     # ------------------------------------------------------------------ #
     async def _process_once(self) -> None:
-        # Режим таймлайна читаем раз на батч (сеттинг меняется редко).
+        # Режимы читаем раз на батч (настройки меняются редко).
         timeline_mode = await self._repo.get_timeline_mode()
+        media_to_timeline = await self._repo.get_media_to_timeline()
         items = await self._repo.fetch_due(self._batch_size)
         for item in items:
             if item.kind == KIND_INBOUND:
-                await self._handle_inbound(item, timeline_mode)
+                await self._handle_inbound(item, timeline_mode, media_to_timeline)
             else:
-                await self._handle_outbound(item, timeline_mode)
+                await self._handle_outbound(item, timeline_mode, media_to_timeline)
 
-    async def _handle_inbound(self, item: CrmSyncItem, timeline_mode: str) -> None:
+    def _timeline_files(self, data: CrmSyncData, enabled: bool) -> list[tuple[str, str]]:
+        """Вложения → [(имя, base64)] для FILES timeline-комментария B24.
+
+        Настройка выключена / том не смонтирован / файла нет / превышен
+        лимит — вложение молча остаётся текст-меткой («[фото]»): комментарий
+        важнее файла, сбой загрузки не должен ронять CRM-запись.
+        """
+        if not enabled or self._media_storage is None or not data.attachments:
+            return []
+        from app.media.storage import MediaPathError
+
+        files: list[tuple[str, str]] = []
+        for att in data.attachments:
+            if att.size is not None and att.size > self._media_timeline_max_bytes:
+                logger.info(
+                    "timeline: skip attachment %s — size %s > limit %s",
+                    att.file_path,
+                    att.size,
+                    self._media_timeline_max_bytes,
+                )
+                continue
+            try:
+                path = self._media_storage.abs_path(att.file_path)
+                if not path.is_file():
+                    logger.warning("timeline: attachment file missing: %s", att.file_path)
+                    continue
+                content = path.read_bytes()
+            except (MediaPathError, OSError):
+                logger.warning("timeline: attachment unreadable: %s", att.file_path)
+                continue
+            if len(content) > self._media_timeline_max_bytes:
+                logger.info("timeline: skip attachment %s — actual size > limit", att.file_path)
+                continue
+            name = att.file_name or Path(att.file_path).name
+            files.append((name, base64.b64encode(content).decode("ascii")))
+        return files
+
+    async def _handle_inbound(
+        self, item: CrmSyncItem, timeline_mode: str, media_to_timeline: bool
+    ) -> None:
         data = await self._repo.collect(item.message_id)
         if data is None:
             # Сообщение удалено/не найдено — ретраи бессмысленны.
@@ -171,6 +242,7 @@ class CrmSyncWorker:
                 sender_first_name=data.sender_first_name,
                 sender_last_name=data.sender_last_name,
                 sender_username=data.sender_username,
+                files=self._timeline_files(data, media_to_timeline),
             )
             if result is None:
                 # Нет B24-токена (интеграция не установлена) — ретраибельно:
@@ -189,7 +261,9 @@ class CrmSyncWorker:
 
         await self._repo.mark_done(item)
 
-    async def _handle_outbound(self, item: CrmSyncItem, timeline_mode: str) -> None:
+    async def _handle_outbound(
+        self, item: CrmSyncItem, timeline_mode: str, media_to_timeline: bool
+    ) -> None:
         data = await self._repo.collect(item.message_id)
         if data is None:
             logger.warning(
@@ -207,6 +281,7 @@ class CrmSyncWorker:
                 contact_id=data.crm_contact_id,
                 text=data.message_text or "",
                 timeline_mode=timeline_mode,
+                files=self._timeline_files(data, media_to_timeline),
             )
             if comment_id is not None:
                 await self._repo.set_timeline_comment(item.message_id, comment_id)

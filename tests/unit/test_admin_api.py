@@ -36,9 +36,7 @@ def _request(method="POST", origin=None, host="b24-tg.haragy.top"):
 def _settings_env(monkeypatch, **kw):
     monkeypatch.setattr(
         "app.config.get_settings",
-        lambda: SimpleNamespace(
-            b24_portal="b24-ye2jjz.bitrix24.ru", cors_origins="", **kw
-        ),
+        lambda: SimpleNamespace(b24_portal="b24-ye2jjz.bitrix24.ru", cors_origins="", **kw),
     )
 
 
@@ -85,15 +83,21 @@ async def db(monkeypatch):
     async with SessionLocal() as s:
         s.add(
             Manager(
-                id=1, name="Админ", b24_user_id=1,
-                role=ManagerRole.supervisor, is_active=True,
+                id=1,
+                name="Админ",
+                b24_user_id=1,
+                role=ManagerRole.supervisor,
+                is_active=True,
             )
         )
         s.add(Manager(id=2, name="Маша", b24_user_id=2, is_active=True))
         s.add(
             TgAccount(
-                id=7, messenger=Messenger.tg, phone="TG-mgr2",
-                status=TgAccountStatus.offline, manager_id=2,
+                id=7,
+                messenger=Messenger.tg,
+                phone="TG-mgr2",
+                status=TgAccountStatus.offline,
+                manager_id=2,
             )
         )
         await s.commit()
@@ -102,10 +106,12 @@ async def db(monkeypatch):
     from app.onboarding.max_channel import MaxOnboardingChannel
     from app.onboarding.tg_channel import TgOnboardingChannel
 
-    admin_api.register_channels({
-        Messenger.tg: TgOnboardingChannel(session_factory=SessionLocal),
-        Messenger.max: MaxOnboardingChannel(session_factory=SessionLocal),
-    })
+    admin_api.register_channels(
+        {
+            Messenger.tg: TgOnboardingChannel(session_factory=SessionLocal),
+            Messenger.max: MaxOnboardingChannel(session_factory=SessionLocal),
+        }
+    )
     yield SessionLocal
     await engine.dispose()
 
@@ -157,9 +163,7 @@ async def test_create_and_patch_manager(db):
     assert patched["is_readonly"] is True
 
     with pytest.raises(HTTPException) as ei:
-        await admin_api.create_manager(
-            admin_api.ManagerCreateIn(name="Дубль", b24_user_id=42), sup
-        )
+        await admin_api.create_manager(admin_api.ManagerCreateIn(name="Дубль", b24_user_id=42), sup)
     assert ei.value.status_code == 409
 
 
@@ -183,9 +187,7 @@ async def test_unlink_tg_schedules_logout(db):
         from app.models import LoginCommand, LoginCommandKind
 
         cmd = (
-            await s.execute(
-                select(LoginCommand).where(LoginCommand.account_id == 7)
-            )
+            await s.execute(select(LoginCommand).where(LoginCommand.account_id == 7))
         ).scalar_one()
     assert cmd.kind is LoginCommandKind.log_out
 
@@ -195,9 +197,13 @@ async def test_unlink_max_wipes_credentials(db):
     async with db() as s:
         s.add(
             TgAccount(
-                id=8, messenger=Messenger.max, phone="MAX-1",
-                status=TgAccountStatus.active, manager_id=2,
-                token="tok", device_id="dev",
+                id=8,
+                messenger=Messenger.max,
+                phone="MAX-1",
+                status=TgAccountStatus.active,
+                manager_id=2,
+                token="tok",
+                device_id="dev",
             )
         )
         await s.commit()
@@ -215,20 +221,16 @@ async def test_unlink_max_wipes_credentials(db):
 async def test_settings_default_is_first(db):
     supervisor = await _manager(db, 1)
     result = await admin_api.get_settings(supervisor)
-    assert result == {"timeline_mode": "first"}
+    assert result == {"timeline_mode": "first", "media_to_timeline": False}
 
 
 @pytest.mark.asyncio
 async def test_settings_put_updates_mode(db):
     supervisor = await _manager(db, 1)
-    await admin_api.put_settings(
-        admin_api.SettingsIn(timeline_mode="all"), supervisor
-    )
+    await admin_api.put_settings(admin_api.SettingsIn(timeline_mode="all"), supervisor)
     assert (await admin_api.get_settings(supervisor))["timeline_mode"] == "all"
     # Перезапись другим значением — upsert, не дубль.
-    await admin_api.put_settings(
-        admin_api.SettingsIn(timeline_mode="none"), supervisor
-    )
+    await admin_api.put_settings(admin_api.SettingsIn(timeline_mode="none"), supervisor)
     assert (await admin_api.get_settings(supervisor))["timeline_mode"] == "none"
 
 
@@ -237,3 +239,17 @@ def test_settings_put_rejects_bad_mode():
 
     with pytest.raises(pydantic.ValidationError):
         admin_api.SettingsIn(timeline_mode="sometimes")
+
+
+@pytest.mark.asyncio
+async def test_settings_media_to_timeline_roundtrip(db):
+    """Тумблер «файлы в комментариях CRM» читается/пишется независимо от
+    timeline_mode (PUT только с media_to_timeline не трогает режим)."""
+    supervisor = await _manager(db, 1)
+    await admin_api.put_settings(admin_api.SettingsIn(media_to_timeline=True), supervisor)
+    result = await admin_api.get_settings(supervisor)
+    assert result["media_to_timeline"] is True
+    assert result["timeline_mode"] == "first"  # режим не тронут
+
+    await admin_api.put_settings(admin_api.SettingsIn(media_to_timeline=False), supervisor)
+    assert (await admin_api.get_settings(supervisor))["media_to_timeline"] is False

@@ -200,6 +200,14 @@
         </div>
         <span class="set-state" id="timeline-state"></span>
       </div>
+      <div class="set-row" style="margin-top:12px">
+        <strong>Прикреплять файлы к комментариям CRM:</strong>
+        <label style="display:inline-flex;align-items:center;gap:6px;font-size:.85rem">
+          <input type="checkbox" id="media-to-timeline" aria-label="Прикреплять файлы к комментариям CRM">
+          вложения (фото/файлы ≤5 МБ) попадают в карточку сделки
+        </label>
+        <span class="set-state" id="media-state"></span>
+      </div>
       <p class="hint" style="margin:10px 0 0">
         «Только первое» — в карточку сделки попадает комментарий о новом диалоге, остальная
         переписка живёт во вкладке чата. «Все сообщения» — полный аудит в таймлайне.
@@ -277,8 +285,31 @@
       document.getElementById("timeline-state").textContent =
         "сохранено: " + (TIMELINE_LABELS[mode] || mode);
     }
+    const mediaToggle = document.getElementById("media-to-timeline");
+    const mediaState = document.getElementById("media-state");
+    function renderMediaToTimeline(on) {
+      mediaToggle.checked = !!on;
+      mediaState.textContent = on ? "включено" : "выключено";
+    }
+    mediaToggle.addEventListener("change", async () => {
+      mediaState.textContent = "сохраняем…";
+      try {
+        await api("/admin/api/settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ media_to_timeline: mediaToggle.checked }),
+        });
+        renderMediaToTimeline(mediaToggle.checked);
+      } catch (e) {
+        mediaState.textContent = "ошибка: " + e.message;
+      }
+    });
     async function loadSettings() {
-      try { renderTimelineMode((await api("/admin/api/settings")).timeline_mode); }
+      try {
+        const s = await api("/admin/api/settings");
+        renderTimelineMode(s.timeline_mode);
+        renderMediaToTimeline(s.media_to_timeline);
+      }
       catch { /* не supervisor — секция скрыта целиком */ }
     }
     document.querySelectorAll("#timeline-segment button").forEach((b) => {

@@ -66,6 +66,7 @@ class Bitrix24Sync:
         sender_first_name: str | None = None,
         sender_last_name: str | None = None,
         sender_username: str | None = None,
+        files: list[tuple[str, str]] | None = None,
     ) -> SyncResult | None:
         """Входящее сообщение → CRM.
 
@@ -79,6 +80,9 @@ class Bitrix24Sync:
         ``sender_first_name``/``sender_last_name``/``sender_username`` —
         дополнительные данные канала: split-имя в NAME/LAST_NAME контакта,
         @username (TG) — в мульти-поле IM.
+        ``files`` — [(имя, base64)] вложений для FILES комментария
+        (app_settings.media_to_timeline): в карточку CRM попадает сам
+        файл, а не только метка «[фото]».
         """
         token = await self._token_mgr.get_token()
         if token is None:
@@ -141,6 +145,7 @@ class Bitrix24Sync:
                     entity_type="deal",
                     entity_id=deal_id,
                     comment=comment_text,
+                    files=files,
                 )
             else:
                 comment_id = await self._crm.add_timeline_comment(
@@ -148,6 +153,7 @@ class Bitrix24Sync:
                     entity_type="contact",
                     entity_id=contact.id,
                     comment=comment_text,
+                    files=files,
                 )
 
         # 4. Уведомление ответственному — ТОЛЬКО первому сообщению нового
@@ -178,6 +184,7 @@ class Bitrix24Sync:
         text: str,
         *,
         timeline_mode: str = TIMELINE_MODE_DEFAULT,
+        files: list[tuple[str, str]] | None = None,
     ) -> int | None:
         """Timeline-комментарий для исходящего сообщения (deal или contact-карточка).
 
@@ -185,6 +192,7 @@ class Bitrix24Sync:
         историю CRM (в режиме ``all``). ``first``/``none`` исходящие в
         таймлайн не дублируют. Приоритет привязки: сделка диалога → карточка
         контакта; нет ни той, ни другой — писать некуда, возвращаем None.
+        ``files`` — вложения для FILES комментария (как у process_inbound).
         Возвращает ID timeline-комментария или None.
         """
         if timeline_mode != "all":
@@ -203,6 +211,7 @@ class Bitrix24Sync:
                 entity_type=entity_type,
                 entity_id=dialog_deal_id,
                 comment=comment,
+                files=files,
             )
         if contact_id is not None:
             return await self._crm.add_timeline_comment(
@@ -210,5 +219,6 @@ class Bitrix24Sync:
                 entity_type="contact",
                 entity_id=contact_id,
                 comment=comment,
+                files=files,
             )
         return None

@@ -80,9 +80,7 @@ async def run_bridge() -> None:
     # Медиа-том: общий с web (upload менеджеров — раздача, сюда — скачивание
     # из каналов и отправка). Недоступный том ≠ смерть конвейера: сообщения
     # текут с плейсхолдерами, но это надо видеть в логах сразу.
-    media_storage = MediaStorage(
-        settings.media_dir, max_size_bytes=settings.media_max_size_bytes
-    )
+    media_storage = MediaStorage(settings.media_dir, max_size_bytes=settings.media_max_size_bytes)
     if not media_storage.is_writable():
         logger.critical(
             "MEDIA STORAGE NOT WRITABLE: %s — входящие/исходящие медиа "
@@ -167,11 +165,15 @@ async def run_bridge() -> None:
     )
 
     # CRM-воркер: те же retry-механики, что и outbox (5 попыток, backoff).
+    # media_storage — чтение файлов вложений для FILES timeline-комментариев
+    # (app_settings.media_to_timeline, выключено по умолчанию).
     crm_worker = CrmSyncWorker(
         repo=crm_repo,
         b24sync=b24sync,
         max_attempts=settings.crm_sync_max_attempts,
         poll_interval=settings.crm_sync_poll_interval,
+        media_storage=media_storage,
+        media_timeline_max_bytes=settings.media_timeline_max_bytes,
     )
 
     # 5-6. Фоновые задачи: outbox + crm_sync + health + по задаче на входящий

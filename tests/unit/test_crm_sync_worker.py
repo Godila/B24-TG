@@ -6,7 +6,11 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.b24.sync import SyncResult
-from app.bridge.crm_sync_worker import CrmSyncData, CrmSyncWorker
+from app.bridge.crm_sync_worker import (
+    AttachmentMeta,
+    CrmSyncData,
+    CrmSyncWorker,
+)
 from app.models import KIND_INBOUND, KIND_OUTBOUND, CrmSyncItem, CrmSyncStatus, Messenger
 
 
@@ -49,6 +53,7 @@ def _make_repo(items, data) -> AsyncMock:
     repo.apply_inbound_result = AsyncMock()
     repo.set_timeline_comment = AsyncMock()
     repo.get_timeline_mode = AsyncMock(return_value="all")
+    repo.get_media_to_timeline = AsyncMock(return_value=False)
     return repo
 
 
@@ -191,6 +196,7 @@ async def test_outbound_success_sets_comment_and_marks_done():
         contact_id=42,
         text="Ответ менеджера",
         timeline_mode="all",
+        files=[],
     )
     repo.set_timeline_comment.assert_awaited_once_with(11, 555)
     repo.mark_done.assert_awaited_once()
@@ -280,3 +286,97 @@ async def test_inbound_passes_channel_profile_fields():
     assert call["sender_first_name"] == "Иван"
     assert call["sender_last_name"] == "Петров"
     assert call["sender_username"] == "ivan_p"
+
+
+# ---------------------------------------------------------------------- #
+# Медиа в timeline-комментарии (app_settings.media_to_timeline)
+# ---------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_inbound_media_files_attached_when_enabled(tmp_path):
+    """Настройка вкл + файл на томе → process_inbound получает FILES-payload
+    [(имя, base64)] — в карточку CRM попадает сам файл."""
+    import base64 as b64mod
+
+    from app.media.storage import MediaStorage
+
+    storage = MediaStorage(tmp_path)
+    absolute, relative = storage.new_path(direction="in", ext="jpg")
+    absolute.write_bytes(b"IMGDATA")
+
+    data = _make_data(
+        attachments=[
+            AttachmentMeta(
+                file_path=relative,
+                file_name="photo.jpg",
+                mime_type="image/jpeg",
+                size=7,
+            )
+        ]
+    )
+    repo = _make_repo([_make_item()], data)
+    repo.get_media_to_timeline = AsyncMock(return_value=True)
+    sync = AsyncMock()
+
+    worker = CrmSyncWorker(repo=repo, b24sync=sync, media_storage=storage)
+    await worker._process_once()
+
+    kwargs = sync.process_inbound.await_args.kwargs
+    assert kwargs["files"] == [("photo.jpg", b64mod.b64encode(b"IMGDATA").decode())]
+
+
+@pytest.mark.asyncio
+async def test_inbound_media_files_empty_when_disabled(tmp_path):
+    from app.media.storage import MediaStorage
+
+    data = _make_data(attachments=[AttachmentMeta(file_path="in/x.jpg", size=1)])
+    repo = _make_repo([_make_item()], data)
+    repo.get_media_to_timeline = AsyncMock(return_value=False)
+    sync = AsyncMock()
+
+    worker = CrmSyncWorker(repo=repo, b24sync=sync, media_storage=MediaStorage(tmp_path))
+    await worker._process_once()
+
+    assert sync.process_inbound.await_args.kwargs["files"] == []
+
+
+@pytest.mark.asyncio
+async def test_inbound_media_oversize_skipped(tmp_path):
+    """Файл больше лимита не грузится в B24 — комментарий остаётся с
+    текст-меткой (сбой файла не роняет CRM-запись)."""
+    from app.media.storage import MediaStorage
+
+    storage = MediaStorage(tmp_path)
+    absolute, relative = storage.new_path(direction="in", ext="bin")
+    absolute.write_bytes(b"0123456789")
+
+    data = _make_data(
+        attachments=[AttachmentMeta(file_path=relative, file_name="big.bin", size=10)]
+    )
+    repo = _make_repo([_make_item()], data)
+    repo.get_media_to_timeline = AsyncMock(return_value=True)
+    sync = AsyncMock()
+
+    worker = CrmSyncWorker(
+        repo=repo, b24sync=sync, media_storage=storage, media_timeline_max_bytes=4
+    )
+    await worker._process_once()
+
+    assert sync.process_inbound.await_args.kwargs["files"] == []
+
+
+@pytest.mark.asyncio
+async def test_inbound_media_missing_file_skipped(tmp_path):
+    from app.media.storage import MediaStorage
+
+    data = _make_data(
+        attachments=[AttachmentMeta(file_path="in/gone.jpg", file_name="g.jpg", size=1)]
+    )
+    repo = _make_repo([_make_item()], data)
+    repo.get_media_to_timeline = AsyncMock(return_value=True)
+    sync = AsyncMock()
+
+    worker = CrmSyncWorker(repo=repo, b24sync=sync, media_storage=MediaStorage(tmp_path))
+    await worker._process_once()
+
+    assert sync.process_inbound.await_args.kwargs["files"] == []
+    repo.mark_done.assert_awaited_once()

@@ -41,9 +41,9 @@ class Settings(BaseSettings):
 
     # Throttling (защита от бана)
     throttle_init_max: int = Field(10)
-    throttle_init_window: int = Field(180)        # сек
-    throttle_init_min_interval: int = Field(5)    # сек между инициациями
-    throttle_reply_max: int = Field(20)           # ответов в минуту
+    throttle_init_window: int = Field(180)  # сек
+    throttle_init_min_interval: int = Field(5)  # сек между инициациями
+    throttle_reply_max: int = Field(20)  # ответов в минуту
 
     # Web / UI
     # HMAC-ключ для сессионных кук Web UI (длинная случайная строка).
@@ -70,19 +70,23 @@ class Settings(BaseSettings):
     # висящий upload 25МБ через полумёртвый туннель останавливает все
     # исходящие; лучше вернуться к элементу по расписанию backoff.
     media_send_timeout_sec: float = Field(300.0)
+    # Лимит файла, загружаемого в timeline-комментарий B24 (FILES у
+    # crm.timeline.comment.add): база64 раздувает payload вдвое, а диск
+    # портала — не наш; большее остаётся текст-меткой в комментарии.
+    media_timeline_max_bytes: int = Field(5 * 1024 * 1024)
 
     # Инфра
     database_url: str = Field(...)
 
     # Outbox
-    outbox_poll_interval: int = Field(2)          # сек
+    outbox_poll_interval: int = Field(2)  # сек
     outbox_max_attempts: int = Field(5)
 
     # Bitrix24 REST throttle (free-портал режет ~2 rps)
-    b24_min_call_interval: float = Field(0.6)     # сек между вызовами
+    b24_min_call_interval: float = Field(0.6)  # сек между вызовами
 
     # CRM sync queue (план 006)
-    crm_sync_poll_interval: float = Field(2)      # сек
+    crm_sync_poll_interval: float = Field(2)  # сек
     crm_sync_max_attempts: int = Field(5)
 
     # Алерты о состоянии TG-сессий (план 009): b24_user_id админа, которому
@@ -121,9 +125,9 @@ class Settings(BaseSettings):
     register_timeout_sec: float = Field(60.0)
 
     # TG QR-онбординг (вариант B: команды в БД, bridge исполняет).
-    tg_onboarding_deadline_sec: float = Field(900.0)   # окно всей команды
-    login_password_timeout_sec: float = Field(120.0)   # ожидание 2FA-ввода
-    login_worker_poll_sec: float = Field(2.0)          # каденс LoginCommandWorker
+    tg_onboarding_deadline_sec: float = Field(900.0)  # окно всей команды
+    login_password_timeout_sec: float = Field(120.0)  # ожидание 2FA-ввода
+    login_worker_poll_sec: float = Field(2.0)  # каденс LoginCommandWorker
 
 
 @lru_cache(maxsize=1)
