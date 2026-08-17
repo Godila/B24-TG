@@ -116,6 +116,10 @@ class Settings(BaseSettings):
     # QR-онбординг: сколько ждать скана всего и пароля 2FA отдельно.
     max_onboarding_deadline_sec: float = Field(300.0)
     max_onboarding_password_timeout_sec: float = Field(120.0)
+    # Ожидание push op=136 «сервер обработал upload» после загрузки
+    # файла/видео (по реверсу — до ~60с); выходит в общий бюджет
+    # media_send_timeout_sec, невыполнение → send_timeout → ретрай outbox.
+    max_upload_ready_timeout_sec: float = Field(60.0)
     # Подхват новых active-аккаунтов bridge'ем (после QR-онбординга, без
     # рестарта) — период AccountSyncWorker.
     account_sync_interval_sec: float = Field(20.0)

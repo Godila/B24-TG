@@ -3,6 +3,7 @@
 import logging
 
 from app.config import get_settings
+from app.media.storage import MediaStorage
 from app.messaging.max.protocol import (
     DEFAULT_APP_VERSION,
     DEFAULT_BROWSER_UA,
@@ -17,11 +18,16 @@ from app.models import TgAccount
 logger = logging.getLogger(__name__)
 
 
-def build_max_provider(account: TgAccount) -> MaxUserProvider:
+def build_max_provider(
+    account: TgAccount, *, media_storage: MediaStorage | None = None
+) -> MaxUserProvider:
     """Builder для SessionManager: (messenger=max) аккаунт → провайдер.
 
     Креды — из строки аккаунта (token/device_id с QR-онбординга), транспорт —
     из настроек (ws_url/app_version/UA дрейфуют независимо от аккаунтов).
+    ``media_storage`` замыкается сюда через partial в main.py (протокол
+    ProviderBuilder не меняется). None = медиа выключено (прежнее
+    поведение — вызовы без хранилища, старые тесты).
     Аккаунт без токена — ошибка конфигурации (не должен попадать в active).
     """
     settings = get_settings()
@@ -44,6 +50,10 @@ def build_max_provider(account: TgAccount) -> MaxUserProvider:
         heartbeat_tick_sec=settings.max_heartbeat_tick_sec,
         backoff_min_sec=settings.max_backoff_min_sec,
         backoff_max_sec=settings.max_backoff_max_sec,
+        media_storage=media_storage,
+        media_download_timeout_sec=settings.media_download_timeout_sec,
+        media_send_timeout_sec=settings.media_send_timeout_sec,
+        upload_ready_timeout_sec=settings.max_upload_ready_timeout_sec,
     )
 
 

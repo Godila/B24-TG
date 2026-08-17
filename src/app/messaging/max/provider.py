@@ -19,7 +19,10 @@ import itertools
 import logging
 import time
 from collections.abc import AsyncIterator
+from pathlib import Path
 
+from app.media.storage import MediaStorage
+from app.messaging.max.media import MaxMediaClient, UploadWaiter
 from app.messaging.max.protocol import (
     OP_CHAT_INFO,
     OP_GET_CONTACTS,
@@ -27,6 +30,10 @@ from app.messaging.max.protocol import (
     OP_LOGIN,
     OP_MSG_SEND,
     OP_PING,
+    OP_UPLOAD_READY,
+    UPLOAD_KIND_FILE,
+    UPLOAD_KIND_PHOTO,
+    UPLOAD_KIND_VIDEO,
     MaxAuthError,
     init_payload,
     login_payload,
@@ -40,13 +47,22 @@ from app.messaging.max.push_parser import (
 )
 from app.messaging.max.ws_client import MaxWsClient
 from app.messaging.provider import MessengerProvider
-from app.messaging.types import IncomingMessage, SendResult
+from app.messaging.types import ContentType, IncomingMessage, MediaPayload, SendResult
 from app.models import Messenger
 
 logger = logging.getLogger(__name__)
 
 #: Сигнал конца incoming_stream при disconnect() (forward-таска завершается).
 _STREAM_END: IncomingMessage | None = None
+
+#: ContentType → вид загрузки MAX; прочее (voice/file/sticker) идёт FILE-
+#: пайплайном: нативная voice-загрузка требует OGG Opus, исходящих
+#: голосовых у нас нет — аудио уходит играбельным файлом.
+_UPLOAD_KINDS = {
+    ContentType.photo: UPLOAD_KIND_PHOTO,
+    ContentType.video: UPLOAD_KIND_VIDEO,
+    ContentType.file: UPLOAD_KIND_FILE,
+}
 
 
 class MaxUserProvider(MessengerProvider):
@@ -71,6 +87,11 @@ class MaxUserProvider(MessengerProvider):
         backoff_min_sec: float = 2.0,
         backoff_max_sec: float = 32.0,
         client_factory=None,
+        media_storage: MediaStorage | None = None,
+        media_download_timeout_sec: float = 120.0,
+        media_send_timeout_sec: float = 300.0,
+        upload_ready_timeout_sec: float = 60.0,
+        http_factory=None,
     ):
         self._token = token
         self._device_id = device_id
@@ -103,6 +124,22 @@ class MaxUserProvider(MessengerProvider):
         )
         self._client = self._client_factory()
         self._client.on_push(self._on_push)
+        # Медиа: None = выключено (тесты/онбординг) — supports_media() False.
+        self._media_download_timeout = media_download_timeout_sec
+        self._media_send_timeout = media_send_timeout_sec
+        self._waiter = UploadWaiter()
+        self._media = (
+            MaxMediaClient(
+                storage=media_storage,
+                ws_request=self._ws_request,
+                waiter=self._waiter,
+                headers=headers,
+                upload_ready_timeout_sec=upload_ready_timeout_sec,
+                http_factory=http_factory,
+            )
+            if media_storage is not None
+            else None
+        )
 
     # ------------------------------------------------------------------ #
     # Контракт MessengerProvider
@@ -149,6 +186,10 @@ class MaxUserProvider(MessengerProvider):
             except Exception:  # защитная сетка отмены
                 logger.debug("push worker cancel", exc_info=True)
             self._push_worker = None
+        # Медиа: зависшие upload-ожидания падают сразу, HTTP-пул закрывается.
+        self._waiter.fail_all(ConnectionError("max provider stopped"))
+        if self._media is not None:
+            await self._media.aclose()
         await self._client.close()
         # Завершаем incoming_stream (forward-таска корректно закончится).
         await self._incoming_queue.put(_STREAM_END)
@@ -186,20 +227,67 @@ class MaxUserProvider(MessengerProvider):
             resp = await self._client.request(
                 OP_MSG_SEND, msg_send_payload(chat_id, text, self._next_cid())
             )
-        except MaxAuthError as exc:
-            self._dead = True
-            logger.error("MAX токен отозван (send): %s", exc)
-            return SendResult(success=False, error="max_auth")
-        except Exception as exc:
-            retry_after = getattr(exc, "retry_after_seconds", None)
-            if retry_after:
-                return SendResult(
-                    success=False,
-                    error="max_throttle",
-                    retry_after_seconds=int(retry_after),
-                )
-            logger.exception("MAX send_message failed")
-            return SendResult(success=False, error=str(exc))
+        except Exception as exc:  # noqa: BLE001 - маппинг+лог в _send_exc_result
+            return self._send_exc_result(exc)
+        return self._send_result(resp)
+
+    # ------------------------------------------------------------------ #
+    # Медиа (контракт MessengerProvider)
+    # ------------------------------------------------------------------ #
+    def supports_media(self) -> bool:
+        return self._media is not None
+
+    async def send_media(
+        self,
+        external_chat_id: str,
+        path: Path,
+        content_type: ContentType,
+        *,
+        mime_type: str | None = None,
+        file_name: str | None = None,
+        caption: str | None = None,
+        is_initiation: bool = False,
+    ) -> SendResult:
+        """Upload → MSG_SEND с attaches. Вселенная ретраев — outbox: upload-URL
+        одноразовый, каждая попытка заливает файл заново (свежий cid —
+        дедуп MAX не съест повтор после сбоя)."""
+        try:
+            chat_id = int(external_chat_id)
+        except ValueError:
+            return SendResult(success=False, error=f"bad_chat_id: {external_chat_id!r}")
+        if self._client.closed or self._dead or self._media is None:
+            return SendResult(success=False, error="not connected")
+        kind = _UPLOAD_KINDS.get(content_type, UPLOAD_KIND_FILE)
+        try:
+            resp = await asyncio.wait_for(
+                self._send_media_inner(chat_id, kind, path, mime_type, file_name, caption),
+                timeout=self._media_send_timeout,
+            )
+        except TimeoutError:  # вкл. «136 не пришёл» и висящий upload
+            return SendResult(success=False, error="send_timeout")
+        except Exception as exc:  # noqa: BLE001 - маппинг+лог в _send_exc_result
+            return self._send_exc_result(exc)
+        return self._send_result(resp)
+
+    async def _send_media_inner(
+        self,
+        chat_id: int,
+        kind: str,
+        path: Path,
+        mime_type: str | None,
+        file_name: str | None,
+        caption: str | None,
+    ) -> dict:
+        attaches = await self._media.upload(
+            chat_id=chat_id, kind=kind, path=path, mime=mime_type, file_name=file_name
+        )
+        return await self._client.request(
+            OP_MSG_SEND,
+            msg_send_payload(chat_id, caption or "", self._next_cid(), attaches),
+        )
+
+    @staticmethod
+    def _send_result(resp: dict) -> SendResult:
         msg = (resp.get("payload") or {}).get("message") or {}
         mid = msg.get("id")
         # id приходит ЧИСЛОМ (хотя в push'ах — строкой): храним как str;
@@ -209,6 +297,20 @@ class MaxUserProvider(MessengerProvider):
             external_message_id=str(mid) if mid is not None else None,
         )
 
+    def _send_exc_result(self, exc: Exception) -> SendResult:
+        """Общий маппер ошибок отправки (текст и медиа)."""
+        if isinstance(exc, MaxAuthError):
+            self._dead = True
+            logger.error("MAX токен отозван (send): %s", exc)
+            return SendResult(success=False, error="max_auth")
+        retry_after = getattr(exc, "retry_after_seconds", None)
+        if retry_after:
+            return SendResult(
+                success=False, error="max_throttle", retry_after_seconds=int(retry_after)
+            )
+        logger.exception("MAX send failed")
+        return SendResult(success=False, error=str(exc))
+
     # ------------------------------------------------------------------ #
     # Внутреннее
     # ------------------------------------------------------------------ #
@@ -216,8 +318,21 @@ class MaxUserProvider(MessengerProvider):
         """ms-таймстамп + счётчик: уникальный cid для дедупа при очереди."""
         return (int(time.time() * 1000) << 8) | (next(self._cid_counter) & 0xFF)
 
+    async def _ws_request(
+        self, opcode: int, payload: dict | None = None, *, timeout: float | None = None
+    ) -> dict:
+        """Запрос через ТЕКУЩИЙ клиент: реконнект подменяет ``self._client``,
+        bound-method старого жил бы ConnectionError'ом вечно (HTTP-пул
+        медиа переживает реконнект, WS-запросы — нет)."""
+        return await self._client.request(opcode, payload, timeout=timeout)
+
     async def _safe_close_client(self) -> None:
-        """Закрыть WS-кли best-effort (он мог уже умереть сам)."""
+        """Закрыть WS-клиент best-effort (он мог уже умереть сам).
+
+        Зависшие upload-ожидания (push 136 больше не придёт по этому
+        соединению) падают сразу — outbox-ретрай перезольёт файл с новым
+        upload-URL. HTTP-пул медиа НЕ закрываем: он не связан с WS."""
+        self._waiter.fail_all(ConnectionError("max ws closed"))
         try:
             await self._client.close()
         except Exception:
@@ -273,7 +388,11 @@ class MaxUserProvider(MessengerProvider):
     async def _on_push(self, frame: dict) -> None:
         """Reader-колбэк: ТОЛЬКО разбор и складывание в очередь обогащения
 
-        (никаких await request() — дедлок, см. __init__)."""
+        (никаких await request() — дедлок, см. __init__). Исключение —
+        push 136 (готовность upload): синхронный resolve фьючерса."""
+        if frame.get("opcode") == OP_UPLOAD_READY:
+            self._waiter.feed(frame.get("payload") or {})
+            return
         parsed = parse_message_push(frame, self._own_user_id)
         if parsed.skip_reason is not None:
             if parsed.skip_reason != "activity":
@@ -301,6 +420,7 @@ class MaxUserProvider(MessengerProvider):
         name, phone, first_name, last_name = await self._resolve_sender(
             parsed.sender_external_id or ""
         )
+        media = await self._download_media(parsed, chat_id)
         await self._incoming_queue.put(
             IncomingMessage(
                 messenger=Messenger.max,
@@ -316,8 +436,31 @@ class MaxUserProvider(MessengerProvider):
                 external_message_id=parsed.external_message_id,
                 timestamp=parsed.timestamp,
                 is_reply=parsed.is_reply,
+                media=media,
             )
         )
+
+    async def _download_media(self, parsed, chat_id: str) -> MediaPayload | None:
+        """Скачать вложение входящего (eager, как у TG).
+
+        Сбой/таймаут → None: в тексте уже стоит плейсхолдер от парсера,
+        сообщение не теряется. Внимание: скачивание после группового
+        гейта — медиа групповых чатов не тянем."""
+        if self._media is None or parsed.attach is None:
+            return None
+        numeric = int(chat_id) if chat_id.isdigit() else 0
+        try:
+            return await asyncio.wait_for(
+                self._media.download(
+                    parsed.attach,
+                    chat_id=numeric,
+                    message_id=parsed.external_message_id,
+                ),
+                timeout=self._media_download_timeout,
+            )
+        except TimeoutError:
+            logger.warning("MAX download таймаут (chat=%s) — плейсхолдер", chat_id)
+            return None
 
     async def _chat_is_dialog(self, chat_id: str) -> bool:
         """Тип чата для лёгких push'ей (CHAT_INFO, кэш по chatId).

@@ -1,36 +1,50 @@
 """MaxUserProvider: INIT+LOGIN, send, push→очередь, завершение стрима."""
 
 import asyncio
+import time
+from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
+from app.media.storage import MediaStorage
 from app.messaging.max.protocol import (
     OP_CHAT_INFO,
+    OP_FILE_UPLOAD,
     OP_GET_CONTACTS,
     OP_INIT,
     OP_LOGIN,
     OP_MSG_SEND,
+    OP_PHOTO_UPLOAD,
+    OP_UPLOAD_NOTIFY,
     MaxAuthError,
+    MaxThrottleError,
 )
 from app.messaging.max.provider import MaxUserProvider
-from app.messaging.types import SendResult
+from app.messaging.types import ContentType, SendResult
 from app.models import Messenger
 
 
 class FakeMaxClient:
     """Скриптованный клиент: request отвечает по opcode; push — вручную.
 
-    ``scripted``: {opcode: payload} — ответ для обогащающих запросов
-    (CHAT_INFO/GET_CONTACTS); отсутствующие opcode → пустой payload.
+    ``scripted``: {opcode: payload} — ответ для обогащающих/медиа-запросов;
+    ``errors``: {opcode: Exception} —Raise до scripted. Отсутствующие
+    opcode → пустой payload.
     """
 
     def __init__(
-        self, *, login_error: Exception | None = None, scripted: dict[int, dict] | None = None
+        self,
+        *,
+        login_error: Exception | None = None,
+        scripted: dict[int, dict] | None = None,
+        errors: dict[int, Exception] | None = None,
     ):
         self.requests: list[tuple[int, dict]] = []
         self._login_error = login_error
         self.scripted = scripted or {}
+        self.errors = errors or {}
         self._is_open = False
         self._on_push = None
         self.last_send = 0.0
@@ -55,6 +69,8 @@ class FakeMaxClient:
         self, opcode: int, payload: dict | None = None, *, timeout: float | None = None
     ) -> dict:
         self.requests.append((opcode, payload or {}))
+        if opcode in self.errors:
+            raise self.errors[opcode]
         if opcode in self.scripted:
             return {"cmd": 1, "seq": 0, "opcode": opcode, "payload": self.scripted[opcode]}
         if opcode == OP_INIT:
@@ -330,3 +346,264 @@ async def test_disconnect_ends_incoming_stream():
     await provider.disconnect()
     out = await asyncio.wait_for(task, timeout=1)
     assert out == []  # стрим ЗАКОНЧИЛСЯ, а не завис
+
+
+# --- Медиа (send_media / входящие вложения / 136-механика) ------------- #
+
+
+def _make_media_provider(
+    fake: FakeMaxClient,
+    tmp_path,
+    handler,
+    *,
+    ready_timeout: float = 5.0,
+) -> tuple[MaxUserProvider, MediaStorage]:
+    # last_send=0 выглядел бы для heartbeat как простой с эпохи — ping
+    # вклинивался бы в строгие проверки последовательности опкодов.
+    fake.last_send = time.monotonic()
+    storage = MediaStorage(tmp_path / "media")
+    provider = MaxUserProvider(
+        token="An_test_token",
+        device_id="dev-uuid-1",
+        own_user_id=401041669,
+        ws_url="wss://test",
+        headers={"Origin": "https://web.max.ru"},
+        user_agent={"appVersion": "26.8.4"},
+        heartbeat_idle_sec=9999,
+        client_factory=lambda: fake,
+        media_storage=storage,
+        media_download_timeout_sec=2.0,
+        media_send_timeout_sec=5.0,
+        upload_ready_timeout_sec=ready_timeout,
+        http_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    return provider, storage
+
+
+def _ok_json(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, json={})
+
+
+@pytest.mark.asyncio
+async def test_supports_media_depends_on_storage():
+    plain = _make_provider(FakeMaxClient())
+    assert plain.supports_media() is False
+    provider, _ = _make_media_provider(FakeMaxClient(), Path("/tmp/x"), _ok_json)
+    assert provider.supports_media() is True
+    await provider.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_send_media_photo_happy_path(tmp_path):
+    fake = FakeMaxClient(scripted={OP_PHOTO_UPLOAD: {"url": "https://iu.oneme.ru/up?k=1"}})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"photos": {"1": {"token": "tok1"}}})
+
+    provider, _ = _make_media_provider(fake, tmp_path, handler)
+    await provider.connect()
+    try:
+        assert provider.supports_media()
+        path = tmp_path / "photo.jpg"
+        path.write_bytes(b"JPEGDATA")
+        result = await provider.send_media(
+            "422733600",
+            path,
+            ContentType.photo,
+            mime_type="image/jpeg",
+            file_name="photo.jpg",
+            caption="смотри",
+        )
+        assert result.success
+        assert result.external_message_id == "117099065741753584"
+        op, payload = fake.requests[-1]
+        assert op == OP_MSG_SEND
+        assert payload["message"]["text"] == "смотри"
+        assert payload["message"]["attaches"] == [{"_type": "PHOTO", "photoToken": "tok1"}]
+    finally:
+        await provider.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_send_media_file_waits_136(tmp_path):
+    fake = FakeMaxClient(
+        scripted={OP_FILE_UPLOAD: {"info": [{"url": "https://fu.oneme.ru/up", "fileId": 55}]}}
+    )
+    provider = None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # 136 инжектится сразу после POST — регистрация до POST переживает гонку.
+        assert provider is not None
+        asyncio.get_event_loop().call_soon(
+            lambda: provider._waiter.feed({"fileId": 55})
+        )
+        return httpx.Response(200, json={})
+
+    provider, _ = _make_media_provider(fake, tmp_path, handler)
+    await provider.connect()
+    try:
+        path = tmp_path / "doc.pdf"
+        path.write_bytes(b"%PDF-1.4")
+        result = await provider.send_media(
+            "422733600", path, ContentType.file, mime_type="application/pdf", file_name="doc.pdf"
+        )
+        assert result.success
+        ops = [op for op, _ in fake.requests]
+        assert ops == [OP_INIT, OP_LOGIN, OP_UPLOAD_NOTIFY, OP_FILE_UPLOAD, OP_MSG_SEND]
+        _, payload = fake.requests[-1]
+        assert payload["message"]["attaches"] == [{"_type": "FILE", "fileId": 55}]
+    finally:
+        await provider.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_send_media_voice_uses_file_pipeline(tmp_path):
+    """Исходящих голосовых нет: аудио уходит FILE-пайплайном (играбельно)."""
+    fake = FakeMaxClient(
+        scripted={OP_FILE_UPLOAD: {"info": [{"url": "https://fu.oneme.ru/up", "fileId": 9}]}}
+    )
+    provider = None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert provider is not None
+        asyncio.get_event_loop().call_soon(lambda: provider._waiter.feed({"fileId": 9}))
+        return httpx.Response(200, json={})
+
+    provider, _ = _make_media_provider(fake, tmp_path, handler)
+    await provider.connect()
+    try:
+        path = tmp_path / "voice.ogg"
+        path.write_bytes(b"OGGDATA")
+        result = await provider.send_media(
+            "422733600", path, ContentType.voice, mime_type="audio/ogg", file_name="voice.ogg"
+        )
+        assert result.success
+        assert OP_FILE_UPLOAD in [op for op, _ in fake.requests]
+    finally:
+        await provider.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_send_media_136_timeout_send_timeout(tmp_path):
+    fake = FakeMaxClient(
+        scripted={OP_FILE_UPLOAD: {"info": [{"url": "https://fu.oneme.ru/up", "fileId": 5}]}}
+    )
+    provider, _ = _make_media_provider(fake, tmp_path, _ok_json, ready_timeout=0.05)
+    await provider.connect()
+    try:
+        path = tmp_path / "f.bin"
+        path.write_bytes(b"data")
+        result = await provider.send_media(
+            "422733600", path, ContentType.file, mime_type=None, file_name="f.bin"
+        )
+        assert not result.success
+        assert result.error == "send_timeout"
+        # MSG_SEND не выполнялся — файл не уехал «вслепую».
+        assert OP_MSG_SEND not in [op for op, _ in fake.requests]
+    finally:
+        await provider.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_send_media_throttle_retry_after(tmp_path):
+    fake = FakeMaxClient(errors={OP_PHOTO_UPLOAD: MaxThrottleError({"code": "too.many"})})
+    provider, _ = _make_media_provider(fake, tmp_path, _ok_json)
+    await provider.connect()
+    try:
+        path = tmp_path / "p.jpg"
+        path.write_bytes(b"x")
+        result = await provider.send_media(
+            "422733600", path, ContentType.photo, mime_type="image/jpeg", file_name="p.jpg"
+        )
+        assert not result.success
+        assert result.error == "max_throttle"
+        assert result.retry_after_seconds == 30
+    finally:
+        await provider.disconnect()
+
+
+def _photo_push(chat_id: int = 422733600, sender: int = 248843813) -> dict:
+    """Входящее фото: полный пуш, baseUrl — прямой CDN-URL (без WS-запросов)."""
+    return {
+        "opcode": 128,
+        "payload": {
+            "chatId": chat_id,
+            "chat": {
+                "type": "DIALOG",
+                "lastMessage": {
+                    "sender": sender,
+                    "id": "m-photo-1",
+                    "time": 1786906382424,
+                    "text": "",
+                    "type": "USER",
+                    "attaches": [
+                        {"_type": "PHOTO", "baseUrl": "https://i.oneme.ru/i?r=abc", "width": 800}
+                    ],
+                },
+            },
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_incoming_photo_downloaded_to_storage(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url).startswith("https://i.oneme.ru/i")
+        return httpx.Response(200, content=b"JPEGBYTES", headers={"Content-Type": "image/jpeg"})
+
+    provider, storage = _make_media_provider(FakeMaxClient(), tmp_path, handler)
+    await provider.connect()
+    try:
+        await provider._client._on_push(_photo_push())
+        msg = await asyncio.wait_for(provider._incoming_queue.get(), timeout=2)
+        assert msg.media is not None
+        assert msg.media.mime_type == "image/jpeg"
+        assert msg.media.size == len(b"JPEGBYTES")
+        assert (storage.root / msg.media.path).read_bytes() == b"JPEGBYTES"
+        # Текст-плейсхолдер на месте (caption пустой), сообщение не потеряно.
+        assert msg.text == "[фото]"
+        assert msg.content_type.value == "photo"
+    finally:
+        await provider.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_incoming_download_failure_keeps_placeholder(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    provider, storage = _make_media_provider(FakeMaxClient(), tmp_path, handler)
+    await provider.connect()
+    try:
+        await provider._client._on_push(_photo_push())
+        msg = await asyncio.wait_for(provider._incoming_queue.get(), timeout=2)
+        assert msg.media is None  # сбой скачивания ≠ потеря сообщения
+        assert msg.text == "[фото]"
+        assert not list((storage.root / "in").glob("*")) if (storage.root / "in").exists() else True
+    finally:
+        await provider.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_incoming_push_without_storage_skips_download():
+    """Без media_storage (None) провайдер не пытается качать — плейсхолдер."""
+    fake = FakeMaxClient()
+    provider = _make_provider(fake)
+    await provider.connect()
+    try:
+        await fake._on_push(_photo_push())
+        msg = await asyncio.wait_for(provider._incoming_queue.get(), timeout=1)
+        assert msg.media is None
+        assert msg.text == "[фото]"
+    finally:
+        await provider.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_ws_close_fails_upload_waiters(tmp_path):
+    provider, _ = _make_media_provider(FakeMaxClient(), tmp_path, _ok_json)
+    await provider.connect()
+    fut = provider._waiter.expect("file", 5)
+    await provider._safe_close_client()
+    with pytest.raises(ConnectionError):
+        await fut

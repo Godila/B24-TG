@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import sys
+from functools import partial
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +94,11 @@ async def run_bridge() -> None:
         api_hash=settings.tg_api_hash,
         sessions_dir=settings.tg_sessions_dir,
         proxy=telethon_proxy(settings),
-        builders={Messenger.max: build_max_provider},
+        # partial совместим с ProviderBuilder (Callable[[TgAccount], …]) —
+        # протокол SessionManager не меняется, хранилище замыкается здесь.
+        builders={
+            Messenger.max: partial(build_max_provider, media_storage=media_storage)
+        },
         register_timeout_sec=settings.register_timeout_sec,
         media_storage=media_storage,
         media_download_timeout_sec=settings.media_download_timeout_sec,
