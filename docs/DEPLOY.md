@@ -24,6 +24,8 @@ VM: `<VM_SSH_TARGET>`, Ubuntu 24.04, 2 vCPU / 2 GB RAM / 40 GB SSD.
 | GET | `/api/dialogs` | Список диалогов менеджера (нужна сессионная кука) |
 | GET | `/api/dialogs/{id}/messages` | История + poll (`?since=`) |
 | POST | `/api/dialogs/{id}/messages` | Отправить сообщение (→ outbox → Telegram) |
+| POST | `/api/dialogs/{id}/media` | Отправить вложение (multipart `file` + `caption`; TG-диалоги, ≤25 МБ, MIME-allowlist) |
+| GET | `/api/attachments/{id}/file` | Раздача вложения (только владелец диалога или supervisor; inline — безопасные MIME, остальное скачивается) |
 | GET | `/api/inbox/dialogs` | Список «Чатов» с агрегатами (менеджер — свои; supervisor — все) |
 | POST | `/api/inbox/dialogs/{id}/read` | Гасить непрочитанные (только ответственный) |
 | GET | `/api/templates` | Шаблоны быстрых ответов |
@@ -134,7 +136,7 @@ python3 scripts/gen_prod_env.py   # нужно пересоздать volume pg_
 docker compose exec postgres pg_dump -U bitrix_tg bitrix_tg > backup_$(date +%F).sql
 
 # Автоматический ночной бэкап (установлен 2026-08-16)
-# Что кладёт: pg_dump (gzip) + tar docker-volume tg_sessions + .env → /opt/bitrix-tg/backups/,
+# Что кладёт: pg_dump (gzip) + tar docker-volume tg_sessions + tar media-тома + .env → /opt/bitrix-tg/backups/,
 # ротация старше 7 дней. Cron: /etc/cron.d/bitrix-tg-backup, 03:30 nightly, лог /var/log/bitrix-tg-backup.log.
 # Выгрузка копии с VM (опционально): создать /etc/bitrix-tg-backup.env с
 #   BACKUP_UPLOAD_DST="user@host:/path/backups"

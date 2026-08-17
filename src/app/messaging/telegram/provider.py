@@ -8,8 +8,15 @@ from telethon.errors import FloodWaitError
 from telethon.tl import types as tl
 from telethon.tl.types import User
 
+from app.media.storage import MediaStorage, ext_for, sanitize_file_name
 from app.messaging.provider import MessengerProvider, SessionRevokedError
-from app.messaging.types import ContentType, IncomingMessage, SendResult
+from app.messaging.types import (
+    MEDIA_PLACEHOLDERS,
+    ContentType,
+    IncomingMessage,
+    MediaPayload,
+    SendResult,
+)
 from app.models import Messenger
 
 logger = logging.getLogger(__name__)
@@ -20,7 +27,15 @@ class TelegramProvider(MessengerProvider):
     Один экземпляр = одна TG-сессия (один менеджер)."""
 
     def __init__(
-        self, api_id: int, api_hash: str, sessions_dir: str | Path, proxy: tuple | None = None
+        self,
+        api_id: int,
+        api_hash: str,
+        sessions_dir: str | Path,
+        proxy: tuple | None = None,
+        *,
+        media_storage: MediaStorage | None = None,
+        media_download_timeout_sec: float = 120.0,
+        media_send_timeout_sec: float = 300.0,
     ):
         self._api_id = api_id
         self._api_hash = api_hash
@@ -29,6 +44,11 @@ class TelegramProvider(MessengerProvider):
         self._proxy = proxy
         self._client: TelegramClient | None = None
         self._incoming_queue: asyncio.Queue[IncomingMessage] = asyncio.Queue()
+        # None = входящие медиа не скачиваются (тесты/онбординг) — в тексте
+        # останутся плейсхолдеры «[фото]» (прежнее поведение).
+        self._media = media_storage
+        self._media_download_timeout = media_download_timeout_sec
+        self._media_send_timeout = media_send_timeout_sec
 
     @property
     def session_file(self) -> Path:
@@ -88,12 +108,19 @@ class TelegramProvider(MessengerProvider):
             # ответ менеджера уйдёт в группу). MAX-провайдер фильтрует
             # аналогично (_chat_is_dialog).
             if not event.is_private:
-                logger.debug(
-                    "TG: скип группового/канального сообщения chat=%s", event.chat_id
-                )
+                logger.debug("TG: скип группового/канального сообщения chat=%s", event.chat_id)
                 return
             sender = await event.get_sender()
             ctype, text = self._content_type_and_text(event.message)
+            media = None
+            # Стикеры не качаем: анимированные .tgs/.webp не рендерятся
+            # браузером — плейсхолдер честнее битой картинки.
+            if ctype not in (ContentType.text, ContentType.sticker):
+                # Eager: file_reference медиа живёт минуты — между событием
+                # и обработкой очередь может подваить, ленивая догрузка
+                # умерла бы. Сбой скачивания ≠ потеря сообщения (None →
+                # плейсхолдер в тексте).
+                media = await self._download_media(event.message)
             msg = IncomingMessage(
                 messenger=Messenger.tg,
                 external_chat_id=str(event.chat_id),
@@ -105,6 +132,7 @@ class TelegramProvider(MessengerProvider):
                 sender_last_name=getattr(sender, "last_name", None),
                 content_type=ctype,
                 text=text,
+                media=media,
                 external_message_id=str(event.message.id),
                 timestamp=event.message.date,
                 is_reply=bool(event.is_reply),
@@ -126,18 +154,92 @@ class TelegramProvider(MessengerProvider):
         if media is None:
             return ContentType.text, text
         if isinstance(media, tl.MessageMediaPhoto):
-            return ContentType.photo, text or "[фото]"
+            return ContentType.photo, text or MEDIA_PLACEHOLDERS[ContentType.photo]
         if isinstance(media, tl.MessageMediaDocument):
             attrs = getattr(media.document, "attributes", [])
             names = {type(a).__name__ for a in attrs}
             if "DocumentAttributeAudio" in names:
-                return ContentType.voice, text or "[голосовое сообщение]"
+                return ContentType.voice, text or MEDIA_PLACEHOLDERS[ContentType.voice]
             if "DocumentAttributeVideo" in names:
-                return ContentType.video, text or "[видео]"
+                return ContentType.video, text or MEDIA_PLACEHOLDERS[ContentType.video]
             if "DocumentAttributeSticker" in names:
-                return ContentType.sticker, text or "[стикер]"
-            return ContentType.file, text or "[файл]"
+                return ContentType.sticker, text or MEDIA_PLACEHOLDERS[ContentType.sticker]
+            return ContentType.file, text or MEDIA_PLACEHOLDERS[ContentType.file]
         return ContentType.file, text or "[вложение]"
+
+    @staticmethod
+    def _media_meta(message) -> tuple[str | None, int | None, str | None]:
+        """(mime, size, file_name) медиа-сообщения TG.
+
+        Photo не несёт ни mime, ни имени — JPG по факту формата TG.
+        """
+        media = getattr(message, "media", None)
+        if isinstance(media, tl.MessageMediaPhoto):
+            return "image/jpeg", None, None
+        if isinstance(media, tl.MessageMediaDocument):
+            doc = getattr(media, "document", None)
+            if doc is None:
+                return None, None, None
+            file_name = None
+            for attr in getattr(doc, "attributes", []):
+                if isinstance(attr, tl.DocumentAttributeFilename):
+                    file_name = sanitize_file_name(attr.file_name)
+                    break
+            # mime задаёт клиент отправителя и длиной не ограничен; колонка
+            # БД — String(128), длинный mime уронил бы всё сообщение.
+            mime = getattr(doc, "mime_type", None)
+            if mime:
+                mime = mime[:128]
+            return mime, getattr(doc, "size", None), file_name
+        return None, None, None
+
+    async def _download_media(self, message) -> MediaPayload | None:
+        """Скачать медиа на общий том; None = не качаем (лимит/сбой).
+
+        В БД кладём путь, куда Telethon РЕАЛЬНО записал файл (result):
+        при пути без расширения он дописывает своё (webpage-превью → .jpg,
+        контакт → .vcard), при коллизии — суффикс « (1)». Запрошенный путь
+        при этом остаётся враньём → вечный 404 раздачи + файл-сирота.
+        """
+        if self._media is None or self._client is None:
+            return None
+        mime, declared_size, file_name = self._media_meta(message)
+        max_size = self._media.max_size_bytes
+        if max_size is not None and declared_size is not None and declared_size > max_size:
+            logger.warning("TG media skip: declared size %s > limit %s", declared_size, max_size)
+            return None
+        # new_path ВНУТРИ try: mkdir/resolve на недоступном томе — OSError,
+        # снаружи она улетала в catch-all события и теряла ВСЁ сообщение,
+        # ломая инвариант «сбой медиа ≠ потеря текста».
+        absolute: Path | None = None
+        try:
+            absolute, _ = self._media.new_path(direction="in", ext=ext_for(file_name, mime))
+            result = await asyncio.wait_for(
+                self._client.download_media(message, file=str(absolute)),
+                timeout=self._media_download_timeout,
+            )
+            if not result:
+                return None
+            actual = Path(result)
+            try:
+                relative = actual.resolve().relative_to(self._media.root.resolve()).as_posix()
+            except ValueError:
+                logger.error("TG media written outside media root: %s", result)
+                actual.unlink(missing_ok=True)
+                return None
+            actual_size = actual.stat().st_size
+            if max_size is not None and actual_size > max_size:
+                actual.unlink(missing_ok=True)
+                logger.warning("TG media skip: actual size %s > limit", actual_size)
+                return None
+            return MediaPayload(
+                path=relative, mime_type=mime, size=actual_size, file_name=file_name
+            )
+        except Exception:
+            logger.exception("TG media download failed; message keeps placeholder")
+            if absolute is not None:
+                absolute.unlink(missing_ok=True)
+            return None
 
     @staticmethod
     def _full_name(sender) -> str | None:
@@ -166,4 +268,56 @@ class TelegramProvider(MessengerProvider):
             )
         except Exception as e:
             logger.exception("send_message failed")
+            return SendResult(success=False, error=str(e))
+
+    def supports_media(self) -> bool:
+        return True
+
+    async def send_media(
+        self,
+        external_chat_id: str,
+        path: Path,
+        content_type: ContentType,
+        *,
+        mime_type: str | None = None,
+        file_name: str | None = None,
+        caption: str | None = None,
+        is_initiation: bool = False,
+    ) -> SendResult:
+        """Отправить файл (send_file): фото — как фото, аудио — voice-note.
+
+        Расширение файла сохранено при записи на том — автодетект Telethon
+        сам отправит изображение как photo, остальное документом. Имя
+        документа в TG берётся из basename пути (у нас — uuid), поэтому
+        оригинальное имя передаём атрибутом явно.
+        """
+        if not self._client:
+            return SendResult(success=False, error="not connected")
+        name = file_name or path.name
+        try:
+            result = await asyncio.wait_for(
+                self._client.send_file(
+                    int(external_chat_id),
+                    str(path),
+                    # Пустой caption не отправляем (пустой пузырь над файлом).
+                    caption=caption or None,
+                    voice_note=content_type == ContentType.voice,
+                    attributes=[tl.DocumentAttributeFilename(file_name=name)],
+                ),
+                timeout=self._media_send_timeout,
+            )
+            return SendResult(success=True, external_message_id=str(result.id))
+        except FloodWaitError as e:
+            return SendResult(
+                success=False,
+                error="flood_wait",
+                retry_after_seconds=int(e.seconds),
+            )
+        except TimeoutError:
+            # Полумёртвый туннель: воркер обрабатывает элементы последовательно —
+            # без таймаута одна висящая отправка остановила бы все исходящие.
+            logger.error("send_media timeout chat=%s file=%s", external_chat_id, name)
+            return SendResult(success=False, error="send_timeout")
+        except Exception as e:
+            logger.exception("send_media failed")
             return SendResult(success=False, error=str(e))

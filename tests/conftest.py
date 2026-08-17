@@ -3,7 +3,10 @@
 Каждый тест, которому нужны ДРУГИЕ значения (DEV_MODE, CORS_ORIGINS),
 переопределяет их сам через monkeypatch — autouse-фикстура ставит базу.
 """
+
 import os
+import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -17,6 +20,9 @@ BASE_ENV = {
     "DATABASE_URL": "sqlite+aiosqlite:///:memory:",
     "SESSION_SECRET": "test-session-secret",
     "DEV_MODE": "false",
+    # Медиа-том: временный каталог (машина без /data); тесты вложений
+    # переопределяют на свой tmp_path при необходимости.
+    "MEDIA_DIR": str(Path(tempfile.mkdtemp(prefix="chatmost-media-"))),
 }
 
 # Выставляем базу ДО импорта тестовых модулей: некоторые из них
@@ -33,6 +39,12 @@ def _hermetic_env(monkeypatch):
     for k, v in BASE_ENV.items():
         monkeypatch.setenv(k, v)
     from app.config import get_settings
+    from app.media.storage import get_media_storage
+
     get_settings.cache_clear()
+    # Синглтон storage держит путь из первого обращения — сбрасываем,
+    # чтобы переопределённый MEDIA_DIR теста был услышан.
+    get_media_storage.cache_clear()
     yield
     get_settings.cache_clear()
+    get_media_storage.cache_clear()

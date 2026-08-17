@@ -70,11 +70,25 @@ async def run_bridge() -> None:
     from app.bridge.throttler import Throttler
     from app.config import get_settings
     from app.db import async_session
+    from app.media.storage import MediaStorage
     from app.messaging.max.factory import build_max_provider
     from app.messaging.telegram.proxy import telethon_proxy
     from app.models import Messenger
 
     settings = get_settings()
+
+    # Медиа-том: общий с web (upload менеджеров — раздача, сюда — скачивание
+    # из каналов и отправка). Недоступный том ≠ смерть конвейера: сообщения
+    # текут с плейсхолдерами, но это надо видеть в логах сразу.
+    media_storage = MediaStorage(
+        settings.media_dir, max_size_bytes=settings.media_max_size_bytes
+    )
+    if not media_storage.is_writable():
+        logger.critical(
+            "MEDIA STORAGE NOT WRITABLE: %s — входящие/исходящие медиа "
+            "деградируют до плейсхолдеров",
+            settings.media_dir,
+        )
 
     sm = SessionManager(
         api_id=settings.tg_api_id,
@@ -83,6 +97,9 @@ async def run_bridge() -> None:
         proxy=telethon_proxy(settings),
         builders={Messenger.max: build_max_provider},
         register_timeout_sec=settings.register_timeout_sec,
+        media_storage=media_storage,
+        media_download_timeout_sec=settings.media_download_timeout_sec,
+        media_send_timeout_sec=settings.media_send_timeout_sec,
     )
 
     # B24 wiring: ОДИН общий Bitrix24Client (shared TLS-коннекты, глобальный
@@ -146,6 +163,7 @@ async def run_bridge() -> None:
         max_attempts=settings.outbox_max_attempts,
         poll_interval=settings.outbox_poll_interval,
         on_sent_hook=on_outbox_sent,
+        media_storage=media_storage,
     )
 
     # CRM-воркер: те же retry-механики, что и outbox (5 попыток, backoff).

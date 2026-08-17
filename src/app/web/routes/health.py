@@ -6,7 +6,9 @@
 - ``db`` — живость самой БД (SELECT 1);
 - ``accounts`` — счётчики статусов TG-аккаунтов. Web-процесс не знает
   ``is_connected`` (это bridge) — bridge-процесс (HealthChecker) персистит
-  реальные статусы в ``tg_accounts.status``, web только читает таблицу.
+  реальные статусы в ``tg_accounts.status``, web только читает таблицу;
+- ``media`` — записываемость медиа-тома (вложения). Информационное: чат
+  живёт и без медиа (плейсхолдеры), статус не роняет.
 
 Контракт верхнего уровня ``status``: ok | degraded | error (значения
 ok/error сохранены для внешних мониторов; degraded — новое). HTTP:
@@ -23,6 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
+from app.media.storage import get_media_storage
 from app.models import TgAccount
 
 logger = logging.getLogger(__name__)
@@ -49,11 +52,13 @@ async def health(session: AsyncSessionDep) -> JSONResponse:
             counts[status_value] += 1
 
     degraded = (counts["active"] == 0 and counts["total"] > 0) or counts["banned"] > 0
+    media_ok = get_media_storage().is_writable()
     return JSONResponse(
         {
             "status": "degraded" if degraded else "ok",
             "db": "ok",
             "accounts": counts,
+            "media": {"ok": media_ok},
         },
         status_code=503 if degraded else 200,
     )

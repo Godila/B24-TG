@@ -59,6 +59,18 @@ class Settings(BaseSettings):
     # Папка со статикой фронтенда (placement.html, app.js, style.css).
     static_dir: str = Field("src/app/static")
 
+    # Медиа-вложения: общий docker-том web+bridge, в БД только метаданные.
+    # Лимит = nginx client_max_body_size (26m с запасом на multipart-обёртку).
+    media_dir: str = Field("/data/media")
+    media_max_size_bytes: int = Field(25 * 1024 * 1024)
+    # Таймаут скачивания входящего медиа: file_reference TG живёт минуты,
+    # зависший download не должен держать очередь аккаунта.
+    media_download_timeout_sec: float = Field(120.0)
+    # Таймаут отправки: воркер обрабатывает outbox последовательно —
+    # висящий upload 25МБ через полумёртвый туннель останавливает все
+    # исходящие; лучше вернуться к элементу по расписанию backoff.
+    media_send_timeout_sec: float = Field(300.0)
+
     # Инфра
     database_url: str = Field(...)
 

@@ -20,6 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bridge.crm_sync_worker import CrmSyncEnqueue
 from app.messaging.types import IncomingMessage
 from app.models import (
+    Attachment,
+    AttachmentType,
     Contact,
     Dialog,
     Message,
@@ -122,6 +124,20 @@ class IncomingHandler:
                 status=MessageStatus.delivered,
             )
             session.add(message)
+            # Медиа: файл уже скачан провайдером на общий том — здесь
+            # только метаданные. Append ДО flush: у transient-объекта
+            # коллекция инициализируется без lazy-load (после flush это
+            # роняло бы MissingGreenlet), каскад сам поставит FK.
+            if msg.media is not None:
+                message.attachments.append(
+                    Attachment(
+                        type=AttachmentType(msg.content_type.value),
+                        file_path=msg.media.path,
+                        mime_type=msg.media.mime_type,
+                        size=msg.media.size,
+                        file_name=msg.media.file_name,
+                    )
+                )
             await session.flush()
             # Обновляем «последнее сообщение» для сортировки списка диалогов.
             dialog.last_msg_at = message.created_at

@@ -17,6 +17,7 @@ BACKUP_DIR="${PROJECT_DIR}/backups"
 KEEP_DAYS="${KEEP_DAYS:-7}"
 STAMP="$(date +%F_%H%M)"
 VOLUME_TG_SESSIONS="bitrix-tg_tg_sessions"
+VOLUME_MEDIA="bitrix-tg_media"
 
 mkdir -p "${BACKUP_DIR}"
 chmod 700 "${BACKUP_DIR}"
@@ -37,6 +38,15 @@ docker run --rm --entrypoint /bin/tar \
     czf "/backup/tg_sessions_${STAMP}.tar.gz" -C /data .
 echo "  tg_sessions: tg_sessions_${STAMP}.tar.gz ($(du -h "${BACKUP_DIR}/tg_sessions_${STAMP}.tar.gz" | cut -f1))"
 
+# 2b. Медиа-вложения (том web+bridge: in/ из каналов, out/ от менеджеров).
+docker run --rm --entrypoint /bin/tar \
+    -v "${VOLUME_MEDIA}:/data:ro" \
+    -v "${BACKUP_DIR}:/backup" \
+    postgres:16-alpine \
+    czf "/backup/media_${STAMP}.tar.gz" -C /data . \
+    || echo "  media: FAIL (том пуст или отсутствует?)"
+echo "  media: media_${STAMP}.tar.gz ($(du -h "${BACKUP_DIR}/media_${STAMP}.tar.gz" 2>/dev/null | cut -f1))"
+
 # 3. .env.
 cp "${PROJECT_DIR}/.env" "${BACKUP_DIR}/env_${STAMP}"
 chmod 600 "${BACKUP_DIR}/env_${STAMP}"
@@ -44,7 +54,7 @@ echo "  env: env_${STAMP}"
 
 # 4. Ротация.
 find "${BACKUP_DIR}" -maxdepth 1 -type f \
-    \( -name 'db_*' -o -name 'tg_sessions_*' -o -name 'env_*' \) \
+    \( -name 'db_*' -o -name 'tg_sessions_*' -o -name 'media_*' -o -name 'env_*' \) \
     -mtime "+${KEEP_DAYS}" -delete
 echo "  retention: старше ${KEEP_DAYS} дней удалено"
 
@@ -55,12 +65,18 @@ if [ -f "${ENV_FILE}" ]; then
     . "${ENV_FILE}"
 fi
 if [ -n "${BACKUP_UPLOAD_DST:-}" ]; then
-    scp -q -o ConnectTimeout=15 \
-        "${BACKUP_DIR}/db_${STAMP}.sql.gz" \
-        "${BACKUP_DIR}/tg_sessions_${STAMP}.tar.gz" \
-        "${BACKUP_DIR}/env_${STAMP}" \
-        "${BACKUP_UPLOAD_DST}"
-    echo "  upload: ${BACKUP_UPLOAD_DST} — ок"
+    # media-архив мог не собраться (сбой тома, `|| echo` выше) — его
+    # отсутствие не должно ронять выгрузку db/tg_sessions/env: scp по
+    # несуществующему файлу убил бы скрипт (set -e) до «backup done».
+    UPLOAD_FILES=(
+        "${BACKUP_DIR}/db_${STAMP}.sql.gz"
+        "${BACKUP_DIR}/tg_sessions_${STAMP}.tar.gz"
+        "${BACKUP_DIR}/env_${STAMP}"
+    )
+    [ -f "${BACKUP_DIR}/media_${STAMP}.tar.gz" ] \
+        && UPLOAD_FILES+=("${BACKUP_DIR}/media_${STAMP}.tar.gz")
+    scp -q -o ConnectTimeout=15 "${UPLOAD_FILES[@]}" "${BACKUP_UPLOAD_DST}"
+    echo "  upload: ${BACKUP_UPLOAD_DST} — ок (${#UPLOAD_FILES[@]} файлов)"
 fi
 
 echo "[$(date -Is)] backup done"

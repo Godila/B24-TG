@@ -141,6 +141,7 @@ html, body {
 /* Композер */
 .composer {
   display: flex;
+  flex-wrap: wrap; /* чип файла (flex-basis:100%, order:-1) переносится над полем */
   gap: 8px;
   padding: 10px 14px;
   background: #fff;
@@ -185,3 +186,91 @@ html, body {
   cursor: pointer;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
+
+/* Медиа-вложения: пузырь */
+.bubble-attachment { margin: 2px 0 4px; }
+.att-photo {
+  display: block;
+  max-width: 240px;
+  border-radius: 8px;
+}
+.bubble-attachment img {
+  max-width: 240px;
+  max-height: 240px;
+  border-radius: 8px;
+  display: block;
+  object-fit: contain;
+}
+.bubble-attachment video {
+  max-width: 280px;
+  border-radius: 8px;
+  display: block;
+}
+.bubble-attachment audio {
+  width: 220px;
+  height: 36px;
+  display: block;
+}
+.bubble-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: rgba(47, 111, 237, 0.08);
+  border: 1px solid rgba(47, 111, 237, 0.25);
+  border-radius: 8px;
+  /* Канон --accent из DESIGN.md (#2f6fed, AA на светлом фоне): локальный
+     токен --accent (#2d8cf0) даёт 3.4:1 — ниже WCAG AA для 13px. */
+  color: #2f6fed;
+  text-decoration: none;
+  font-size: 13px;
+  max-width: 240px;
+}
+.bubble-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Медиа-вложения: композер */
+.attach-btn {
+  background: none;
+  border: none;
+  font-size: 17px;
+  cursor: pointer;
+  padding: 0 4px;
+  color: var(--meta);
+  flex-shrink: 0;
+}
+.attach-btn:hover { color: var(--accent); }
+.attach-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.file-chip {
+  flex-basis: 100%;
+  order: -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  background: #eef3fb;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+}
+.file-chip-name {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-chip-size { color: var(--meta); flex-shrink: 0; }
+.file-chip-x {
+  margin-left: auto;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--meta);
+  font-size: 13px;
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+.file-chip-x:hover { color: var(--error); }

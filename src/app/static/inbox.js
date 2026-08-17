@@ -2,7 +2,8 @@
  * ЧатМост — «Чаты» (общий мессенджер, пункт левого меню Битрикс24).
  *
  * Чат-панель (loadMessages/loadOlder/poll-сообщений/refreshPendingStatuses/
- * send/scrollBottom/statusLabel/formatTime/channelLabel/showError) —
+ * send/scrollBottom/statusLabel/formatTime/channelLabel/showError и блок
+ * медиа-методов: pendingFile/setFile/sendFile/attKind/…) —
  * СИНХРОНИЗИРОВАННАЯ КОПИЯ из app.js: рефакторинг прод-виджета сделки без
  * JS-тестов — недопустимый риск; при правке логики там — перенести сюда.
  * Отличия inbox: список с агрегатами (неотвеченные/непрочитанные), фильтр
@@ -19,6 +20,8 @@ function inboxApp() {
     sending: false,
     error: "",
     draft: "",
+    pendingFile: null,
+    pendingFileUrl: null,
     // Активный диалог — объект из this.unanswered/this.dialogs (InboxDialogOut);
     // после каждого refreshDialogs ссылка перепривязывается по activeId.
     dialog: null,
@@ -280,6 +283,9 @@ function inboxApp() {
       this.messages = [];
       this.lastId = 0;
       this.hasOlder = false;
+      // Файл, выбранный для прошлого клиента, не должен уйти новому
+      // (send() безусловно роутит в sendFile при pendingFile).
+      this.clearFile();
       await this.loadMessages();
       this.markRead(d);
     },
@@ -444,6 +450,7 @@ function inboxApp() {
     },
 
     async send() {
+      if (this.pendingFile) return this.sendFile();
       const text = this.draft.trim();
       if (!text || !this.dialog || this.sending || !this.canWrite) return;
       this.sending = true;
@@ -493,6 +500,161 @@ function inboxApp() {
 
     useTemplate(body) {
       this.draft = this.draft ? this.draft + "\n" + body : body;
+    },
+
+    // --- Медиа-вложения (синхронизированная копия в app.js) ---
+
+    /** Скрепка доступна: свой диалог (canWrite), канал TG (MAX-эмбляция
+     *  файлов не умеет). */
+    get canAttach() {
+      return !!this.dialog && this.dialog.messenger === "tg" && this.canWrite;
+    },
+
+    pickFile() {
+      if (this.$refs.fileInput) this.$refs.fileInput.click();
+    },
+
+    onFilePicked(e) {
+      this.setFile(e.target.files && e.target.files[0]);
+      e.target.value = ""; // повторный выбор того же файла тоже событие
+    },
+
+    onDrop(e) {
+      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (f) this.setFile(f);
+    },
+
+    onPaste(e) {
+      const f = e.clipboardData && e.clipboardData.files && e.clipboardData.files[0];
+      if (f) this.setFile(f);
+    },
+
+    setFile(f) {
+      if (!f) return;
+      if (!this.canAttach) {
+        this.error = "Вложения для канала MAX пока не поддерживаются";
+        return;
+      }
+      if (f.size > 25 * 1024 * 1024) {
+        this.error = "Файл больше 25 МБ";
+        return;
+      }
+      this.clearFile();
+      this.pendingFile = f;
+      this.pendingFileUrl = URL.createObjectURL(f);
+      this.error = "";
+    },
+
+    clearFile() {
+      if (this.pendingFileUrl) URL.revokeObjectURL(this.pendingFileUrl);
+      this.pendingFile = null;
+      this.pendingFileUrl = null;
+    },
+
+    /** Отправка файла: multipart на /media, оптимистичный пузырь с
+     *  локальным blob-URL (мгновенное превью до ответа сервера). */
+    async sendFile() {
+      const file = this.pendingFile;
+      if (!file || !this.dialog || this.sending || !this.canWrite) return;
+      this.sending = true;
+      this.error = "";
+      const targetId = this.dialog.id;
+      const caption = this.draft.trim();
+      const fileUrl = this.pendingFileUrl;
+      const optimistic = {
+        id: "optimistic-" + Date.now(),
+        direction: "out",
+        text: caption || null,
+        status: "pending",
+        created_at: new Date().toISOString(),
+        attachments: [
+          {
+            id: "local-" + Date.now(),
+            type: this.guessAttType(file.type),
+            mime_type: file.type || null,
+            size: file.size,
+            file_name: file.name,
+            local_url: fileUrl,
+          },
+        ],
+      };
+      this.messages.push(optimistic);
+      this.scrollBottom();
+      const draftSaved = this.draft;
+      this.draft = "";
+      // Слот файла освобождён, blob-URL живёт до замены/отката пузыря.
+      this.pendingFile = null;
+      this.pendingFileUrl = null;
+      try {
+        const fd = new FormData();
+        fd.append("file", file);
+        if (caption) fd.append("caption", caption);
+        const res = await fetch(`/api/dialogs/${this.dialog.id}/media`, {
+          method: "POST",
+          credentials: "same-origin",
+          body: fd,
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.detail || `Отправка не удалась (${res.status})`);
+        }
+        const saved = await res.json();
+        // Устарел: диалог сменился, пока шла отправка — сообщение попадёт
+        // в историю при следующем открытии диалога, здесь не мешаем.
+        if (!this.dialog || this.dialog.id !== targetId) {
+          if (fileUrl) URL.revokeObjectURL(fileUrl);
+          return;
+        }
+        const idx = this.messages.findIndex((m) => m.id === optimistic.id);
+        if (idx >= 0) this.messages[idx] = saved;
+        this.lastId = Math.max(this.lastId, saved.id);
+        if (fileUrl) URL.revokeObjectURL(fileUrl);
+      } catch (e) {
+        const idx = this.messages.findIndex((m) => m.id === optimistic.id);
+        if (idx >= 0) this.messages.splice(idx, 1);
+        if (fileUrl) URL.revokeObjectURL(fileUrl);
+        // Откат: текст и файл возвращаются в композер.
+        this.draft = draftSaved;
+        this.pendingFile = file;
+        this.pendingFileUrl = URL.createObjectURL(file);
+        this.showError(e);
+      } finally {
+        this.sending = false;
+      }
+    },
+
+    guessAttType(mime) {
+      if (!mime) return "file";
+      if (mime.startsWith("image/")) return "photo";
+      if (mime.startsWith("video/")) return "video";
+      if (mime.startsWith("audio/")) return "voice";
+      return "file";
+    },
+
+    /** Ссылка вложения: локальный blob (оптимистичный пузырь) или API-URL. */
+    attSrc(att) {
+      return att.local_url || att.file_url || "";
+    },
+
+    attKind(att) {
+      const mime = att.mime_type || "";
+      if (att.type === "photo" || mime.startsWith("image/")) return "photo";
+      if (att.type === "video" || mime.startsWith("video/")) return "video";
+      if (att.type === "voice" || mime.startsWith("audio/")) return "audio";
+      return "file";
+    },
+
+    fileLabel(att) {
+      const name = att.file_name || "Файл";
+      return att.size != null ? `${name} · ${this.formatSize(att.size)}` : name;
+    },
+
+    formatSize(bytes) {
+      if (bytes == null) return "";
+      if (bytes < 1024) return bytes + " Б";
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " КБ";
+      if (bytes < 1024 * 1024 * 1024) return (bytes / 1048576).toFixed(1) + " МБ";
+      return (bytes / 1073741824).toFixed(2) + " ГБ";
     },
 
     scrollBottom() {

@@ -55,6 +55,19 @@ class DialogOut(BaseModel):
         return _ensure_utc(v)
 
 
+class AttachmentOut(BaseModel):
+    """Вложение сообщения (медиа на общем томе, раздача через API)."""
+
+    id: int
+    #: photo | file | video | voice | sticker — как рендерить в пузыре.
+    type: str
+    mime_type: str | None = None
+    size: int | None = None
+    file_name: str | None = None
+    #: Авторизованный URL раздачи (/api/attachments/{id}/file).
+    file_url: str
+
+
 class MessageOut(BaseModel):
     id: int
     dialog_id: int
@@ -65,6 +78,9 @@ class MessageOut(BaseModel):
     author_user_id: int | None = None
     timeline_comment_id: int | None = None
     created_at: datetime | None = None
+    #: Медиа-вложения; текст-плейсхолдер («[фото]») при наличии вложений
+    #: DTO скрывает — картинка говорит сама за себя.
+    attachments: list[AttachmentOut] = []
 
     @field_validator("created_at", mode="after")
     @classmethod

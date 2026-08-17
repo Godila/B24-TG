@@ -79,6 +79,8 @@ async def test_health_empty_db_is_ok(health_env):
         "status": "ok",
         "db": "ok",
         "accounts": {"total": 0, "active": 0, "offline": 0, "banned": 0},
+        # media — информационное поле (чат живёт и без медиа-тома).
+        "media": {"ok": True},
     }
 
 

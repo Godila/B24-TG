@@ -118,13 +118,30 @@
         </div>
       </header>
 
-      <main class="messages" x-ref="messages">
+      <main class="messages" x-ref="messages"
+        @dragover.prevent @drop.prevent="onDrop($event)">
         <button class="load-older" type="button"
           x-show="messages.length > 0 && hasOlder"
           @click="loadOlder()">↑ Загрузить ещё</button>
         <template x-for="msg in messages" :key="msg.id">
           <div class="bubble" :class="msg.direction === 'out' ? 'bubble-out' : 'bubble-in'">
-            <p class="bubble-text" x-text="msg.text"></p>
+            <template x-for="att in (msg.attachments || [])" :key="att.id">
+              <div class="bubble-attachment" :class="'att-' + attKind(att)">
+                <a x-show="attKind(att) === 'photo'" class="att-photo" :href="attSrc(att)"
+                  target="_blank" rel="noopener" :title="att.file_name || 'Открыть фото'">
+                  <img :src="attSrc(att)" :alt="att.file_name || 'Фото-вложение'" loading="lazy">
+                </a>
+                <video x-show="attKind(att) === 'video'" controls preload="metadata"
+                  :src="attSrc(att)"></video>
+                <audio x-show="attKind(att) === 'audio'" controls preload="metadata"
+                  :src="attSrc(att)"></audio>
+                <a x-show="attKind(att) === 'file'" class="bubble-file" :href="attSrc(att)"
+                  target="_blank" rel="noopener" download>
+                  <span class="bubble-file-name" x-text="fileLabel(att)"></span>
+                </a>
+              </div>
+            </template>
+            <p class="bubble-text" x-show="msg.text" x-text="msg.text"></p>
             <span class="bubble-meta">
               <span x-text="formatTime(msg.created_at)"></span>
               <span class="status-badge" x-text="statusLabel(msg.direction, msg.status)"></span>
@@ -162,15 +179,27 @@
           : 'Чужой диалог — писать может только ответственный менеджер'"></span>
       </div>
       <footer class="composer" x-show="canWrite">
+        <button class="attach-btn" type="button" x-show="canAttach" @click="pickFile()"
+          :disabled="!dialog || sending" title="Прикрепить файл" aria-label="Прикрепить файл">📎</button>
+        <input type="file" x-ref="fileInput" hidden @change="onFilePicked($event)"
+          accept="image/*,video/*,audio/*,.pdf,.zip,.doc,.docx,.xls,.xlsx,.ppt,.pptx">
         <textarea
           x-model="draft"
           @keydown.enter="if (!$event.shiftKey) { $event.preventDefault(); send(); }"
+          @paste="onPaste($event)"
           placeholder="Напишите сообщение… (Enter — отправить, Shift+Enter — перенос строки)"
           rows="2"
           :disabled="!dialog || sending"></textarea>
-        <button class="send-btn" @click="send()" :disabled="!dialog || !draft.trim() || sending" type="button">
+        <button class="send-btn" @click="send()"
+          :disabled="!dialog || (!draft.trim() && !pendingFile) || sending" type="button">
           <span x-text="sending ? '…' : 'Отправить'"></span>
         </button>
+        <div class="file-chip" x-show="pendingFile">
+          <span class="file-chip-name" x-text="pendingFile ? pendingFile.name : ''"></span>
+          <span class="file-chip-size" x-text="pendingFile ? formatSize(pendingFile.size) : ''"></span>
+          <button class="file-chip-x" type="button" @click="clearFile()" title="Убрать файл"
+            aria-label="Убрать файл">✕</button>
+        </div>
       </footer>
 
       <div class="error-banner" x-show="error" x-text="error" @click="error = ''"></div>

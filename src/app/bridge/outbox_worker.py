@@ -27,12 +27,15 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING
 
+from app.media.storage import MediaPathError
 from app.models import OutboxItem
 
 if TYPE_CHECKING:  # pragma: no cover - только для type-checker
     from app.bridge.throttler import Throttler
+    from app.media.storage import MediaStorage
     from app.messaging.provider import MessengerProvider
 
 logger = logging.getLogger(__name__)
@@ -89,6 +92,7 @@ class OutboxWorker:
         poll_interval: int = 2,
         batch_size: int = 50,
         on_sent_hook: "Callable[[int], Awaitable[None]] | None" = None,
+        media_storage: "MediaStorage | None" = None,
     ):
         self._repo = repo
         self._get_provider = get_provider
@@ -99,6 +103,9 @@ class OutboxWorker:
         # Хук после успешной отправки: bridge ставит crm_sync(kind=outbound)
         # — timeline-комментарий исходящего (spec §8.2 шаг 6, план 006).
         self._on_sent_hook = on_sent_hook
+        # Резолвит относительные пути вложений (общий том). None — только
+        # текстовые элементы (тесты).
+        self._media_storage = media_storage
         self._running = False
         self._throttlers: dict[int, Throttler] = {}
 
@@ -168,11 +175,16 @@ class OutboxWorker:
             return
 
         # 3. отправка
-        result = await provider.send_message(
-            external_chat_id=item.external_chat_id,
-            text=item.text or "",
-            is_initiation=bool(item.is_initiation),
-        )
+        if item.attachment_id is not None:
+            result = await self._send_attachment(item, provider)
+            if result is None:
+                return  # терминально обработано внутри (failed), судьбу не ищем
+        else:
+            result = await provider.send_message(
+                external_chat_id=item.external_chat_id,
+                text=item.text or "",
+                is_initiation=bool(item.is_initiation),
+            )
 
         # 4. судьба по результату
         if result.success:
@@ -201,6 +213,42 @@ class OutboxWorker:
         # экспоненциальный backoff: при attempts=0 -> 30, 1 -> 60, 2 -> 120, 3 -> 240, ...
         delay = 30 * (2 ** item.attempts)
         await self._repo.reschedule(item, delay_seconds=delay, error=result.error)
+
+    async def _send_attachment(self, item: OutboxItem, provider: "MessengerProvider"):
+        """Отправка медиа-элемента.
+
+        Возвращает SendResult (судьбу решает общий код _handle) либо None —
+        терминальная ошибка уже закрыта mark_failed: файл не вернуть
+        ретраями (файл пишется на том ДО enqueue в той же логической
+        транзакции), поддержку канала перечитывание БД не меняет."""
+        attachment = getattr(item, "attachment", None)
+        path: Path | None = None
+        if attachment is not None and self._media_storage is not None:
+            try:
+                candidate = self._media_storage.abs_path(attachment.file_path)
+                path = candidate if candidate.is_file() else None
+            except MediaPathError:
+                path = None
+        if attachment is None or path is None:
+            logger.error(
+                "attachment missing for outbox item %s (file_path=%s) — failed",
+                item.id,
+                getattr(attachment, "file_path", None),
+            )
+            await self._repo.mark_failed(item, "attachment_missing")
+            return None
+        if not provider.supports_media():
+            await self._repo.mark_failed(item, "media_not_supported")
+            return None
+        return await provider.send_media(
+            item.external_chat_id,
+            path,
+            attachment.type,
+            mime_type=attachment.mime_type,
+            file_name=attachment.file_name,
+            caption=item.text,
+            is_initiation=bool(item.is_initiation),
+        )
 
     async def _after_sent(self, item: OutboxItem) -> None:
         """После успешной отправки — CRM-задача для исходящего (timeline).

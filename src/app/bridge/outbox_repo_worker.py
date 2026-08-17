@@ -62,6 +62,7 @@ class WorkerOutboxRepository(OutboxRepository):
         text: str,
         is_initiation: bool = False,
         message_id: int | None = None,
+        attachment_id: int | None = None,
     ) -> OutboxItem:
         # В отличие от SqlAlchemyOutboxRepository.enqueue, здесь коммитим сами:
         # вызывающий (воркер/роут) не управляет сессией адаптера.
@@ -74,6 +75,7 @@ class WorkerOutboxRepository(OutboxRepository):
                 text=text,
                 is_initiation=is_initiation,
                 message_id=message_id,
+                attachment_id=attachment_id,
             )
             await s.commit()
             return item

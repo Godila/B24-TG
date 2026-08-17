@@ -12,11 +12,15 @@ MAX-строки), поэтому outbox-маршрутизация и throttler
 import asyncio
 import logging
 from collections.abc import Callable, Iterable
+from typing import TYPE_CHECKING
 
 from app.messaging.provider import MessengerProvider
 from app.messaging.telegram.paths import account_session_dir
 from app.messaging.telegram.provider import TelegramProvider
 from app.models import Messenger, TgAccount
+
+if TYPE_CHECKING:
+    from app.media.storage import MediaStorage
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +31,10 @@ class SessionManager:
     def __init__(self, api_id: int, api_hash: str, sessions_dir: str,
                  proxy: tuple | None = None, *,
                  builders: dict[Messenger, ProviderBuilder] | None = None,
-                 register_timeout_sec: float = 60.0):
+                 register_timeout_sec: float = 60.0,
+                 media_storage: "MediaStorage | None" = None,
+                 media_download_timeout_sec: float = 120.0,
+                 media_send_timeout_sec: float = 300.0):
         self._api_id = api_id
         self._api_hash = api_hash
         self._sessions_dir = sessions_dir
@@ -35,6 +42,9 @@ class SessionManager:
         self._providers: dict[int, MessengerProvider] = {}
         self._builders: dict[Messenger, ProviderBuilder] = builders or {}
         self._register_timeout_sec = register_timeout_sec
+        self._media_storage = media_storage
+        self._media_download_timeout_sec = media_download_timeout_sec
+        self._media_send_timeout_sec = media_send_timeout_sec
         # TG остаётся дефолтным каналом (обратная совместимость с тестами,
         # которые не передают builders).
         self._builders.setdefault(Messenger.tg, self._default_tg_builder)
@@ -45,7 +55,10 @@ class SessionManager:
         # друг друга. Конвенцию пути строит единый helper.
         per_account_dir = account_session_dir(self._sessions_dir, account.id)
         return TelegramProvider(
-            self._api_id, self._api_hash, per_account_dir, proxy=self._proxy
+            self._api_id, self._api_hash, per_account_dir, proxy=self._proxy,
+            media_storage=self._media_storage,
+            media_download_timeout_sec=self._media_download_timeout_sec,
+            media_send_timeout_sec=self._media_send_timeout_sec,
         )
 
     def _build_provider(self, account: TgAccount) -> MessengerProvider:

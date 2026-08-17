@@ -29,6 +29,10 @@ services:
     build: .
     command: ["python", "-m", "app.main", "web"]
     env_file: .env
+    volumes:
+      # Общий том с bridge: файл, загруженный менеджером через web, bridge
+      # читает для отправки в канал (разделяемое состояние — БД + медиа).
+      - media:/data/media
     depends_on:
       postgres:
         condition: service_healthy
@@ -43,6 +47,8 @@ services:
     env_file: .env
     volumes:
       - tg_sessions:/data/tg_sessions
+      # Скачанные из каналов медиа раздаёт web (тот же том).
+      - media:/data/media
     depends_on:
       postgres:
         condition: service_healthy
@@ -80,5 +86,6 @@ services:
 volumes:
   pg_data:
   tg_sessions:
+  media:
   letsencrypt:
   letsencrypt_www:

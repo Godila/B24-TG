@@ -8,6 +8,7 @@
 
 import enum
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     BigInteger,
@@ -20,9 +21,12 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.attachment import Attachment
 
 
 class OutboxStatus(str, enum.Enum):
@@ -63,6 +67,9 @@ class OutboxItem(Base, TimestampMixin):
     attachment_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("attachments.id"), nullable=True
     )
+    # Вложение исходящего медиа. Читается только selectinload-ом в
+    # fetch_due: lazy-доступ в async-контексте роняет MissingGreenlet.
+    attachment: Mapped["Attachment | None"] = relationship()
     is_initiation: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[OutboxStatus] = mapped_column(
         Enum(OutboxStatus), default=OutboxStatus.queued, index=True

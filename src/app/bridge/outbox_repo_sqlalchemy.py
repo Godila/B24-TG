@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.bridge.outbox_worker import OutboxRepository
 from app.models import Message, MessageStatus, OutboxItem, OutboxStatus
@@ -24,11 +25,13 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
         text: str,
         is_initiation: bool = False,
         message_id: int | None = None,
+        attachment_id: int | None = None,
     ) -> OutboxItem:
         """Поставить новое сообщение в очередь отправки (status=queued).
 
         ``message_id`` связывает элемент очереди с Message(direction=outbound):
         по нему mark_sent/mark_failed закрывают статус исходящего сообщения.
+        ``attachment_id`` — медиа-вложение элемента (отправка файлом).
 
         Внимание: метод НЕ коммитит сам — это делает вызывающий (route),
         чтобы вставка Message и OutboxItem прошла в одной транзакции
@@ -41,6 +44,7 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
             text=text,
             is_initiation=is_initiation,
             message_id=message_id,
+            attachment_id=attachment_id,
             status=OutboxStatus.queued,
             attempts=0,
             next_attempt_at=datetime.now(UTC),
@@ -57,6 +61,10 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
         now = datetime.now(UTC)
         stmt = (
             select(OutboxItem)
+            # Вложение элемента: воркер читает его метаданные сразу,
+            # lazy-доступ в async-контексте (после закрытия сессии
+            # адаптера) роняет MissingGreenlet.
+            .options(selectinload(OutboxItem.attachment))
             .where(
                 OutboxItem.status.in_(
                     [OutboxStatus.queued, OutboxStatus.retrying]

@@ -284,3 +284,98 @@ async def test_integrity_error_race_reuses_existing_dialog(db):
         contact = await s.get(Contact, 10)
         assert contact is not None
         assert contact.crm_contact_id is None
+
+
+# --- Медиа: Attachment-строки при наличии скачанного файла ---
+
+
+async def _all_attachments(SessionLocal):
+    from app.models import Attachment
+
+    async with SessionLocal() as s:
+        return list((await s.execute(select(Attachment).order_by(Attachment.id))).scalars())
+
+
+@pytest.mark.asyncio
+async def test_incoming_media_creates_attachment(db):
+    """Входящее фото с MediaPayload → Message + Attachment (метаданные файла)."""
+    from app.messaging.types import MediaPayload
+
+    await _seed_two_managers(db)
+    handler, enqueue = _make_handler(db)
+    await handler.handle(
+        _make_msg(
+            content_type=ContentType.photo,
+            text="вот фото",
+            media=MediaPayload(
+                path="in/abc.jpg", mime_type="image/jpeg", size=1024, file_name=None
+            ),
+        ),
+        account=_make_account(manager_id=1),
+    )
+
+    messages = await _all_messages(db)
+    assert len(messages) == 1
+    assert messages[0].text == "вот фото"
+    attachments = await _all_attachments(db)
+    assert len(attachments) == 1
+    att = attachments[0]
+    assert att.message_id == messages[0].id
+    assert att.type.value == "photo"
+    assert att.file_path == "in/abc.jpg"
+    assert att.mime_type == "image/jpeg"
+    assert att.size == 1024
+    assert att.file_name is None
+    enqueue.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_incoming_document_media_keeps_file_name(db):
+    from app.messaging.types import MediaPayload
+
+    await _seed_two_managers(db)
+    handler, _ = _make_handler(db)
+    await handler.handle(
+        _make_msg(
+            content_type=ContentType.file,
+            text="[файл]",
+            media=MediaPayload(
+                path="in/def.pdf",
+                mime_type="application/pdf",
+                size=5000,
+                file_name="смета.pdf",
+            ),
+        ),
+        account=_make_account(manager_id=1),
+    )
+    attachments = await _all_attachments(db)
+    assert len(attachments) == 1
+    assert attachments[0].file_name == "смета.pdf"
+    assert attachments[0].type.value == "file"
+
+
+@pytest.mark.asyncio
+async def test_incoming_text_has_no_attachment(db):
+    await _seed_two_managers(db)
+    handler, _ = _make_handler(db)
+    await handler.handle(_make_msg(), account=_make_account(manager_id=1))
+    assert await _all_attachments(db) == []
+
+
+@pytest.mark.asyncio
+async def test_media_redelivery_single_attachment(db):
+    """Дубль доставки медиа: сообщение и вложение не дублируются."""
+    from app.messaging.types import MediaPayload
+
+    await _seed_two_managers(db)
+    handler, enqueue = _make_handler(db)
+    msg = _make_msg(
+        content_type=ContentType.photo,
+        media=MediaPayload(path="in/one.jpg", mime_type="image/jpeg", size=10),
+    )
+    await handler.handle(msg, account=_make_account(manager_id=1))
+    await handler.handle(msg, account=_make_account(manager_id=1))
+
+    assert len(await _all_messages(db)) == 1
+    assert len(await _all_attachments(db)) == 1
+    assert enqueue.await_count == 1

@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
+from pathlib import Path
 
-from app.messaging.types import IncomingMessage, SendResult
+from app.messaging.types import ContentType, IncomingMessage, SendResult
 
 
 class SessionRevokedError(Exception):
@@ -49,6 +50,27 @@ class MessengerProvider(ABC):
         self, external_chat_id: str, text: str, *, is_initiation: bool
     ) -> SendResult:
         """Отправить сообщение. is_initiation влияет на throttle."""
+
+    # --- Медиа: ОПЦИОНАЛЬНАЯ возможность канала (прецедент — ---
+    # --- is_dead/credential_token): дефолт «не поддержано».   ---
+    def supports_media(self) -> bool:
+        """Может ли канал отправлять файлы (гейт API + защита воркера)."""
+        return False
+
+    async def send_media(
+        self,
+        external_chat_id: str,
+        path: Path,
+        content_type: ContentType,
+        *,
+        mime_type: str | None = None,
+        file_name: str | None = None,
+        caption: str | None = None,
+        is_initiation: bool = False,
+    ) -> SendResult:
+        """Отправить медиа-файл с общего тома. Канал без поддержки медиа
+        (MAX в v1) наследует этот дефолт — элемент честно падает в failed."""
+        return SendResult(success=False, error="media_not_supported")
 
     def is_dead(self) -> bool:
         """Сессия отозвана безнадёжно (токен MAX сброшен) — реконнект

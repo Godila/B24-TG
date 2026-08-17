@@ -14,6 +14,33 @@ class ContentType(str, enum.Enum):
     sticker = "sticker"
 
 
+#: Текст-плейсхолдеры медиа-сообщений: единственный источник — здесь.
+#: Их видит B24-timeline (комментарий) и превью списка «Чатов»; UI пузырь
+#: при наличии вложения плейсхолдер скрывает (см. _message_dto).
+MEDIA_PLACEHOLDERS: dict["ContentType", str] = {
+    ContentType.photo: "[фото]",
+    ContentType.video: "[видео]",
+    ContentType.voice: "[голосовое сообщение]",
+    ContentType.sticker: "[стикер]",
+    ContentType.file: "[файл]",
+}
+
+
+@dataclass
+class MediaPayload:
+    """Медиа-файл, уже сохранённый на диск провайдером (общий том media).
+
+    Канало-нейтрально: TG создаёт в момент ``download_media``; MAX (будущее)
+    будет создавать при скачивании своего вложения. ``path`` —
+    относительный путь внутри медиа-тома (POSIX), резолвит MediaStorage.
+    """
+
+    path: str
+    mime_type: str | None = None
+    size: int | None = None
+    file_name: str | None = None
+
+
 @dataclass
 class IncomingMessage:
     """Сообщение, пришедшее из мессенджера (канал-нейтрально).
@@ -31,7 +58,8 @@ class IncomingMessage:
     sender_username: str | None
     content_type: ContentType
     text: str | None = None
-    media_path: str | None = None
+    #: Скачанное медиа (None → в text остаётся плейсхолдер «[фото]» и т.п.).
+    media: MediaPayload | None = None
     external_message_id: str | None = None
     timestamp: datetime | None = None
     is_reply: bool = False  # True если это ответ клиента (диалог уже существует)
