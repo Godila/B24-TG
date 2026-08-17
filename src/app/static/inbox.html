@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ЧатМост — Чаты</title>
+  <link rel="icon" href="/static/brand/favicon.ico" sizes="48x48">
+  <link rel="apple-touch-icon" href="/static/brand/logo-square-192x192.png">
   <link rel="stylesheet" href="/static/style.css">
   <!-- Раскладка «Чатов» подключается ПОВЕРХ style.css и переиспользует его
        переменные/классы (.bubble*, .composer, .channel-badge…). Отдельный
@@ -17,31 +19,32 @@
     <!-- Левая панель: список диалогов -->
     <aside class="inbox-list">
       <div class="inbox-filters">
-        <button type="button" :class="{active: filter==='all'}" @click="filter='all'">Все</button>
-        <button type="button" :class="{active: filter==='tg'}" @click="filter='tg'">TG</button>
-        <button type="button" :class="{active: filter==='max'}" @click="filter='max'">MAX</button>
+        <button type="button" :class="{active: filter==='all'}" @click="setFilter('all')">Все</button>
+        <button type="button" :class="{active: filter==='tg'}" @click="setFilter('tg')">TG</button>
+        <button type="button" :class="{active: filter==='max'}" @click="setFilter('max')">MAX</button>
       </div>
-      <!-- Supervisor: фильтр по ответственному (UX-11) -->
+      <!-- Supervisor: фильтр по ответственному (UX-11; серверный — иначе
+           клиентская фильтрация врала бы на постраничном списке). -->
       <div class="inbox-filters inbox-filters--managers" x-show="isSupervisor">
-        <button type="button" :class="{active: managerFilter === 0}" @click="managerFilter = 0">Все</button>
+        <button type="button" :class="{active: managerFilter === 0}" @click="setManagerFilter(0)">Все</button>
         <template x-for="opt in managerOptions" :key="opt.id">
           <button type="button" :class="{active: managerFilter === opt.id}"
-                  @click="managerFilter = opt.id" x-text="opt.name"></button>
+                  @click="setManagerFilter(opt.id)" x-text="opt.name"></button>
         </template>
-        <button type="button" :class="{active: managerFilter === -1}" @click="managerFilter = -1">Без ответственного</button>
+        <button type="button" :class="{active: managerFilter === -1}" @click="setManagerFilter(-1)">Без ответственного</button>
       </div>
 
-      <div class="empty" x-show="!loading && dialogs.length === 0">
+      <div class="empty" x-show="!loading && unanswered.length === 0 && dialogs.length === 0 && !anyListFilter">
         <span>Здесь появятся диалоги, когда клиенты напишут вам в Telegram или MAX</span>
       </div>
-      <div class="empty" x-show="!loading && dialogs.length > 0 && filteredDialogs.length === 0">
+      <div class="empty" x-show="!loading && unanswered.length === 0 && dialogs.length === 0 && anyListFilter">
         <span>Под текущие фильтры диалогов нет</span>
       </div>
 
-      <template x-if="unansweredList.length > 0">
+      <template x-if="unanswered.length > 0">
         <div class="inbox-group">
           <div class="inbox-section-title">Ожидают ответа</div>
-          <template x-for="d in unansweredList" :key="d.id">
+          <template x-for="d in unanswered" :key="d.id">
             <button class="dialog-row" type="button" :class="{active: activeId === d.id}"
                     @click="openDialog(d)">
               <span class="dialog-avatar" aria-hidden="true" x-text="initials(d.contact_name)"></span>
@@ -65,8 +68,8 @@
         </div>
       </template>
 
-      <div class="inbox-section-title" x-show="answeredList.length > 0">Диалоги</div>
-      <template x-for="d in answeredList" :key="d.id">
+      <div class="inbox-section-title" x-show="dialogs.length > 0">Диалоги</div>
+      <template x-for="d in dialogs" :key="d.id">
         <button class="dialog-row" type="button" :class="{active: activeId === d.id}" @click="openDialog(d)">
           <span class="dialog-avatar" aria-hidden="true" x-text="initials(d.contact_name)"></span>
           <span class="dialog-body">
@@ -85,6 +88,12 @@
           </span>
         </button>
       </template>
+      <!-- Догрузка старых страниц (keyset-курсор): сервер отдал только
+           голову списка по свежести. -->
+      <button class="show-more" type="button" x-show="hasMore" @click="loadMore()"
+              :disabled="loadingMore">
+        <span x-text="loadingMore ? 'Загрузка…' : 'Показать ещё'"></span>
+      </button>
     </aside>
 
     <!-- Правая панель: чат (разметка панели — копия placement.html; почему
@@ -111,7 +120,7 @@
 
       <main class="messages" x-ref="messages">
         <button class="load-older" type="button"
-          x-show="messages.length > 0 && hasMore"
+          x-show="messages.length > 0 && hasOlder"
           @click="loadOlder()">↑ Загрузить ещё</button>
         <template x-for="msg in messages" :key="msg.id">
           <div class="bubble" :class="msg.direction === 'out' ? 'bubble-out' : 'bubble-in'">

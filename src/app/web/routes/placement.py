@@ -17,15 +17,21 @@ user_id в запросе НЕТ: личность менеджера опред
 
 import json
 import logging
+import re
+import time
 from pathlib import Path
 
-from fastapi import APIRouter, Form, Query
+from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from app.b24.client import Bitrix24Client, Bitrix24Error
 from app.config import get_settings
 from app.web.deps import ManagerDep
-from app.web.session import create_session_cookie_params
+from app.web.session import (
+    SESSION_COOKIE,
+    create_session_cookie_params,
+    verify_session,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,22 +40,42 @@ router = APIRouter(prefix="/placement", tags=["placement"])
 _PLACEMENT_CODE = "CRM_DEAL_DETAIL_TAB"
 _ADMIN_PLACEMENT_CODE = "LEFT_MENU"
 
+# Кэш «AUTH_ID → b24_user_id» с TTL: B24 переиспользует access-токен между
+# открытиями placement'а, и повторный user.current (~0.5 с на каждый вход в
+# «Чаты»/виджет сделки) — чистая потеря. Токен выписан конкретному
+# пользователю: тот же токен = тот же человек, подмены нет. TTL короткий
+# (5 мин) — заведомо меньше времени жизни токена.
+_TOKEN_CACHE: dict[str, tuple[int, float]] = {}
+_TOKEN_CACHE_TTL = 300.0
+_TOKEN_CACHE_MAX = 1024
+
+
+def _cache_token(access_token: str, user_id: int) -> None:
+    if len(_TOKEN_CACHE) >= _TOKEN_CACHE_MAX:
+        _TOKEN_CACHE.clear()
+    _TOKEN_CACHE[access_token] = (user_id, time.monotonic() + _TOKEN_CACHE_TTL)
+
 
 async def _user_id_from_token(access_token: str) -> int | None:
     """Определить менеджера по AUTH_ID: user.current и валидирует токен.
 
     Placement-запрос не содержит user_id — токен выписан Битрикс24 конкретному
     пользователю, открывшему вкладку. Подделка исключена: без настоящего
-    токена user.current не пройдёт.
+    токена user.current не пройдёт. Успешно проверенный токен кэшируется
+    (см. _TOKEN_CACHE) — повторные открытия той же сессии B24 бесплатны.
     """
     if not access_token:
         return None
+    cached = _TOKEN_CACHE.get(access_token)
+    if cached is not None and time.monotonic() < cached[1]:
+        return cached[0]
     settings = get_settings()
     client = Bitrix24Client(client_endpoint=settings.b24_portal.rstrip("/") + "/rest/")
     try:
         result = await client.call("user.current", auth_token=access_token)
     except Bitrix24Error:
         logger.warning("placement: invalid B24 access_token rejected")
+        _TOKEN_CACHE.pop(access_token, None)  # протух раньше TTL — не держим
         return None
     except Exception:
         logger.exception("placement: B24 token verification failed")
@@ -61,20 +87,37 @@ async def _user_id_from_token(access_token: str) -> int | None:
     if not isinstance(result, dict):
         return None
     try:
-        return int(result.get("ID", 0)) or None
+        user_id = int(result.get("ID", 0)) or None
     except (TypeError, ValueError):
         return None
+    if user_id is not None:
+        _cache_token(access_token, user_id)
+    return user_id
 
 
-async def _resolve_b24_user(settings, auth: str, auth_id: str) -> int | JSONResponse:
-    """Личность пользователя placement-вызова — общий код обоих роутов.
+async def _resolve_b24_user(
+    request: Request, settings, auth: str, auth_id: str
+) -> int | JSONResponse:
+    """Личность пользователя placement-вызова — общий код всех роутов.
 
-    Dev: user_id из legacy AUTH-JSON (локальные тесты виджета без реального
-    B24). Прод: ``user.current`` по AUTH_ID (токен выписан конкретному
-    пользователю). Правила идентификации security-чувствительны и должны
-    жить в одном месте — рассинхрон роутов оставил бы дыру.
+    Прод: ``user.current`` по AUTH_ID (токен выписан конкретному
+    пользователю; успешно проверенный токен кэшируется — повторные
+    открытия бесплатны). Кука принимается ТОЛЬКО при пустом AUTH_ID
+    (ручная перезагрузка фрейма): placement-POST от B24 несёт свежий
+    токен того, кто открыл вкладку, — он авторитетен, и кука чужой
+    сессии (общий браузер, смена аккаунта B24) не должна подменять
+    личность. Dev: user_id из legacy AUTH-JSON (локальные тесты виджета
+    без реального B24). Правила идентификации security-чувствительны и
+    должны жить в одном месте — рассинхрон роутов оставил бы дыру.
     Возвращает b24_user_id или готовый JSONResponse-ошибку (400/403).
     """
+    if not auth_id:
+        cookie = request.cookies.get(SESSION_COOKIE)
+        if cookie:
+            payload = verify_session(cookie, settings.session_secret)
+            if payload is not None and isinstance(payload.get("b24_user_id"), int):
+                logger.debug("placement: session cookie accepted (no AUTH_ID), B24 check skipped")
+                return payload["b24_user_id"]
     if settings.dev_mode:
         try:
             auth_data = json.loads(auth) if auth else {}
@@ -90,11 +133,35 @@ async def _resolve_b24_user(settings, auth: str, auth_id: str) -> int | JSONResp
     return b24_user_id
 
 
+# Ссылки вида href="/static/…" или src="/static/…" (без query) — цель
+# версионирования; iframe-источники /placement/* не затрагиваются.
+_STATIC_REF_RE = re.compile(r'((?:href|src)="/static/)([^"?]+)')
+
+
+def _with_static_versions(html: str) -> str:
+    """Дописать ?v=<mtime> на каждую /static-ссылку страницы.
+
+    nginx кэширует статику надолго (30 дней), а деплой меняет mtime —
+    версия в URL меняется, кэш браузера сбрасывается сам. Без версий
+    долгий кэш застывал бы до ручной очистки.
+    """
+    static_dir = Path(get_settings().static_dir)
+
+    def _version(match: re.Match) -> str:
+        asset = static_dir / match.group(2)
+        try:
+            return f"{match.group(1)}{match.group(2)}?v={asset.stat().st_mtime_ns}"
+        except OSError:  # файла нет — ссылку не трогаем (404 покажет браузер)
+            return match.group(0)
+
+    return _STATIC_REF_RE.sub(_version, html)
+
+
 def _static_html(name: str, title: str, stub_text: str) -> str:
     """static/<name> с диска; заглушка, если файла нет."""
     html_path = Path(get_settings().static_dir) / name
     if html_path.is_file():
-        return html_path.read_text(encoding="utf-8")
+        return _with_static_versions(html_path.read_text(encoding="utf-8"))
     logger.warning("%s not found at %s — returning stub", name, html_path)
     return (
         f'<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">'
@@ -141,9 +208,9 @@ def _set_session_and_respond(
 
 
 async def _handle_left_menu_post(
-    placement: str, auth_id: str, auth: str, *, label: str, html: str
+    request: Request, placement: str, auth_id: str, auth: str, *, label: str, html: str
 ) -> HTMLResponse | JSONResponse:
-    """Общий body LEFT_MENU-хендлеров (админка, «Чаты»).
+    """Общий body LEFT_MENU-хендлеров (админка, «Чаты», оболочка).
 
     B24 различает точки по HANDLER-URL — в теле POST у обоих придёт
     PLACEMENT=LEFT_MENU. Флоу security-чувствителен (идентификация +
@@ -156,7 +223,7 @@ async def _handle_left_menu_post(
             status_code=400,
         )
     settings = get_settings()
-    b24_user_id = await _resolve_b24_user(settings, auth, auth_id)
+    b24_user_id = await _resolve_b24_user(request, settings, auth, auth_id)
     if isinstance(b24_user_id, JSONResponse):
         return b24_user_id
 
@@ -171,6 +238,7 @@ async def _handle_left_menu_post(
 
 @router.post("/admin", response_model=None)
 async def placement_admin_post(
+    request: Request,
     placement: str = Form(default="", alias="PLACEMENT"),
     auth_id: str = Form(default="", alias="AUTH_ID"),
     auth: str = Form(default="", alias="AUTH"),
@@ -178,10 +246,13 @@ async def placement_admin_post(
     """Placement LEFT_MENU: админ-панель внутри интерфейса Битрикс24.
 
     Личность — как в /placement/deal (user.current по AUTH_ID; dev — из
-    AUTH-JSON). Ставит сессионную куку и отдаёт admin.html — страницу
-    подключения каналов (менеджеру) и supervisor-панель (администратору).
+    AUTH-JSON; живая кука — без B24-вызова). Ставит сессионную куку и
+    отдаёт admin.html — страницу подключения каналов (менеджеру) и
+    supervisor-панель (администратору).
     """
-    return await _handle_left_menu_post(placement, auth_id, auth, label="admin", html=_admin_html())
+    return await _handle_left_menu_post(
+        request, placement, auth_id, auth, label="admin", html=_admin_html()
+    )
 
 
 @router.get("/admin", response_model=None)
@@ -203,6 +274,7 @@ def _admin_html() -> str:
 
 @router.post("/chats", response_model=None)
 async def placement_chats_post(
+    request: Request,
     placement: str = Form(default="", alias="PLACEMENT"),
     auth_id: str = Form(default="", alias="AUTH_ID"),
     auth: str = Form(default="", alias="AUTH"),
@@ -214,7 +286,9 @@ async def placement_chats_post(
     меню ведёт на /placement/app, а этот роут остаётся прямой ссылкой
     и iframe-источником вкладки «Чаты». Кука без deal_id.
     """
-    return await _handle_left_menu_post(placement, auth_id, auth, label="chats", html=_inbox_html())
+    return await _handle_left_menu_post(
+        request, placement, auth_id, auth, label="chats", html=_inbox_html()
+    )
 
 
 @router.get("/chats", response_model=None)
@@ -234,6 +308,7 @@ def _inbox_html() -> str:
 
 @router.post("/app", response_model=None)
 async def placement_app_post(
+    request: Request,
     placement: str = Form(default="", alias="PLACEMENT"),
     auth_id: str = Form(default="", alias="AUTH_ID"),
     auth: str = Form(default="", alias="AUTH"),
@@ -246,7 +321,7 @@ async def placement_app_post(
     и /placement/admin — каждый со своей изоляцией CSS/JS).
     """
     return await _handle_left_menu_post(
-        placement, auth_id, auth, label="app", html=_app_shell_html()
+        request, placement, auth_id, auth, label="app", html=_app_shell_html()
     )
 
 
@@ -267,6 +342,7 @@ def _app_shell_html() -> str:
 
 @router.post("/deal", response_model=None)
 async def placement_deal_post(
+    request: Request,
     placement: str = Form(default="", alias="PLACEMENT"),
     placement_options: str = Form(default="{}", alias="PLACEMENT_OPTIONS"),
     auth_id: str = Form(default="", alias="AUTH_ID"),
@@ -274,8 +350,8 @@ async def placement_deal_post(
 ) -> HTMLResponse | JSONResponse:
     """Реальный placement-вызов от Bitrix24 (POST form-data).
 
-    Прод: личность — user.current по AUTH_ID. Dev: user_id из legacy
-    AUTH-JSON (локальные тесты виджета без реального B24).
+    Прод: личность — user.current по AUTH_ID (живая кука — без B24-вызова).
+    Dev: user_id из legacy AUTH-JSON (локальные тесты виджета без реального B24).
     """
     if placement != _PLACEMENT_CODE:
         return JSONResponse(
@@ -290,7 +366,7 @@ async def placement_deal_post(
     deal_id = int(deal_id_raw) if deal_id_raw else None
 
     settings = get_settings()
-    b24_user_id = await _resolve_b24_user(settings, auth, auth_id)
+    b24_user_id = await _resolve_b24_user(request, settings, auth, auth_id)
     if isinstance(b24_user_id, JSONResponse):
         return b24_user_id
 

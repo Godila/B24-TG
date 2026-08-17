@@ -113,6 +113,21 @@ class InboxDialogOut(BaseModel):
     is_mine: bool = True
 
 
+class InboxDialogsPageOut(BaseModel):
+    """Ответ /api/inbox/dialogs: две секции списка «Чатов».
+
+    ``unanswered`` — ВСЕ неотвеченные диалоги скоупа (кто дольше ждёт —
+    выше), не пагинируются: прятать «забытый» диалог за постраничкой
+    противоречит линзе DESIGN.md (возраст ожидания — сигнатура экрана).
+    ``dialogs`` — отвечавшие по свежести, страница ``limit`` + keyset-курсор
+    (``has_more`` — есть ли старее последней строки страницы).
+    """
+
+    unanswered: list[InboxDialogOut] = []
+    dialogs: list[InboxDialogOut] = []
+    has_more: bool = False
+
+
 class ReadResultOut(BaseModel):
     dialog_id: int
     last_read_msg_id: int | None = None

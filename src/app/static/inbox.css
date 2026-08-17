@@ -237,3 +237,26 @@
 @media (max-width: 720px) {
   .inbox-list { width: 240px; }
 }
+
+/* «Показать ещё» — догрузка старых страниц списка (ghost-кнопка,
+   паттерн .load-older из панели сообщений, тон списка). */
+.show-more {
+  appearance: none;
+  display: block;
+  width: calc(100% - 16px);
+  margin: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  color: #1f57c7;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.show-more:hover { background: #f2f4f8; }
+.show-more:disabled { color: var(--meta); cursor: default; }
+.show-more:focus-visible {
+  outline: 2px solid #1f57c7;
+  outline-offset: 2px;
+}

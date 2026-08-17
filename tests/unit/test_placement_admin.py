@@ -10,6 +10,13 @@ import pytest
 from app.web.routes import placement as placement_routes
 
 
+class _FakeRequest:
+    """Минимальный Request: только cookies (нужно _resolve_b24_user)."""
+
+    def __init__(self, cookies=None):
+        self.cookies = cookies or {}
+
+
 class _FakeSettings:
     def __init__(self, static_dir):
         self.dev_mode = True
@@ -20,18 +27,20 @@ class _FakeSettings:
 @pytest.fixture
 def static_dir(tmp_path):
     (tmp_path / "admin.html").write_text(
-        "<html><body>ADMIN-PAGE-MARKER</body></html>", encoding="utf-8",
+        "<html><body>ADMIN-PAGE-MARKER</body></html>",
+        encoding="utf-8",
     )
     return tmp_path
 
 
 @pytest.mark.asyncio
 async def test_admin_placement_post_dev(monkeypatch, static_dir):
-    monkeypatch.setattr(
-        placement_routes, "get_settings", lambda: _FakeSettings(static_dir)
-    )
+    monkeypatch.setattr(placement_routes, "get_settings", lambda: _FakeSettings(static_dir))
     resp = await placement_routes.placement_admin_post(
-        placement="LEFT_MENU", auth_id="", auth='{"user_id": 7}',
+        request=_FakeRequest(),
+        placement="LEFT_MENU",
+        auth_id="",
+        auth='{"user_id": 7}',
     )
     assert resp.status_code == 200
     assert "ADMIN-PAGE-MARKER" in resp.body.decode()
@@ -41,40 +50,38 @@ async def test_admin_placement_post_dev(monkeypatch, static_dir):
 
 @pytest.mark.asyncio
 async def test_admin_placement_post_wrong_code(static_dir, monkeypatch):
-    monkeypatch.setattr(
-        placement_routes, "get_settings", lambda: _FakeSettings(static_dir)
-    )
+    monkeypatch.setattr(placement_routes, "get_settings", lambda: _FakeSettings(static_dir))
     resp = await placement_routes.placement_admin_post(
-        placement="CRM_DEAL_DETAIL_TAB", auth_id="", auth="{}",
+        request=_FakeRequest(),
+        placement="CRM_DEAL_DETAIL_TAB",
+        auth_id="",
+        auth="{}",
     )
     assert resp.status_code == 400
 
 
 @pytest.mark.asyncio
-async def test_admin_placement_post_prod_invalid_token(
-    monkeypatch, static_dir
-):
+async def test_admin_placement_post_prod_invalid_token(monkeypatch, static_dir):
     settings = _FakeSettings(static_dir)
     settings.dev_mode = False
-    monkeypatch.setattr(
-        placement_routes, "get_settings", lambda: settings
-    )
+    monkeypatch.setattr(placement_routes, "get_settings", lambda: settings)
 
     async def _none(token: str):
         return None
 
     monkeypatch.setattr(placement_routes, "_user_id_from_token", _none)
     resp = await placement_routes.placement_admin_post(
-        placement="LEFT_MENU", auth_id="bad-token", auth="",
+        request=_FakeRequest(),
+        placement="LEFT_MENU",
+        auth_id="bad-token",
+        auth="",
     )
     assert resp.status_code == 403
 
 
 @pytest.mark.asyncio
 async def test_admin_placement_get_with_manager(monkeypatch, static_dir):
-    monkeypatch.setattr(
-        placement_routes, "get_settings", lambda: _FakeSettings(static_dir)
-    )
+    monkeypatch.setattr(placement_routes, "get_settings", lambda: _FakeSettings(static_dir))
     resp = await placement_routes.placement_admin_get(_manager=MagicMock())
     assert resp.status_code == 200
     assert "ADMIN-PAGE-MARKER" in resp.body.decode()

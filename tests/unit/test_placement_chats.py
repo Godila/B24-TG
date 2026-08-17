@@ -11,6 +11,13 @@ import pytest
 from app.web.routes import placement as placement_routes
 
 
+class _FakeRequest:
+    """Минимальный Request: только cookies (нужно _resolve_b24_user)."""
+
+    def __init__(self, cookies=None):
+        self.cookies = cookies or {}
+
+
 class _FakeSettings:
     def __init__(self, static_dir):
         self.dev_mode = True
@@ -31,6 +38,7 @@ def static_dir(tmp_path):
 async def test_chats_placement_post_dev(monkeypatch, static_dir):
     monkeypatch.setattr(placement_routes, "get_settings", lambda: _FakeSettings(static_dir))
     resp = await placement_routes.placement_chats_post(
+        request=_FakeRequest(),
         placement="LEFT_MENU",
         auth_id="",
         auth='{"user_id": 7}',
@@ -45,6 +53,7 @@ async def test_chats_placement_post_dev(monkeypatch, static_dir):
 async def test_chats_placement_post_wrong_code(static_dir, monkeypatch):
     monkeypatch.setattr(placement_routes, "get_settings", lambda: _FakeSettings(static_dir))
     resp = await placement_routes.placement_chats_post(
+        request=_FakeRequest(),
         placement="CRM_DEAL_DETAIL_TAB",
         auth_id="",
         auth="{}",
@@ -63,6 +72,7 @@ async def test_chats_placement_post_prod_invalid_token(monkeypatch, static_dir):
 
     monkeypatch.setattr(placement_routes, "_user_id_from_token", _none)
     resp = await placement_routes.placement_chats_post(
+        request=_FakeRequest(),
         placement="LEFT_MENU",
         auth_id="bad-token",
         auth="",

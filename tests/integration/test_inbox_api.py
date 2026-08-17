@@ -264,18 +264,26 @@ async def inbox_app():
     await engine.dispose()
 
 
+def _all(page: dict) -> dict[int, dict]:
+    """Обе секции ответа в один map по id (counters/поля едины)."""
+    return {d["id"]: d for d in [*page["unanswered"], *page["dialogs"]]}
+
+
 def test_manager_inbox_lists_only_own_dialogs(inbox_app):
     client, state, _ = inbox_app
     state["manager_id"] = 1
     r = client.get("/api/inbox/dialogs")
     assert r.status_code == 200
-    data = r.json()
-    # Только диалоги Ивана (22 и 20), сортировка last_msg_at DESC.
-    assert [d["id"] for d in data] == [22, 20]
-    for d in data:
+    page = r.json()
+    # Только диалоги Ивана. D20 (входящее без ответа) — в секции
+    # неотвеченных; «Диалоги» — отвечавшие по свежести (D22).
+    assert [d["id"] for d in page["unanswered"]] == [20]
+    assert [d["id"] for d in page["dialogs"]] == [22]
+    assert page["has_more"] is False
+    for d in [*page["unanswered"], *page["dialogs"]]:
         assert d["is_mine"] is True
         assert d["assigned_manager_name"] is None
-    by_id = {d["id"]: d for d in data}
+    by_id = _all(page)
     assert by_id[22]["contact_name"] == "Тимофей"
     assert by_id[22]["unanswered_count"] == 0
     assert by_id[22]["unread_count"] == 1
@@ -286,8 +294,7 @@ def test_manager_inbox_lists_only_own_dialogs(inbox_app):
 def test_inbox_last_message_preview_and_deal_url(inbox_app):
     client, state, _ = inbox_app
     state["manager_id"] = 1
-    data = client.get("/api/inbox/dialogs").json()
-    by_id = {d["id"]: d for d in data}
+    by_id = _all(client.get("/api/inbox/dialogs").json())
     assert by_id[20]["last_message_direction"] == "in"
     assert by_id[20]["last_message_text"] == "Ещё вопрос"
     assert by_id[22]["last_message_direction"] == "out"
@@ -302,14 +309,16 @@ def test_supervisor_inbox_lists_all_with_owner_names(inbox_app):
     state["manager_id"] = 3
     r = client.get("/api/inbox/dialogs")
     assert r.status_code == 200
-    data = r.json()
-    # Все 4 диалога, NULLS LAST для диалога без сообщений.
-    assert [d["id"] for d in data] == [22, 21, 20, 23]
-    by_id = {d["id"]: d for d in data}
+    page = r.json()
+    # Неотвеченные: кто дольше ждёт — выше (D20 в 10:03 старее D21 в 10:04).
+    # «Диалоги»: по свежести, NULLS LAST для диалога без сообщений (D23).
+    assert [d["id"] for d in page["unanswered"]] == [20, 21]
+    assert [d["id"] for d in page["dialogs"]] == [22, 23]
+    by_id = _all(page)
     assert by_id[20]["assigned_manager_name"] == "Иван"
     assert by_id[21]["assigned_manager_name"] == "Ольга"
     assert by_id[23]["assigned_manager_name"] is None
-    assert all(d["is_mine"] is False for d in data)
+    assert all(d["is_mine"] is False for d in _all(page).values())
     # Неназначенный диалог без сообщений: нулевые счётчики, нет превью.
     assert by_id[23]["unanswered_count"] == 0
     assert by_id[23]["unread_count"] == 0
@@ -321,7 +330,10 @@ def test_inbox_messenger_filter(inbox_app):
     state["manager_id"] = 1
     r = client.get("/api/inbox/dialogs", params={"messenger": "tg"})
     assert r.status_code == 200
-    assert [d["id"] for d in r.json()] == [20]
+    page = r.json()
+    # Единственный tg-диалог Ивана — неотвеченный D20.
+    assert [d["id"] for d in page["unanswered"]] == [20]
+    assert page["dialogs"] == []
     r2 = client.get("/api/inbox/dialogs", params={"messenger": "foo"})
     assert r2.status_code == 422
 
@@ -337,8 +349,7 @@ def test_read_marks_dialog_read_and_zeroes_unread(inbox_app):
     assert r2.status_code == 200
     assert r2.json()["last_read_msg_id"] == 3
     # Непрочитанные погашены, неотвеченные остались (ответа всё ещё нет).
-    data = client.get("/api/inbox/dialogs").json()
-    by_id = {d["id"]: d for d in data}
+    by_id = _all(client.get("/api/inbox/dialogs").json())
     assert by_id[20]["unread_count"] == 0
     assert by_id[20]["unanswered_count"] == 1
 
@@ -350,8 +361,7 @@ def test_read_supervisor_foreign_403_and_owner_untouched(inbox_app):
     assert r.status_code == 403
     # Курсор Ольги не тронут: непрочитанные на месте.
     state["manager_id"] = 2
-    data = client.get("/api/inbox/dialogs").json()
-    by_id = {d["id"]: d for d in data}
+    by_id = _all(client.get("/api/inbox/dialogs").json())
     assert by_id[21]["unread_count"] == 1
 
 
