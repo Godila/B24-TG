@@ -15,6 +15,13 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
+    # httpx на INFO печатает полный URL каждого запроса — включая B24
+    # OAuth (client_secret, refresh_token в query) и access_token в
+    # REST-вызовах. Секретам не место в логах: глушим до WARNING
+    # (ошибки сети/протокола остаются видны). httpcore — транспорт под
+    # ним, страдает тем же.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     mode = sys.argv[1] if len(sys.argv) > 1 else "web"
 
     if mode == "web":
