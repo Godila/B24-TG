@@ -430,6 +430,15 @@ class MaxUserProvider(MessengerProvider):
             return
         parsed = parse_message_push(frame, self._own_user_id)
         if parsed.skip_reason is not None:
+            if parsed.skip_reason == "activity":
+                # Форензика дискавери read-квитанций: op 129 описан как
+                # typing/просмотр, но карта опкодов неполна — тело может
+                # нести и read-курсор. Лог до выяснения семантики.
+                logger.info(
+                    "MAX activity payload=%s",
+                    json.dumps(frame.get("payload"), ensure_ascii=False, default=str)[:300],
+                )
+                return
             if parsed.skip_reason.startswith("op_"):
                 # Форензика неизвестных опкодов: протокол реверснут
                 # комьюнити, полная карта server→client неизвестна (в проде
