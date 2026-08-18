@@ -16,6 +16,7 @@ LOGIN одним токеном за короткое время сбрасыв�
 
 import asyncio
 import itertools
+import json
 import logging
 import time
 from collections.abc import AsyncIterator
@@ -429,6 +430,17 @@ class MaxUserProvider(MessengerProvider):
             return
         parsed = parse_message_push(frame, self._own_user_id)
         if parsed.skip_reason is not None:
+            if parsed.skip_reason.startswith("op_"):
+                # Форензика неизвестных опкодов: протокол реверснут
+                # комьюнити, полная карта server→client неизвестна (в проде
+                # ловили op_130 — похоже на «прочитано»). Тело пуша решает,
+                # что это; без него скип нем.
+                logger.info(
+                    "MAX push неизвестный op=%s payload=%s",
+                    frame.get("opcode"),
+                    json.dumps(frame.get("payload"), ensure_ascii=False, default=str)[:600],
+                )
+                return
             if parsed.skip_reason != "activity":
                 logger.info("MAX push пропущен: %s", parsed.skip_reason)
             return
