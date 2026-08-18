@@ -15,9 +15,11 @@ push op=128 (обновление чата) приходит в ДВУХ фор�
 Во второй форме НЕТ chat.type — фильтр групповых чатов для неё делает
 провайдер через CHAT_INFO по незнакомому chatId (см. provider.py).
 
-Фильтры v1: только личные диалоги, только чужие сообщения (sender !=
-own_user_id — свой MSG_SEND тоже прилетает chat-update), Избранное
-(chatId == 0) и служебные типы сообщений скипаются.
+Фильтры v2: только личные диалоги, Избранное (chatId == 0) и служебные
+типы сообщений скипаются. Собственные сообщения (sender == own_user_id)
+больше НЕ скипаются — помечаются ``self_message``: провайдер отличает эхо
+наших MSG_SEND (эхо-сет недавних отправок) от реального сообщения с
+устройства менеджера (device-outbound инжест).
 """
 
 from dataclasses import dataclass, field
@@ -199,9 +201,13 @@ class ParsedPush:
     #: (payload.message) тип чата неизвестен — провайдер проверит его
     #: через CHAT_INFO по незнакомому chatId.
     chat_type_known: bool = False
-    #: None = сообщение; иначе причина скипа ('favorites'|'group'|'self'|
+    #: None = сообщение; иначе причина скипа ('favorites'|'group'|
     #: 'service'|'empty') — провайдер логирует и не кладёт в очередь.
     skip_reason: str | None = "empty"
+    #: True = отправитель сам владелец аккаунта (self-пуш). Провайдер решает:
+    #: id в эхо-сете недавних отправок → эхо нашего MSG_SEND (скип), иначе →
+    #: сообщение с устройства (device-outbound инжест).
+    self_message: bool = False
 
 
 def _content_type_and_text(
@@ -264,8 +270,9 @@ def parse_message_push(frame: dict, own_user_id: int | None) -> ParsedPush:
         result.skip_reason = "no_sender"
         return result
     if own_user_id is not None and sender == str(own_user_id):
-        result.skip_reason = "self"
-        return result
+        # Собственное сообщение: эхо нашего MSG_SEND или отправка с устройства
+        # менеджера — решает провайдер (эхо-сет), здесь только помечаем.
+        result.self_message = True
 
     msg_type = str(msg.get("type") or "USER").upper()
     if msg_type not in ("USER", ""):

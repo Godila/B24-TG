@@ -109,6 +109,28 @@ async def test_inbound_failure_reschedules_with_backoff():
 
 
 @pytest.mark.asyncio
+async def test_retry_failure_logs_warning(caplog):
+    """Инцидент 2026-08-17 (LAST_NAME=null): сбои были тихи в логах — теперь
+    каждая ретраибельная попытка пишет WARNING (видно без залезания в БД)."""
+    import logging
+
+    repo = _make_repo([_make_item()], _make_data())
+    sync = AsyncMock()
+    sync.process_inbound = AsyncMock(side_effect=RuntimeError("b24 down"))
+
+    worker = CrmSyncWorker(repo=repo, b24sync=sync, max_attempts=5)
+    with caplog.at_level(logging.WARNING, logger="app.bridge.crm_sync_worker"):
+        await worker._process_once()
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert "attempt 1/5" in message
+    assert "retry" in message and "30" in message
+    assert "b24 down" in message
+
+
+@pytest.mark.asyncio
 async def test_inbound_failure_exponential_backoff():
     repo = _make_repo([_make_item(attempts=2)], _make_data())
     sync = AsyncMock()

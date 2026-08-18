@@ -44,9 +44,10 @@ async def test_send_message_floodwait():
     assert result.retry_after_seconds == 42
 
 
-def test_connect_registers_newmessage_incoming_builder():
-    """connect() обязан регистрировать events.NewMessage(incoming=True):
-    без builder Telethon передаёт сырые Update — inbound мёртв (баг)."""
+def test_connect_registers_both_direction_builders():
+    """connect() обязан регистрировать builders Telethon: без builder Telethon
+    передаёт сырые Update — inbound мёртв (баг). Второй — outgoing=True:
+    device-outbound (сообщения менеджера с телефона)."""
     with patch("app.messaging.telegram.provider.TelegramClient") as mock_tl:
         client_inst = AsyncMock()
         client_inst.is_user_authorized = AsyncMock(return_value=True)
@@ -57,12 +58,18 @@ def test_connect_registers_newmessage_incoming_builder():
         provider = TelegramProvider(api_id=1, api_hash="x", sessions_dir="/tmp")
         asyncio.run(provider.connect())
 
-        client_inst.add_event_handler.assert_called_once()
-        handler_arg, builder_arg = client_inst.add_event_handler.call_args[0]
-        assert handler_arg == provider._on_new_message
-        assert isinstance(builder_arg, events.NewMessage)
-        # incoming=True: исходящие (свои) сообщения фильтруются.
-        assert builder_arg.incoming is True
+        assert client_inst.add_event_handler.call_count == 2
+        registrations = {}
+        for call in client_inst.add_event_handler.call_args_list:
+            handler_arg, builder_arg = call[0]
+            assert isinstance(builder_arg, events.NewMessage)
+            registrations[handler_arg] = builder_arg
+        # Горячий inbound-путь не изменился.
+        inbound_builder = registrations[provider._on_new_message]
+        assert inbound_builder.incoming is True
+        # Новая подписка: исходящие с других устройств аккаунта.
+        outgoing_builder = registrations[provider._on_device_outbound]
+        assert outgoing_builder.outgoing is True
 
 
 def test_on_new_message_builds_incoming_message():
@@ -112,6 +119,76 @@ def test_on_new_message_group_chat_skipped():
 
     asyncio.run(provider._on_new_message(event))
     assert provider._incoming_queue.empty()
+
+
+def test_on_device_outbound_builds_outbound_message():
+    """Исходящее с телефона менеджера → IncomingMessage(direction=outbound).
+
+    get_sender не зовётся (отправитель — сам менеджер, контактные поля
+    пусты: обработчик берёт клиента из существующего диалога)."""
+    from app.messaging.telegram.provider import TelegramProvider
+    from app.models import MessageDirection
+
+    provider = TelegramProvider(api_id=1, api_hash="x", sessions_dir="/tmp")
+
+    event = SimpleNamespace(
+        chat_id=4242,  # id клиента в приватном чате
+        sender_id=999,  # сам менеджер
+        is_private=True,
+        is_reply=False,
+        message=SimpleNamespace(message="написал с телефона", id=780, date=None),
+        get_sender=AsyncMock(side_effect=AssertionError("get_sender не нужен")),
+    )
+
+    asyncio.run(provider._on_device_outbound(event))
+    msg = asyncio.run(provider._incoming_queue.get())
+    assert msg.direction == MessageDirection.outbound
+    assert msg.external_chat_id == "4242"
+    assert msg.external_message_id == "780"
+    assert msg.text == "написал с телефона"
+    assert msg.sender_external_id == "999"
+    assert msg.sender_name is None and msg.sender_phone is None
+
+
+def test_on_device_outbound_group_skipped():
+    """Исходящие в группы/каналы не инжестятся (гард работает в оба направления)."""
+    from app.messaging.telegram.provider import TelegramProvider
+
+    provider = TelegramProvider(api_id=1, api_hash="x", sessions_dir="/tmp")
+
+    event = SimpleNamespace(
+        chat_id=-1001234567890,
+        sender_id=999,
+        is_private=False,
+        is_reply=False,
+        message=SimpleNamespace(message="в группу с телефона", id=781, date=None),
+    )
+
+    asyncio.run(provider._on_device_outbound(event))
+    assert provider._incoming_queue.empty()
+
+
+def test_on_device_outbound_saved_messages_skipped_by_dialog_rule():
+    """Saved Messages (чат с самим собой): диалога с собственным id не бывает
+    — IncomingHandler скипнет по правилу «только существующие диалоги».
+    Провайдер проходит сообщение дальше (без собственного гарда/get_me)."""
+    from app.messaging.telegram.provider import TelegramProvider
+    from app.models import MessageDirection
+
+    provider = TelegramProvider(api_id=1, api_hash="x", sessions_dir="/tmp")
+
+    event = SimpleNamespace(
+        chat_id=999,  # == sender_id: сам себе
+        sender_id=999,
+        is_private=True,
+        is_reply=False,
+        message=SimpleNamespace(message="заметка себе", id=782, date=None),
+    )
+
+    asyncio.run(provider._on_device_outbound(event))
+    msg = asyncio.run(provider._incoming_queue.get())
+    assert msg.direction == MessageDirection.outbound
+    assert msg.external_chat_id == "999"
 
 
 def _tg_message(text, media):
@@ -328,6 +405,36 @@ async def test_download_media_saves_and_returns_payload(tmp_path):
     assert payload.mime_type == "image/jpeg"
     assert payload.size == 8
     assert MediaStorage(tmp_path).abs_path(payload.path).read_bytes() == b"JPEGDATA"
+
+
+@pytest.mark.asyncio
+async def test_download_media_outbound_direction_uses_out_dir(tmp_path):
+    """Медиа device-outbound сообщений менеджера пишется в out/ тома
+    (семантически исходящее, не «скачанный входящий»)."""
+    from pathlib import Path
+
+    from telethon.tl import types as tl
+
+    from app.media.storage import MediaStorage
+    from app.messaging.telegram.provider import TelegramProvider
+
+    provider = TelegramProvider(
+        api_id=1,
+        api_hash="x",
+        sessions_dir="/tmp",
+        media_storage=MediaStorage(tmp_path, max_size_bytes=1000),
+    )
+
+    async def fake_download(message, file=None):
+        Path(file).write_bytes(b"JPEGDATA")
+        return file
+
+    provider._client = SimpleNamespace(download_media=fake_download)  # type: ignore
+    payload = await provider._download_media(
+        SimpleNamespace(media=tl.MessageMediaPhoto(photo=None)), direction="out"
+    )
+    assert payload is not None
+    assert payload.path.startswith("out/")
 
 
 @pytest.mark.asyncio

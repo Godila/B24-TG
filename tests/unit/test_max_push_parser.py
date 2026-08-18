@@ -44,6 +44,7 @@ def _chat_payload(
 def test_real_caught_frame_parses():
     parsed = parse_message_push(_frame(_chat_payload()), own_user_id=401041669)
     assert parsed.skip_reason is None
+    assert parsed.self_message is False
     assert parsed.external_chat_id == "422733600"
     assert parsed.sender_external_id == "248843813"
     assert parsed.external_message_id == "117099261900910729"
@@ -53,9 +54,48 @@ def test_real_caught_frame_parses():
     assert parsed.is_reply is False
 
 
-def test_self_message_skipped():
+def test_self_message_marked_not_skipped():
+    """Self-пуш больше не скип: эхо/устройство решает провайдер (эхо-сет)."""
     parsed = parse_message_push(_frame(_chat_payload()), own_user_id=248843813)
-    assert parsed.skip_reason == "self"
+    assert parsed.skip_reason is None
+    assert parsed.self_message is True
+    # Поля распарсены полностью — нужны device-outbound инжесту.
+    assert parsed.external_message_id == "117099261900910729"
+    assert parsed.text == "Геор"
+    assert parsed.timestamp is not None
+
+
+def test_self_in_group_skipped_by_group_gate():
+    """Групп-гейт парсера стоит ВЫШЕ self-метки: self-пуш из группы скипается."""
+    parsed = parse_message_push(_frame(_chat_payload(chat_type="GROUP")), own_user_id=248843813)
+    assert parsed.skip_reason == "group_group"
+    assert parsed.self_message is False
+
+
+def test_self_light_push_marked():
+    """Лёгкая форма self-пуша (payload.message) — тоже помечается."""
+    payload = {
+        "chatId": 53007183,
+        "unread": 0,
+        "message": {
+            "sender": 401041669,
+            "id": "117106696678555000",
+            "time": 1786906382424,
+            "text": "написал с телефона",
+            "type": "USER",
+            "attaches": [],
+        },
+    }
+    parsed = parse_message_push(_frame(payload), own_user_id=401041669)
+    assert parsed.skip_reason is None
+    assert parsed.self_message is True
+    assert parsed.chat_type_known is False
+
+
+def test_self_service_message_still_skipped():
+    """Служебные типы (SERVICE) скипаются и для своих сообщений."""
+    parsed = parse_message_push(_frame(_chat_payload(msg_type="SERVICE")), own_user_id=248843813)
+    assert parsed.skip_reason == "service_service"
 
 
 def test_group_chat_skipped():
@@ -229,8 +269,14 @@ def test_attach_type_variant_and_url():
 def test_attach_tolerant_field_names():
     payload = _chat_payload(
         text="",
-        attaches=[{"type": "IMAGE", "filename": "shot.PNG", "fileSize": "123",
-                   "mimeType": "image/png; charset=binary"}],
+        attaches=[
+            {
+                "type": "IMAGE",
+                "filename": "shot.PNG",
+                "fileSize": "123",
+                "mimeType": "image/png; charset=binary",
+            }
+        ],
     )
     parsed = parse_message_push(_frame(payload), own_user_id=1)
     attach = parsed.attach
@@ -281,9 +327,7 @@ def test_attach_inline_keyboard_is_file():
 
 def test_attach_broken_element_still_placeholder():
     """Битой элемент attaches (не dict) — файл-плейсхолдер, как раньше."""
-    parsed = parse_message_push(
-        _frame(_chat_payload(text="", attaches=["мусор"])), own_user_id=1
-    )
+    parsed = parse_message_push(_frame(_chat_payload(text="", attaches=["мусор"])), own_user_id=1)
     assert parsed.content_type.value == "file"
     assert parsed.text == "[файл]"
     assert parsed.attach is not None and parsed.attach.kind == "FILE"

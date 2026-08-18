@@ -200,7 +200,11 @@ async def test_push_becomes_incoming_message():
 
 
 @pytest.mark.asyncio
-async def test_self_push_filtered():
+async def test_self_push_unregistered_becomes_device_outbound():
+    """Self-пуш с id НЕ из эхо-сета = сообщение менеджера с устройства.
+
+    GET_CONTACTS о себе не зовётся (контактные поля пусты — клиент берётся
+    из существующего диалога). Grace-пауза эхо-проверки учитывается таймаутом."""
     fake = FakeMaxClient()
     provider = _make_provider(fake)
     await provider.connect()
@@ -208,13 +212,14 @@ async def test_self_push_filtered():
         frame = {
             "opcode": 128,
             "payload": {
-                "chatId": 1,
+                "chatId": 422733600,
                 "chat": {
                     "type": "DIALOG",
                     "lastMessage": {
                         "sender": 401041669,
                         "id": "m2",
-                        "text": "мой эхо",
+                        "time": 1786792936720,
+                        "text": "написал с телефона",
                         "type": "USER",
                         "attaches": [],
                     },
@@ -222,6 +227,103 @@ async def test_self_push_filtered():
             },
         }
         await fake._on_push(frame)
+        msg = await asyncio.wait_for(provider._incoming_queue.get(), timeout=2)
+        from app.models import MessageDirection
+
+        assert msg.direction == MessageDirection.outbound
+        assert msg.external_chat_id == "422733600"
+        assert msg.external_message_id == "m2"
+        assert msg.text == "написал с телефона"
+        assert msg.sender_name is None and msg.sender_phone is None
+        # Обогащение о себе не выполнялось.
+        ops = [op for op, _ in fake.requests]
+        assert OP_GET_CONTACTS not in ops
+    finally:
+        await provider.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_echo_self_push_skipped_after_send():
+    """Self-пуш с id из ACK нашей отправки = эхо MSG_SEND → скип.
+
+    Строкой владеет outbox (mark_sent уже записал external_message_id)."""
+    fake = FakeMaxClient()
+    provider = _make_provider(fake)
+    await provider.connect()
+    try:
+        result = await provider.send_message("422733600", "виджет", is_initiation=False)
+        assert result.success
+        echo_frame = {
+            "opcode": 128,
+            "payload": {
+                "chatId": 422733600,
+                "chat": {
+                    "type": "DIALOG",
+                    "lastMessage": {
+                        # id из ACK FakeMaxClient — в пуше строкой.
+                        "sender": 401041669,
+                        "id": result.external_message_id,
+                        "text": "виджет",
+                        "type": "USER",
+                        "attaches": [],
+                    },
+                },
+            },
+        }
+        await fake._on_push(echo_frame)
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(provider._incoming_queue.get(), timeout=0.2)
+        assert provider._incoming_queue.empty()
+    finally:
+        await provider.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_light_self_push_group_filtered_by_chat_info():
+    """Лёгкий self-пуш из группы: CHAT_INFO-гейт стоит выше self-ветки."""
+    fake = FakeMaxClient(
+        scripted={
+            OP_CHAT_INFO: {"chat": {"type": "GROUP", "id": 77}},
+        }
+    )
+    provider = _make_provider(fake)
+    await provider.connect()
+    try:
+        await fake._on_push(_light_push(77, 401041669, "m12", "в группу с телефона"))
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(provider._incoming_queue.get(), timeout=0.1)
+        assert provider._incoming_queue.empty()
+    finally:
+        await provider.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_self_push_without_id_skipped():
+    """Self-пуш без message id: ни эхо-сет, ни БД-дедуп не работают —
+    инжест дал бы неограниченные дубли на повторных доставках. Скип."""
+    fake = FakeMaxClient()
+    provider = _make_provider(fake)
+    await provider.connect()
+    try:
+        frame = {
+            "opcode": 128,
+            "payload": {
+                "chatId": 422733600,
+                "chat": {
+                    "type": "DIALOG",
+                    "lastMessage": {
+                        "sender": 401041669,
+                        "time": 1786792936720,
+                        "text": "без id",
+                        "type": "USER",
+                        "attaches": [],
+                    },
+                },
+            },
+        }
+        await fake._on_push(frame)
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(provider._incoming_queue.get(), timeout=0.1)
         assert provider._incoming_queue.empty()
     finally:
         await provider.disconnect()
@@ -420,6 +522,28 @@ async def test_send_media_photo_happy_path(tmp_path):
         assert op == OP_MSG_SEND
         assert payload["message"]["text"] == "смотри"
         assert payload["message"]["attaches"] == [{"_type": "PHOTO", "photoToken": "tok1"}]
+        # Эхо отправки (self-пуш с id из ACK) не инжестится — send_media
+        # регистрирует id тем же путём, что send_message.
+        echo_frame = {
+            "opcode": 128,
+            "payload": {
+                "chatId": 422733600,
+                "chat": {
+                    "type": "DIALOG",
+                    "lastMessage": {
+                        "sender": 401041669,
+                        "id": result.external_message_id,
+                        "text": "смотри",
+                        "type": "USER",
+                        "attaches": [],
+                    },
+                },
+            },
+        }
+        await fake._on_push(echo_frame)
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(provider._incoming_queue.get(), timeout=0.2)
+        assert provider._incoming_queue.empty()
     finally:
         await provider.disconnect()
 
@@ -434,9 +558,7 @@ async def test_send_media_file_waits_136(tmp_path):
     def handler(request: httpx.Request) -> httpx.Response:
         # 136 инжектится сразу после POST — регистрация до POST переживает гонку.
         assert provider is not None
-        asyncio.get_event_loop().call_soon(
-            lambda: provider._waiter.feed({"fileId": 55})
-        )
+        asyncio.get_event_loop().call_soon(lambda: provider._waiter.feed({"fileId": 55}))
         return httpx.Response(200, json={})
 
     provider, _ = _make_media_provider(fake, tmp_path, handler)

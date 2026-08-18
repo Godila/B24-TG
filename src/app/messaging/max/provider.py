@@ -48,7 +48,7 @@ from app.messaging.max.push_parser import (
 from app.messaging.max.ws_client import MaxWsClient
 from app.messaging.provider import MessengerProvider
 from app.messaging.types import ContentType, IncomingMessage, MediaPayload, SendResult
-from app.models import Messenger
+from app.models import MessageDirection, Messenger
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,16 @@ _UPLOAD_KINDS = {
     ContentType.video: UPLOAD_KIND_VIDEO,
     ContentType.file: UPLOAD_KIND_FILE,
 }
+
+#: Эхо-сет: сколько последних id наших отправок помнить. Self-пуш с id из
+#: сета = эхо нашего MSG_SEND (строкой владеет outbox), иначе = сообщение
+#: с устройства менеджера (device-outbound инжест).
+_ECHO_MAX_IDS = 512
+
+#: Grace-пауза перед повторной проверкой эха: сервер мог прислать self-пуш
+#: РАНЬШЕ ACK-ответа на MSG_SEND — за это время continuation отправки
+#: успеет зарегистрировать id в сете.
+_ECHO_GRACE_SEC = 0.5
 
 
 class MaxUserProvider(MessengerProvider):
@@ -117,6 +127,8 @@ class MaxUserProvider(MessengerProvider):
         # Кэши обогащения: chatId → диалог ли; userId → (имя, телефон).
         self._chat_is_dialog_cache: dict[str, bool] = {}
         self._sender_cache: dict[int, tuple[str | None, str | None, str | None, str | None]] = {}
+        # Эхо-сет недавних отправок: dict как insertion-ordered bounded set.
+        self._recent_send_ids: dict[str, None] = {}
         # Один seam на все случаи (первое подключение И реконнекты) —
         # тесты подменяют фабрику целиком, реальной сети в юнит-тестах нет.
         self._client_factory = client_factory or (
@@ -289,16 +301,31 @@ class MaxUserProvider(MessengerProvider):
             msg_send_payload(chat_id, caption or "", self._next_cid(), attaches),
         )
 
-    @staticmethod
-    def _send_result(resp: dict) -> SendResult:
+    def _send_result(self, resp: dict) -> SendResult:
         msg = (resp.get("payload") or {}).get("message") or {}
         mid = msg.get("id")
         # id приходит ЧИСЛОМ (хотя в push'ах — строкой): храним как str;
         # str(None) дал бы литеральную строку "None" — проверяем явно.
-        return SendResult(
-            success=True,
-            external_message_id=str(mid) if mid is not None else None,
-        )
+        external_id = str(mid) if mid is not None else None
+        # Эхо-фильтр: свой MSG_SEND прилетает self-пушем с этим же id.
+        # Регистрируем СИНХРОННО, до возврата SendResult — call_soon FIFO
+        # гарантирует, что continuation отправки выполнится раньше push-воркера
+        # (обратный порядок кадров закрывает grace в _process_self_push).
+        if external_id is not None:
+            self._remember_send(external_id)
+        return SendResult(success=True, external_message_id=external_id)
+
+    def _remember_send(self, external_id: str) -> None:
+        """Запомнить id нашей отправки (эхо-сет, bounded).
+
+        In-memory по построению: рестарт bridge теряет сет, но переживший
+        рестарт outbox уже закоммитил external_message_id в Message-строку —
+        эхо ловит БД-дедуп IncomingHandler (dialog_id, external_message_id).
+        """
+        self._recent_send_ids.pop(external_id, None)
+        self._recent_send_ids[external_id] = None
+        while len(self._recent_send_ids) > _ECHO_MAX_IDS:
+            del self._recent_send_ids[next(iter(self._recent_send_ids))]
 
     def _send_exc_result(self, exc: Exception) -> SendResult:
         """Общий маппер ошибок отправки (текст и медиа)."""
@@ -349,6 +376,10 @@ class MaxUserProvider(MessengerProvider):
             timeout=self._request_timeout,
         )
         await self._client.request(OP_LOGIN, login_payload(self._token), timeout=20.0)
+        if self._own_user_id is None:
+            # Self-детекция парсера молча выключена: все self-пуши (включая
+            # эхо виджетных отправок) пойдут как входящие клиента.
+            logger.warning("MAX own_user_id неизвестен — self-фильтр выключен")
         logger.info(
             "MAX online: device=%s… user_id=%s",
             self._device_id[:8],
@@ -420,6 +451,9 @@ class MaxUserProvider(MessengerProvider):
             # Лёгкий пуш без chat.type; CHAT_INFO сказал «не DIALOG» (группа).
             logger.info("MAX push пропущен: group_chat_info chat=%s", chat_id)
             return
+        if parsed.self_message:
+            await self._process_self_push(parsed, chat_id)
+            return
         name, phone, first_name, last_name = await self._resolve_sender(
             parsed.sender_external_id or ""
         )
@@ -443,7 +477,56 @@ class MaxUserProvider(MessengerProvider):
             )
         )
 
-    async def _download_media(self, parsed, chat_id: str) -> MediaPayload | None:
+    async def _process_self_push(self, parsed, chat_id: str) -> None:
+        """Self-пуш: эхо нашей отправки ИЛИ сообщение менеджера с устройства.
+
+        Эхо → скип (Message-строкой владеет outbox). Устройство →
+        IncomingMessage(direction=outbound): sender-поля не заполняем —
+        контакт клиента берётся из существующего диалога (GET_CONTACTS о
+        себе не нужен). Медиа качаем тем же eager-путём, что входящие
+        (инвариант «сбой медиа ≠ потеря текста» действует и здесь), но в
+        папку out/ тома.
+        """
+        mid = parsed.external_message_id
+        if mid is None:
+            # Без id невозможно ни отличить эхо (эхо-сет), ни дедуплить
+            # повторную доставку (БД-ключ). Скип с шумом: живые кадры id
+            # несут всегда — тонущий пуш означает дрейф протокола.
+            logger.warning("MAX self-push без message id (chat=%s) — скип", chat_id)
+            return
+        if mid in self._recent_send_ids:
+            logger.debug("MAX self-push эхо нашей отправки (mid=%s) — скип", mid)
+            return
+        # Пуш мог обогнать ACK-ответ — даём отправке шанс зарегистрировать
+        # id (см. _ECHO_GRACE_SEC). Пауза только на self-пушах.
+        await asyncio.sleep(_ECHO_GRACE_SEC)
+        if mid in self._recent_send_ids:
+            logger.debug("MAX self-push эхо после grace (mid=%s) — скип", mid)
+            return
+        media = await self._download_media(parsed, chat_id, direction="out")
+        await self._incoming_queue.put(
+            IncomingMessage(
+                messenger=Messenger.max,
+                external_chat_id=chat_id,
+                sender_external_id=parsed.sender_external_id or "",
+                sender_name=None,
+                sender_phone=None,
+                sender_username=None,
+                sender_first_name=None,
+                sender_last_name=None,
+                content_type=parsed.content_type,
+                text=parsed.text,
+                external_message_id=parsed.external_message_id,
+                timestamp=parsed.timestamp,
+                is_reply=parsed.is_reply,
+                media=media,
+                direction=MessageDirection.outbound,
+            )
+        )
+
+    async def _download_media(
+        self, parsed, chat_id: str, *, direction: str = "in"
+    ) -> MediaPayload | None:
         """Скачать вложение входящего (eager, как у TG).
 
         Сбой/таймаут → None: в тексте уже стоит плейсхолдер от парсера,
@@ -458,6 +541,7 @@ class MaxUserProvider(MessengerProvider):
                     parsed.attach,
                     chat_id=numeric,
                     message_id=parsed.external_message_id,
+                    direction=direction,
                 ),
                 timeout=self._media_download_timeout,
             )

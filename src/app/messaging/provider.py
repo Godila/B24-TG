@@ -41,8 +41,10 @@ class MessengerProvider(ABC):
     def incoming_stream(self) -> AsyncIterator[IncomingMessage]:
         """Асинхронный поток входящих сообщений.
 
-        Реализации Telethon-типа держат соединение сами (реконнект внутри
-        провайдера); поток живёт, пока не вызван disconnect().
+        Несёт и device-outbound (``direction=outbound``): сообщения менеджера,
+        отправленные с устройства, — провайдер уже отделил их от эха
+        собственных отправок. Реализации Telethon-типа держат соединение сами
+        (реконнект внутри провайдера); поток живёт, пока не вызван disconnect().
         """
 
     @abstractmethod

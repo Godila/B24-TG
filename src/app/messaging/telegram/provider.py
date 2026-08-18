@@ -17,7 +17,7 @@ from app.messaging.types import (
     MediaPayload,
     SendResult,
 )
-from app.models import Messenger
+from app.models import MessageDirection, Messenger
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +80,10 @@ class TelegramProvider(MessengerProvider):
         # incoming=True: только входящие. Без builder Telethon отдаёт сырые Update,
         # а без фильтра исходящие сообщения менеджера эхом шли бы как входящие.
         self._client.add_event_handler(self._on_new_message, events.NewMessage(incoming=True))
+        # Исходящие с ДРУГИХ устройств аккаунта (телефон менеджера) —
+        # device-outbound инжест. Эхо наших send_* не приходит вовсе:
+        # Telethon не диспетчит RPC-результаты этой сессии в события.
+        self._client.add_event_handler(self._on_device_outbound, events.NewMessage(outgoing=True))
         logger.info("TelegramProvider connected")
 
     async def disconnect(self) -> None:
@@ -100,17 +104,38 @@ class TelegramProvider(MessengerProvider):
         return bool(self._client and self._client.is_connected())
 
     async def _on_new_message(self, event) -> None:
-        """Handler событий Telethon NewMessage — кладёт в очередь."""
+        """Входящие (клиент → менеджер) — горячий путь, не менялся."""
+        await self._handle_new_message(event, direction=MessageDirection.inbound)
+
+    async def _on_device_outbound(self, event) -> None:
+        """Исходящие с устройства менеджера (не из виджета).
+
+        Сюда доходят только события с других авторизаций аккаунта (телефон).
+        Saved Messages (чат с самим собой) отдельного гарда не требует:
+        диалога с собственным id не существует — IncomingHandler скипнет его
+        по правилу «device-outbound только в существующие диалоги».
+        """
+        await self._handle_new_message(event, direction=MessageDirection.outbound)
+
+    async def _handle_new_message(self, event, *, direction: MessageDirection) -> None:
+        """Общая обработка NewMessage-события обоих направлений."""
         try:
-            # Только приватные диалоги: NewMessage(incoming=True) для
-            # user-аккаунта означает «не моё» — без этого фильтра сообщения
+            # Только приватные диалоги: без этого фильтра сообщения
             # групп/каналов инжестятся как «клиенты» (контакт+сделка в CRM,
-            # ответ менеджера уйдёт в группу). MAX-провайдер фильтрует
+            # ответ менеджера уйдёт в группу). Действует в оба направления
+            # (менеджер может писать и в группы). MAX-провайдер фильтрует
             # аналогично (_chat_is_dialog).
             if not event.is_private:
                 logger.debug("TG: скип группового/канального сообщения chat=%s", event.chat_id)
                 return
-            sender = await event.get_sender()
+            if direction is MessageDirection.outbound:
+                # Отправитель — сам менеджер: контактные поля не значимы,
+                # обработчик берёт клиента из существующего диалога.
+                sender = None
+                sender_external_id = str(event.sender_id or 0)
+            else:
+                sender = await event.get_sender()
+                sender_external_id = str(getattr(sender, "id", 0))
             ctype, text = self._content_type_and_text(event.message)
             media = None
             # Стикеры не качаем: анимированные .tgs/.webp не рендерятся
@@ -120,11 +145,14 @@ class TelegramProvider(MessengerProvider):
                 # и обработкой очередь может подваить, ленивая догрузка
                 # умерла бы. Сбой скачивания ≠ потеря сообщения (None →
                 # плейсхолдер в тексте).
-                media = await self._download_media(event.message)
+                media = await self._download_media(
+                    event.message,
+                    direction="out" if direction is MessageDirection.outbound else "in",
+                )
             msg = IncomingMessage(
                 messenger=Messenger.tg,
                 external_chat_id=str(event.chat_id),
-                sender_external_id=str(getattr(sender, "id", 0)),
+                sender_external_id=sender_external_id,
                 sender_name=self._full_name(sender),
                 sender_phone=getattr(sender, "phone", None),
                 sender_username=getattr(sender, "username", None),
@@ -136,6 +164,7 @@ class TelegramProvider(MessengerProvider):
                 external_message_id=str(event.message.id),
                 timestamp=event.message.date,
                 is_reply=bool(event.is_reply),
+                direction=direction,
             )
             await self._incoming_queue.put(msg)
         except Exception:
@@ -193,9 +222,11 @@ class TelegramProvider(MessengerProvider):
             return mime, getattr(doc, "size", None), file_name
         return None, None, None
 
-    async def _download_media(self, message) -> MediaPayload | None:
+    async def _download_media(self, message, *, direction: str = "in") -> MediaPayload | None:
         """Скачать медиа на общий том; None = не качаем (лимит/сбой).
 
+        ``direction`` — папка тома: "in" (входящие) или "out" (медиа
+        device-outbound сообщений менеджера).
         В БД кладём путь, куда Telethon РЕАЛЬНО записал файл (result):
         при пути без расширения он дописывает своё (webpage-превью → .jpg,
         контакт → .vcard), при коллизии — суффикс « (1)». Запрошенный путь
@@ -213,7 +244,7 @@ class TelegramProvider(MessengerProvider):
         # ломая инвариант «сбой медиа ≠ потеря текста».
         absolute: Path | None = None
         try:
-            absolute, _ = self._media.new_path(direction="in", ext=ext_for(file_name, mime))
+            absolute, _ = self._media.new_path(direction=direction, ext=ext_for(file_name, mime))
             result = await asyncio.wait_for(
                 self._client.download_media(message, file=str(absolute)),
                 timeout=self._media_download_timeout,

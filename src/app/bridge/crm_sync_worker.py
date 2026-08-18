@@ -307,6 +307,18 @@ class CrmSyncWorker:
             await self._repo.mark_failed(item, error)
             return
         delay = 30 * (2**item.attempts)
+        # Инцидент 2026-08-17 (LAST_NAME=null): сбои были тихи в логах —
+        # только last_error в БД; диагностировали по cadence запросов.
+        logger.warning(
+            "crm_sync item %s (kind=%s, message_id=%s) attempt %s/%s failed, retry через %ss: %s",
+            item.id,
+            item.kind,
+            item.message_id,
+            item.attempts + 1,
+            self._max_attempts,
+            delay,
+            error,
+        )
         await self._repo.reschedule(item, delay_seconds=delay, error=error)
 
 

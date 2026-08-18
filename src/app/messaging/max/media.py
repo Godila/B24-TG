@@ -246,7 +246,9 @@ class MaxMediaClient:
         if kind == "PHOTO":
             return [await self._upload_photo(path=path, mime=mime, file_name=file_name)]
         return [
-            await self._upload_slot(chat_id=chat_id, kind=kind, path=path, mime=mime, file_name=file_name)
+            await self._upload_slot(
+                chat_id=chat_id, kind=kind, path=path, mime=mime, file_name=file_name
+            )
         ]
 
     async def _notify_upload(self, chat_id: int, kind: str) -> None:
@@ -272,7 +274,9 @@ class MaxMediaClient:
             raise MaxMediaError(f"photo upload без token: {str(body)[:200]}")
         return photo_attach(token)
 
-    async def _upload_slot(self, *, chat_id: int, kind: str, path: Path, mime: str | None, file_name: str | None) -> dict:
+    async def _upload_slot(
+        self, *, chat_id: int, kind: str, path: Path, mime: str | None, file_name: str | None
+    ) -> dict:
         """Общий пайплайн FILE/VIDEO: slot-запрос → multipart-POST → 136."""
         opcode, make_payload = _SLOT_UPLOADS[kind]
         await self._notify_upload(chat_id, kind)
@@ -324,12 +328,15 @@ class MaxMediaClient:
         *,
         chat_id: int,
         message_id: str | int | None,
+        direction: str = "in",
     ) -> MediaPayload | None:
         """Скачать вложение; None = сбой (остаётся текст-плейсхолдер).
 
         Инварианты — паритет с TelegramProvider._download_media: declared
         размер проверяется до сети, фактический после; путь пишет
         MediaStorage (uuid-имя); любая ошибка → None, сообщение не теряется.
+        ``direction`` — папка тома: "in" (входящие) или "out" (медиа
+        device-outbound сообщений менеджера).
         """
         limit = self._storage.max_size_bytes
         if attach.size is not None and limit is not None and attach.size > limit:
@@ -340,9 +347,7 @@ class MaxMediaClient:
             )
             return None
         try:
-            url = await self._resolve_download_url(
-                attach, chat_id=chat_id, message_id=message_id
-            )
+            url = await self._resolve_download_url(attach, chat_id=chat_id, message_id=message_id)
             if not url:
                 logger.warning(
                     "MAX вложение без URL (kind=%s, keys=%s) — плейсхолдер",
@@ -352,7 +357,7 @@ class MaxMediaClient:
                 return None
             mime = attach.mime or fallback_mime(attach)
             absolute, relative = self._storage.new_path(
-                direction="in", ext=ext_for(attach.file_name, mime)
+                direction=direction, ext=ext_for(attach.file_name, mime)
             )
             try:
                 size, content_type = await self._download_to(url, absolute)
@@ -375,9 +380,7 @@ class MaxMediaClient:
                 absolute.unlink(missing_ok=True)
                 raise
         except Exception:
-            logger.warning(
-                "MAX download вложения не удался (kind=%s)", attach.kind, exc_info=True
-            )
+            logger.warning("MAX download вложения не удался (kind=%s)", attach.kind, exc_info=True)
             return None
 
     async def _resolve_download_url(

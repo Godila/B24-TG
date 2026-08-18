@@ -379,3 +379,160 @@ async def test_media_redelivery_single_attachment(db):
     assert len(await _all_messages(db)) == 1
     assert len(await _all_attachments(db)) == 1
     assert enqueue.await_count == 1
+
+
+# --- Device-outbound: сообщение менеджера, отправленное с устройства --- #
+
+
+async def _seed_dialog_for_manager_1(db):
+    """Контакт + диалог менеджера 1 (клиент 999, чат 111)."""
+    async with db() as s:
+        s.add(Contact(id=10, messenger=Messenger.tg, external_user_id="999", name="Клиент"))
+        s.add(
+            Dialog(
+                id=50,
+                contact_id=10,
+                messenger=Messenger.tg,
+                external_chat_id="111",
+                assigned_user_id=1,
+            )
+        )
+        await s.commit()
+
+
+@pytest.mark.asyncio
+async def test_device_outbound_persisted_in_existing_dialog(db):
+    """Сообщение с телефона → Message(out, sent, author, sent_at=время канала)
+    + crm_sync kind=outbound. Контакт/диалог НЕ создаются (правило
+    «только существующие диалоги»), last_msg_at обновляется."""
+    from datetime import UTC, datetime
+
+    from app.models import MessageDirection, MessageStatus
+
+    await _seed_two_managers(db)
+    await _seed_dialog_for_manager_1(db)
+
+    handler, enqueue = _make_handler(db)
+    ts = datetime(2026, 8, 17, 12, 0, tzinfo=UTC)
+    await handler.handle(
+        _make_msg(
+            direction=MessageDirection.outbound,
+            text="написал с телефона",
+            external_message_id="55",
+            timestamp=ts,
+        ),
+        account=_make_account(manager_id=1),
+    )
+
+    messages = await _all_messages(db)
+    assert len(messages) == 1
+    m = messages[0]
+    assert m.dialog_id == 50
+    assert m.direction == MessageDirection.outbound
+    assert m.status is MessageStatus.sent
+    assert m.author_user_id == 15  # b24_user_id владельца аккаунта
+    assert m.sent_at is not None
+    assert m.text == "написал с телефона"
+    # Диалог переиспользован, контакт не дублировался.
+    dialogs = await _all_dialogs(db)
+    assert len(dialogs) == 1 and dialogs[0].id == 50
+    assert dialogs[0].last_msg_at is not None
+    async with db() as s:
+        contacts = list((await s.execute(select(Contact))).scalars())
+    assert len(contacts) == 1
+    enqueue.assert_awaited_once_with(kind="outbound", message_id=m.id)
+
+
+@pytest.mark.asyncio
+async def test_device_outbound_without_dialog_skipped(db):
+    """Диалога нет (новый клиент / Saved Messages / чужой менеджер) —
+    сообщение не инжестится, CRM-задача не ставится."""
+    from app.models import MessageDirection
+
+    await _seed_two_managers(db)
+    handler, enqueue = _make_handler(db)
+    await handler.handle(
+        _make_msg(direction=MessageDirection.outbound, external_message_id="77"),
+        account=_make_account(manager_id=1),
+    )
+
+    assert await _all_messages(db) == []
+    assert await _all_dialogs(db) == []
+    enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_device_outbound_redelivery_dedup(db):
+    """Дубль доставки device-сообщения → одна строка, одна CRM-задача."""
+    from app.models import MessageDirection
+
+    await _seed_two_managers(db)
+    await _seed_dialog_for_manager_1(db)
+
+    handler, enqueue = _make_handler(db)
+    msg = _make_msg(direction=MessageDirection.outbound, external_message_id="55")
+    await handler.handle(msg, account=_make_account(manager_id=1))
+    await handler.handle(msg, account=_make_account(manager_id=1))
+
+    assert len(await _all_messages(db)) == 1
+    assert enqueue.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_device_outbound_echo_of_widget_row_dedup(db):
+    """Эхо виджетной отправки: outbound-строка с этим external_message_id уже
+    существует (mark_sent) → self-пуш с тем же id не создаёт дубль
+    (дедуп direction-агностичен — вторая линия после эхо-сета провайдера)."""
+    from app.models import MessageDirection, MessageStatus
+
+    await _seed_two_managers(db)
+    await _seed_dialog_for_manager_1(db)
+    async with db() as s:
+        # Виджетная отправка: outbox уже записал id сервера канала.
+        s.add(
+            Message(
+                dialog_id=50,
+                direction=MessageDirection.outbound,
+                external_message_id="55",
+                text="из виджета",
+                status=MessageStatus.sent,
+            )
+        )
+        await s.commit()
+
+    handler, enqueue = _make_handler(db)
+    await handler.handle(
+        _make_msg(direction=MessageDirection.outbound, external_message_id="55"),
+        account=_make_account(manager_id=1),
+    )
+
+    messages = await _all_messages(db)
+    assert len(messages) == 1
+    assert messages[0].text == "из виджета"  # жива исходная строка
+    enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_device_outbound_media_attachment(db):
+    """Медиа с устройства качается провайдером — здесь метаданные в Attachment."""
+    from app.messaging.types import MediaPayload
+    from app.models import MessageDirection
+
+    await _seed_two_managers(db)
+    await _seed_dialog_for_manager_1(db)
+
+    handler, _ = _make_handler(db)
+    await handler.handle(
+        _make_msg(
+            direction=MessageDirection.outbound,
+            content_type=ContentType.photo,
+            text="вот фото",
+            media=MediaPayload(path="out/pic.jpg", mime_type="image/jpeg", size=2048),
+        ),
+        account=_make_account(manager_id=1),
+    )
+
+    attachments = await _all_attachments(db)
+    assert len(attachments) == 1
+    assert attachments[0].file_path == "out/pic.jpg"
+    assert attachments[0].type.value == "photo"

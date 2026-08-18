@@ -2,7 +2,7 @@ import enum
 from dataclasses import dataclass
 from datetime import datetime
 
-from app.models import Messenger
+from app.models import MessageDirection, Messenger
 
 
 class ContentType(str, enum.Enum):
@@ -43,11 +43,17 @@ class MediaPayload:
 
 @dataclass
 class IncomingMessage:
-    """Сообщение, пришедшее из мессенджера (канал-нейтрально).
+    """Сообщение, наблюдаемое из канала (канало-нейтрально).
 
     ``external_*``-поля — строковые внешние id: у TG это числовые id MTProto,
     у MAX — числовые id web-протокола; строка безопасна для обоих (id MAX
     длинные, а Bot API отдаёт строковые mid).
+
+    ``direction=outbound`` — сообщение написано менеджером с устройства
+    (не из виджета): провайдер уже отделил его от эха собственных отправок.
+    ``sender_*`` в этой ветке могут описывать самого владельца аккаунта —
+    IncomingHandler их не использует (контакт берётся из существующего
+    диалога).
     """
 
     messenger: Messenger  # канал, из которого пришло сообщение
@@ -67,6 +73,9 @@ class IncomingMessage:
     # sender_name остаётся полным отображаемым именем (виджет, уведомления).
     sender_first_name: str | None = None
     sender_last_name: str | None = None
+    #: Направление: inbound (по умолчанию — все существующие call-сайты)
+    #: или outbound — написано менеджером с устройства (device-outbound).
+    direction: MessageDirection = MessageDirection.inbound
 
 
 @dataclass
