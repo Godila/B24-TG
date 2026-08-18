@@ -122,8 +122,9 @@ function chatApp() {
     },
 
     /** Инкрементальный poll: новые сообщения (since=lastId) + статусы
-     *  «висящих» исходящих (⏳→✓): poll их не возвращает, а оптимистичный
-     *  пузырь навсегда остался бы с часиками, хотя сервер уже доставил. */
+     *  «висящих» исходящих (⏳→✓ и ✓→✓✓ при прочтении клиентом): poll
+     *  их не возвращает, а оптимистичный пузырь навсегда остался бы с
+     *  часиками, хотя сервер уже доставил. */
     async poll() {
       if (!this.dialog || this.sending) return;
       try {
@@ -155,13 +156,21 @@ function chatApp() {
     },
 
     /** Перечитать хвост истории и обновить статусы уже показанных
-     *  сообщений (pending → sent/error). Новые id не добавляются —
-     *  их приносит poll. */
+     *  сообщений (pending → sent/error; sent/delivered → read ✓✓).
+     *  Новые id не добавляются — их приносит poll. Гард открыт, пока у
+     *  исходящих нет терминального статуса (read/error); direction
+     *  обязателен: inbound-строки живут в delivered вечно. Окно = размер
+     *  отрендеренного списка (cap API 200): sent-сообщение глубже хвоста
+     *  иначе никогда не доживёт до ✓✓ без перезагрузки. */
     async refreshPendingStatuses() {
-      if (!this.messages.some((m) => m.status === "pending")) return;
+      const unfinished = (m) =>
+        m.status === "pending" ||
+        (m.direction === "out" && (m.status === "sent" || m.status === "delivered"));
+      if (!this.dialog || !this.messages.some(unfinished)) return;
       try {
+        const limit = Math.min(200, Math.max(50, this.messages.length));
         const res = await fetch(
-          `/api/dialogs/${this.dialog.id}/messages?limit=50`,
+          `/api/dialogs/${this.dialog.id}/messages?limit=${limit}`,
           { credentials: "same-origin" },
         );
         if (!res.ok) return;

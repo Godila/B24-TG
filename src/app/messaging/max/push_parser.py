@@ -23,6 +23,7 @@ push op=128 (обновление чата) приходит в ДВУХ фор�
 """
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from app.media.storage import normalize_mime, sanitize_file_name
@@ -296,5 +297,54 @@ def parse_message_push(frame: dict, own_user_id: int | None) -> ParsedPush:
     result.attach = attach
     result.is_reply = bool(msg.get("replyTo") or msg.get("replyToId"))
     result.chat_type_known = bool(chat_type)
+    result.skip_reason = None
+    return result
+
+
+@dataclass(slots=True)
+class ParsedReadReceipt:
+    """Разобранный op_130 (NOTIF_MARK): чат прочитан КОНТРАГЕНТОМ.
+
+    skip_reason — причины скипа (штатный трафик, debug-уровень в логах):
+    set_as_unread («пометить непрочитанным»), self_read (менеджер
+    прочитал клиента), own_user_unknown (self неотличим — fail-closed),
+    no_chat_id / no_user_id / empty.
+    """
+
+    external_chat_id: str | None = None
+    read_at: datetime | None = None
+    skip_reason: str | None = "empty"
+
+
+def parse_read_receipt(payload: dict, own_user_id: int | None) -> ParsedReadReceipt:
+    """op_130 {setAsUnread, chatId, userId, mark: ms} → квитанция.
+
+    Доказано живьём 2026-08-18 + комьюнити (PyMax NOTIF_MARK): mark — ВРЕМЯ
+    прочтения (мс-эпоха), не id сообщения; пуш приходит во все сессии
+    аккаунта, включая собственные прочтения менеджера (фильтруем self).
+    Best-effort, не бросает исключений.
+    """
+    result = ParsedReadReceipt()
+    if payload.get("setAsUnread") is True:
+        result.skip_reason = "set_as_unread"
+        return result
+    chat_id = to_int(payload.get("chatId"))
+    if chat_id is None:
+        result.skip_reason = "no_chat_id"
+        return result
+    user_id = to_int(payload.get("userId"))
+    if user_id is None:
+        result.skip_reason = "no_user_id"
+        return result
+    if own_user_id is None:
+        # Self неотличим от контрагента: fail-closed — ложные ✓✓ хуже
+        # их отсутствия (о неизвестном own_user_id warns при коннекте).
+        result.skip_reason = "own_user_unknown"
+        return result
+    if user_id == own_user_id:
+        result.skip_reason = "self_read"
+        return result
+    result.external_chat_id = str(chat_id)
+    result.read_at = ms_to_datetime(payload.get("mark"))
     result.skip_reason = None
     return result

@@ -144,11 +144,31 @@ async def test_forward_incoming_survives_handler_error():
             yield msg2
 
     handler = AsyncMock()
-    handler.handle = AsyncMock(
-        side_effect=[RuntimeError("handler crashed"), None]
-    )
+    handler.handle = AsyncMock(side_effect=[RuntimeError("handler crashed"), None])
     account = MagicMock(id=5)
 
     await forward_incoming(FakeProvider(), account, handler)
 
     assert handler.handle.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_forward_reads_survives_marker_error():
+    """Ошибка ReadMarker для одной квитанции не убивает read-подписку
+    (зеркало test_forward_incoming_survives_handler_error)."""
+
+    from app.bridge.bootstrap import forward_reads
+    from app.messaging.types import ReadReceipt
+
+    class FakeProvider:
+        async def read_receipt_stream(self):
+            yield ReadReceipt(messenger=Messenger.tg, external_chat_id="1")
+            yield ReadReceipt(messenger=Messenger.tg, external_chat_id="2")
+
+    marker = AsyncMock()
+    marker.apply = AsyncMock(side_effect=[RuntimeError("marker crashed"), 1])
+    account = MagicMock(id=5)
+
+    await forward_reads(FakeProvider(), account, marker)
+
+    assert marker.apply.await_count == 2

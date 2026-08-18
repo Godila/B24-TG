@@ -4,7 +4,9 @@
 токен в БД и ставит status=active) bridge подхватывает аккаунт сам, без
 рестарта. Периодический опрос БД:
 
-  * новые active-аккаунты без провайдера → register + forward_incoming;
+  * новые active-аккаунты без провайдера → register + forward (по умолчанию
+    forward_incoming; прод инжектит pump из bootstrap.make_account_pump —
+    incoming + read-квитанции одной таской);
   * пропавшие из active → unregister, НО только «мёртвых»: провайдер в
     offline-статусе с живым реконнект-циклом не трогаем (иначе убили бы
     его самолечение);
@@ -96,7 +98,8 @@ class AccountSyncWorker:
             except Exception as exc:
                 logger.exception(
                     "AccountSync: register failed account_id=%s messenger=%s",
-                    account.id, account.messenger.value,
+                    account.id,
+                    account.messenger.value,
                 )
                 if self._on_register_failure is not None:
                     try:
@@ -132,14 +135,14 @@ class AccountSyncWorker:
                 streak = self._disconnect_streak.get(account_id, 0) + 1
                 if streak >= self._disconnect_grace_ticks:
                     self._disconnect_streak.pop(account_id, None)
-                    await self._unregister(
-                        account_id, reason="provider disconnected (ревайв)"
-                    )
+                    await self._unregister(account_id, reason="provider disconnected (ревайв)")
                 else:
                     self._disconnect_streak[account_id] = streak
                     logger.info(
                         "AccountSync: account_id=%s без соединения (тик %s/%s)",
-                        account_id, streak, self._disconnect_grace_ticks,
+                        account_id,
+                        streak,
+                        self._disconnect_grace_ticks,
                     )
 
         for account_id in sorted(self._sm.registered_ids() - active_ids):
@@ -164,9 +167,7 @@ class AccountSyncWorker:
                 streak = self._disconnect_streak.get(account_id, 0) + 1
                 if streak >= self._disconnect_grace_ticks:
                     self._disconnect_streak.pop(account_id, None)
-                    await self._unregister(
-                        account_id, reason="provider disconnected (ревайв)"
-                    )
+                    await self._unregister(account_id, reason="provider disconnected (ревайв)")
                     continue
                 self._disconnect_streak[account_id] = streak
             logger.info(
@@ -177,15 +178,9 @@ class AccountSyncWorker:
     async def _is_deactivated(self, account_id: int) -> bool:
         async with self._session_factory() as s:
             account = (
-                await s.execute(
-                    select(TgAccount).where(TgAccount.id == account_id)
-                )
+                await s.execute(select(TgAccount).where(TgAccount.id == account_id))
             ).scalar_one_or_none()
-        return (
-            account is not None
-            and account.token is None
-            and account.messenger == Messenger.max
-        )
+        return account is not None and account.token is None and account.messenger == Messenger.max
 
     def _start_forward(self, account_id: int, provider, account) -> None:
         if account_id in self._forward_tasks and not self._forward_tasks[account_id].done():
@@ -211,8 +206,11 @@ class AccountSyncWorker:
 
 
 def make_register_failure_hook(
-    session_factory, notifier, admin_user_id: int,
-    *, transient_alert_repeat_sec: float = 900.0,
+    session_factory,
+    notifier,
+    admin_user_id: int,
+    *,
+    transient_alert_repeat_sec: float = 900.0,
 ) -> RegisterFailureHook:
     """Хук для on_register_failure: status=offline + алерт админу.
 
@@ -240,7 +238,10 @@ def make_register_failure_hook(
         if notifier is None:
             return
         now = time.monotonic()
-        if not terminal and now - last_transient_alert.get(account.id, 0.0) < transient_alert_repeat_sec:
+        if (
+            not terminal
+            and now - last_transient_alert.get(account.id, 0.0) < transient_alert_repeat_sec
+        ):
             return
         last_transient_alert[account.id] = now
         try:
@@ -248,9 +249,11 @@ def make_register_failure_hook(
                 admin_user_id,
                 f"⚠️ ЧатМост: {account.messenger.value.upper()}-аккаунт "
                 f"id={account.id} ({account.phone}) не подключается"
-                + (" — сессия отозвана, переподключите по QR (пункт «ЧатМост» "
-                   "в меню Битрикс24)"
-                   if terminal else " (сетевой сбой, повторим автоматически)")
+                + (
+                    " — сессия отозвана, переподключите по QR (пункт «ЧатМост» в меню Битрикс24)"
+                    if terminal
+                    else " (сетевой сбой, повторим автоматически)"
+                )
                 + f": {exc}",
             )
         except Exception:

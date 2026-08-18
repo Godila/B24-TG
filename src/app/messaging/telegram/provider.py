@@ -15,6 +15,7 @@ from app.messaging.types import (
     ContentType,
     IncomingMessage,
     MediaPayload,
+    ReadReceipt,
     SendResult,
 )
 from app.models import MessageDirection, Messenger
@@ -44,6 +45,8 @@ class TelegramProvider(MessengerProvider):
         self._proxy = proxy
         self._client: TelegramClient | None = None
         self._incoming_queue: asyncio.Queue[IncomingMessage] = asyncio.Queue()
+        # Read-квитанции исходящих (UpdateReadHistoryOutbox).
+        self._read_queue: asyncio.Queue[ReadReceipt] = asyncio.Queue()
         # None = входящие медиа не скачиваются (тесты/онбординг) — в тексте
         # останутся плейсхолдеры «[фото]» (прежнее поведение).
         self._media = media_storage
@@ -84,6 +87,10 @@ class TelegramProvider(MessengerProvider):
         # device-outbound инжест. Эхо наших send_* не приходит вовсе:
         # Telethon не диспетчит RPC-результаты этой сессии в события.
         self._client.add_event_handler(self._on_device_outbound, events.NewMessage(outgoing=True))
+        # Read-квитанции исходящих: inbox=False (дефолт builder'а) пропускает
+        # только UpdateReadHistoryOutbox — «наши сообщения прочитаны клиентом»;
+        # собственные прочтения входящих отфильтрованы самим builder'ом.
+        self._client.add_event_handler(self._on_outbox_read, events.MessageRead())
         logger.info("TelegramProvider connected")
 
     async def disconnect(self) -> None:
@@ -279,9 +286,42 @@ class TelegramProvider(MessengerProvider):
         parts = [p for p in (sender.first_name, sender.last_name) if p]
         return " ".join(parts) or None
 
+    async def _on_outbox_read(self, event) -> None:
+        """Клиент прочитал наши исходящие: прочитано всё с id <= max_id.
+
+        Only-put (unbounded очередь — диспетчер Telethon не блокируется),
+        БД трогает ReadMarker на стороне bridge.
+        """
+        try:
+            if not event.outbox:
+                return  # паритет фильтра builder'а (inbox-события)
+            max_id = int(event.max_id or 0)
+            if max_id <= 0:
+                return  # contents-событие без курсора (прочтение войса)
+            chat_id = event.chat_id
+            if chat_id is None or chat_id < 0:
+                # is_private у MessageRead нет: группы/каналы — marked id
+                # отрицательный; приватный чат — положительный id клиента.
+                # Диалога-группы в БД всё равно нет — двойная защита.
+                return
+            await self._read_queue.put(
+                ReadReceipt(
+                    messenger=Messenger.tg,
+                    external_chat_id=str(chat_id),
+                    up_to_external_id=max_id,
+                )
+            )
+        except Exception:
+            logger.exception("Failed to handle TG read event")
+
     async def incoming_stream(self) -> AsyncIterator[IncomingMessage]:
         while True:
             yield await self._incoming_queue.get()
+
+    async def read_receipt_stream(self) -> AsyncIterator[ReadReceipt]:
+        # Без сентинела: forward-таску гасит cancellation (как incoming).
+        while True:
+            yield await self._read_queue.get()
 
     async def send_message(
         self, external_chat_id: str, text: str, *, is_initiation: bool

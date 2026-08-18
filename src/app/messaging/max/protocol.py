@@ -54,8 +54,14 @@ OP_UPLOAD_READY = 136
 #   (поймано живьём 2026-08-15: {sender: int, id: str, time: ms, text,
 #   type: "USER", attaches: [], elements: []}).
 # 129 = активность пользователя в чате {chatId, userId} (typing/просмотр).
+# 130 = read-квитанция чата (комьюнити: NOTIF_MARK; доказано живьём
+#   2026-08-18): {setAsUnread: false, chatId, userId, mark: ms-эпоха[,
+#   unread]}. userId == контрагент → клиент прочитал чат (mark — ВРЕМЯ,
+#   не id сообщения: курсор чата); userId == self → менеджер прочитал
+#   клиента (игнор); setAsUnread=true — «пометить непрочитанным» (игнор).
 OP_CHAT_UPDATE = 128
 OP_CHAT_ACTIVITY = 129
+OP_READ_MARK = 130
 
 # QR-вход.
 OP_QR_AUTH_REQUEST = 288
@@ -113,9 +119,7 @@ def login_payload(token: str) -> dict:
     }
 
 
-def msg_send_payload(
-    chat_id: int, text: str, cid: int, attaches: list[dict] | None = None
-) -> dict:
+def msg_send_payload(chat_id: int, text: str, cid: int, attaches: list[dict] | None = None) -> dict:
     """MSG_SEND(64): cid — ms-таймстамп для дедупа повторных отправок.
 
     ``attaches`` — элементы вложений (см. *_attach ниже); пусто = текст.
@@ -154,15 +158,11 @@ def file_upload_payload() -> dict:
     return {"count": 1}
 
 
-def file_get_payload(
-    file_id: int, chat_id: int, message_id: str | int | None
-) -> dict:
+def file_get_payload(file_id: int, chat_id: int, message_id: str | int | None) -> dict:
     return {"fileId": file_id, "chatId": chat_id, "messageId": message_id}
 
 
-def video_get_payload(
-    video_id: int, chat_id: int, message_id: str | int | None
-) -> dict:
+def video_get_payload(video_id: int, chat_id: int, message_id: str | int | None) -> dict:
     return {"videoId": video_id, "chatId": chat_id, "messageId": message_id}
 
 
@@ -273,9 +273,7 @@ class MaxProtocolError(MaxError):
     """Прочая ошибка протокола (payload сохранён для диагностики)."""
 
     def __init__(self, opcode: int, payload: dict):
-        super().__init__(
-            f"opcode {opcode} cmd=3: {json.dumps(payload, ensure_ascii=False)[:300]}"
-        )
+        super().__init__(f"opcode {opcode} cmd=3: {json.dumps(payload, ensure_ascii=False)[:300]}")
         self.opcode = opcode
         self.payload = payload
 
@@ -347,6 +345,10 @@ def extract_token(auth_payload: dict) -> str | None:
     for path, value in tokens.items():
         lp = path.lower()
         score = 2 if ("login" in lp or "access" in lp) else 1
-        if best is None or score > best[0] or (score == best[0] and len(value) > len(tokens[best[1]])):
+        if (
+            best is None
+            or score > best[0]
+            or (score == best[0] and len(value) > len(tokens[best[1]]))
+        ):
             best = (score, path)
     return tokens[best[1]]

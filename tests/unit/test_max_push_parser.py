@@ -7,7 +7,7 @@
                      "attaches": [], "reactionInfo": {}}}}
 """
 
-from app.messaging.max.push_parser import parse_message_push
+from app.messaging.max.push_parser import parse_message_push, parse_read_receipt
 
 
 def _frame(payload: dict, opcode: int = 128) -> dict:
@@ -187,6 +187,55 @@ def test_full_push_chat_type_known():
     parsed = parse_message_push(_frame(_chat_payload()), own_user_id=1)
     assert parsed.skip_reason is None
     assert parsed.chat_type_known is True
+
+
+# --- op_130: read-квитанция чата (поймана живьём 2026-08-18) --- #
+
+
+def test_read_mark_client_parsed():
+    """userId==клиент → чат прочитан контрагентом (курсор чата, без id)."""
+    parsed = parse_read_receipt(
+        {
+            "setAsUnread": False,
+            "chatId": 53007183,
+            "userId": 349157962,
+            "mark": 1787038336231,
+        },
+        own_user_id=401041669,
+    )
+    assert parsed.skip_reason is None
+    assert parsed.external_chat_id == "53007183"
+    assert parsed.read_at is not None and parsed.read_at.year == 2026
+
+
+def test_read_mark_self_skipped():
+    parsed = parse_read_receipt(
+        {"setAsUnread": False, "chatId": 1, "userId": 401041669, "mark": 1},
+        own_user_id=401041669,
+    )
+    assert parsed.skip_reason == "self_read"
+
+
+def test_read_mark_set_as_unread_skipped():
+    parsed = parse_read_receipt(
+        {"setAsUnread": True, "chatId": 1, "userId": 349157962, "mark": 1},
+        own_user_id=401041669,
+    )
+    assert parsed.skip_reason == "set_as_unread"
+
+
+def test_read_mark_own_user_unknown_fail_closed():
+    """own_user_id неизвестен: self неотличим — скип (ложные ✓✓ хуже)."""
+    parsed = parse_read_receipt(
+        {"setAsUnread": False, "chatId": 1, "userId": 349157962}, own_user_id=None
+    )
+    assert parsed.skip_reason == "own_user_unknown"
+
+
+def test_read_mark_missing_fields_skipped():
+    assert parse_read_receipt({}, own_user_id=1).skip_reason == "no_chat_id"
+    assert parse_read_receipt({"userId": 5}, own_user_id=1).skip_reason == "no_chat_id"
+    assert parse_read_receipt({"chatId": 5}, own_user_id=1).skip_reason == "no_user_id"
 
 
 # --- Хелперы контакта (GET_CONTACTS, формат пойман живьём 2026-08-16) --- #

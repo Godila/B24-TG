@@ -31,6 +31,7 @@ from app.messaging.max.protocol import (
     OP_LOGIN,
     OP_MSG_SEND,
     OP_PING,
+    OP_READ_MARK,
     OP_UPLOAD_READY,
     UPLOAD_KIND_FILE,
     UPLOAD_KIND_PHOTO,
@@ -45,16 +46,26 @@ from app.messaging.max.push_parser import (
     contact_name_parts,
     contact_phone,
     parse_message_push,
+    parse_read_receipt,
 )
 from app.messaging.max.ws_client import MaxWsClient
 from app.messaging.provider import MessengerProvider
-from app.messaging.types import ContentType, IncomingMessage, MediaPayload, SendResult
+from app.messaging.types import (
+    ContentType,
+    IncomingMessage,
+    MediaPayload,
+    ReadReceipt,
+    SendResult,
+)
 from app.models import MessageDirection, Messenger
 
 logger = logging.getLogger(__name__)
 
 #: Сигнал конца incoming_stream при disconnect() (forward-таска завершается).
 _STREAM_END: IncomingMessage | None = None
+
+#: Сигнал конца read_receipt_stream при disconnect() (зеркало _STREAM_END).
+_READ_STREAM_END: ReadReceipt | None = None
 
 #: ContentType → вид загрузки MAX; прочее (voice/file/sticker) идёт FILE-
 #: пайплайном: нативная voice-загрузка требует OGG Opus, исходящих
@@ -114,6 +125,9 @@ class MaxUserProvider(MessengerProvider):
         self._backoff_min_sec = backoff_min_sec
         self._backoff_max_sec = backoff_max_sec
         self._incoming_queue: asyncio.Queue[IncomingMessage | None] = asyncio.Queue()
+        # Read-квитанции (op_130): без обогащения — диалог резолвит
+        # ReadMarker по БД, сюда попадает уже готовый ReadReceipt.
+        self._read_queue: asyncio.Queue[ReadReceipt | None] = asyncio.Queue()
         self._supervisor: asyncio.Task | None = None
         self._stopped = False
         self._dead = False  # токен отозван — реконнект бессмыслен
@@ -206,6 +220,8 @@ class MaxUserProvider(MessengerProvider):
         await self._client.close()
         # Завершаем incoming_stream (forward-таска корректно закончится).
         await self._incoming_queue.put(_STREAM_END)
+        # И read_receipt_stream (gather в forward не должен висеть вечно).
+        await self._read_queue.put(_READ_STREAM_END)
 
     def is_connected(self) -> bool:
         return not self._dead and self._client.is_connected()
@@ -226,6 +242,13 @@ class MaxUserProvider(MessengerProvider):
             if msg is None:
                 break
             yield msg
+
+    async def read_receipt_stream(self) -> AsyncIterator[ReadReceipt]:
+        while True:
+            receipt = await self._read_queue.get()
+            if receipt is None:
+                break
+            yield receipt
 
     async def send_message(
         self, external_chat_id: str, text: str, *, is_initiation: bool
@@ -423,35 +446,46 @@ class MaxUserProvider(MessengerProvider):
     async def _on_push(self, frame: dict) -> None:
         """Reader-колбэк: ТОЛЬКО разбор и складывание в очередь обогащения
 
-        (никаких await request() — дедлок, см. __init__). Исключение —
-        push 136 (готовность upload): синхронный resolve фьючерса."""
-        if frame.get("opcode") == OP_UPLOAD_READY:
+        (никаких await request() — дедлок, см. __init__). Исключения —
+        push 136 (готовность upload): синхронный resolve фьючерса; push
+        130 (read-квитанция): синхронный put_nowait, обогащения нет."""
+        opcode = frame.get("opcode")
+        if opcode == OP_UPLOAD_READY:
             self._waiter.feed(frame.get("payload") or {})
+            return
+        if opcode == OP_READ_MARK:
+            mark = parse_read_receipt(frame.get("payload") or {}, self._own_user_id)
+            if mark.skip_reason is not None:
+                # self_read/setAsUnread — штатный трафик, не шумим выше debug.
+                logger.debug("MAX read-квитанция пропущена: %s", mark.skip_reason)
+                return
+            assert mark.external_chat_id is not None
+            self._read_queue.put_nowait(
+                ReadReceipt(
+                    messenger=Messenger.max,
+                    external_chat_id=mark.external_chat_id,
+                    up_to_external_id=None,  # курсор ЧАТА: id сообщения нет
+                    read_at=mark.read_at,
+                )
+            )
             return
         parsed = parse_message_push(frame, self._own_user_id)
         if parsed.skip_reason is not None:
             if parsed.skip_reason == "activity":
-                # Форензика дискавери read-квитанций: op 129 описан как
-                # typing/просмотр, но карта опкодов неполна — тело может
-                # нести и read-курсор. Лог до выяснения семантики.
-                logger.info(
-                    "MAX activity payload=%s",
-                    json.dumps(frame.get("payload"), ensure_ascii=False, default=str)[:300],
-                )
+                # typing/просмотр (дискавери 2026-08-18 закрыто: read
+                # живёт в op_130 выше, payload здесь только {chatId, userId}).
                 return
             if parsed.skip_reason.startswith("op_"):
                 # Форензика неизвестных опкодов: протокол реверснут
-                # комьюнити, полная карта server→client неизвестна (в проде
-                # ловили op_130 — похоже на «прочитано»). Тело пуша решает,
-                # что это; без него скип нем.
+                # комьюнити, полная карта server→client неизвестна. Тело
+                # пуша решает, что это; без него скип нем.
                 logger.info(
                     "MAX push неизвестный op=%s payload=%s",
-                    frame.get("opcode"),
+                    opcode,
                     json.dumps(frame.get("payload"), ensure_ascii=False, default=str)[:600],
                 )
                 return
-            if parsed.skip_reason != "activity":
-                logger.info("MAX push пропущен: %s", parsed.skip_reason)
+            logger.info("MAX push пропущен: %s", parsed.skip_reason)
             return
         self._push_queue.put_nowait(parsed)
 

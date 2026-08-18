@@ -47,7 +47,8 @@ async def test_send_message_floodwait():
 def test_connect_registers_both_direction_builders():
     """connect() обязан регистрировать builders Telethon: без builder Telethon
     передаёт сырые Update — inbound мёртв (баг). Второй — outgoing=True:
-    device-outbound (сообщения менеджера с телефона)."""
+    device-outbound (сообщения менеджера с телефона). Третий — MessageRead:
+    read-квитанции исходящих (✓✓)."""
     with patch("app.messaging.telegram.provider.TelegramClient") as mock_tl:
         client_inst = AsyncMock()
         client_inst.is_user_authorized = AsyncMock(return_value=True)
@@ -58,18 +59,20 @@ def test_connect_registers_both_direction_builders():
         provider = TelegramProvider(api_id=1, api_hash="x", sessions_dir="/tmp")
         asyncio.run(provider.connect())
 
-        assert client_inst.add_event_handler.call_count == 2
+        assert client_inst.add_event_handler.call_count == 3
         registrations = {}
         for call in client_inst.add_event_handler.call_args_list:
             handler_arg, builder_arg = call[0]
-            assert isinstance(builder_arg, events.NewMessage)
             registrations[handler_arg] = builder_arg
         # Горячий inbound-путь не изменился.
-        inbound_builder = registrations[provider._on_new_message]
-        assert inbound_builder.incoming is True
-        # Новая подписка: исходящие с других устройств аккаунта.
-        outgoing_builder = registrations[provider._on_device_outbound]
-        assert outgoing_builder.outgoing is True
+        assert isinstance(registrations[provider._on_new_message], events.NewMessage)
+        assert registrations[provider._on_new_message].incoming is True
+        # Device-outbound: исходящие с других устройств аккаунта.
+        assert isinstance(registrations[provider._on_device_outbound], events.NewMessage)
+        assert registrations[provider._on_device_outbound].outgoing is True
+        # Read-квитанции: дефолт inbox=False = «наши исходящие прочитаны».
+        assert isinstance(registrations[provider._on_outbox_read], events.MessageRead)
+        assert registrations[provider._on_outbox_read].inbox is False
 
 
 def test_on_new_message_builds_incoming_message():
@@ -189,6 +192,37 @@ def test_on_device_outbound_saved_messages_skipped_by_dialog_rule():
     msg = asyncio.run(provider._incoming_queue.get())
     assert msg.direction == MessageDirection.outbound
     assert msg.external_chat_id == "999"
+
+
+# --- Read-квитанции исходящих (UpdateReadHistoryOutbox → ✓✓) --- #
+
+
+def test_on_outbox_read_builds_read_receipt():
+    """Клиент прочитал наши исходящие: курсор max_id, чат = id клиента."""
+    from app.messaging.telegram.provider import TelegramProvider
+
+    provider = TelegramProvider(api_id=1, api_hash="x", sessions_dir="/tmp")
+    event = SimpleNamespace(outbox=True, chat_id=4242, max_id=777)
+
+    asyncio.run(provider._on_outbox_read(event))
+    receipt = asyncio.run(provider.read_receipt_stream().__anext__())
+    assert receipt.messenger.value == "tg"
+    assert receipt.external_chat_id == "4242"
+    assert receipt.up_to_external_id == 777
+    assert receipt.read_at is None
+
+
+def test_on_outbox_read_group_and_empty_skipped():
+    """Группы/каналы (отрицательный chat_id) и события без курсора — скип."""
+    from app.messaging.telegram.provider import TelegramProvider
+
+    provider = TelegramProvider(api_id=1, api_hash="x", sessions_dir="/tmp")
+    asyncio.run(provider._on_outbox_read(SimpleNamespace(outbox=True, chat_id=-100123, max_id=5)))
+    asyncio.run(provider._on_outbox_read(SimpleNamespace(outbox=True, chat_id=4242, max_id=None)))
+    asyncio.run(provider._on_outbox_read(SimpleNamespace(outbox=True, chat_id=4242, max_id=0)))
+    # inbox-событие (мы прочитали чужие) — паритет фильтра builder'а.
+    asyncio.run(provider._on_outbox_read(SimpleNamespace(outbox=False, chat_id=4242, max_id=9)))
+    assert provider._read_queue.empty()
 
 
 def _tg_message(text, media):

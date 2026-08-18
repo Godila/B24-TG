@@ -87,3 +87,22 @@ class SendResult:
     error: str | None = None
     # Сколько секунд подождать до повтора (FloodWait TG / throttle MAX).
     retry_after_seconds: int | None = None
+
+
+@dataclass
+class ReadReceipt:
+    """Квитанция прочтения исходящих клиентом (канало-нейтрально).
+
+    ``up_to_external_id`` — числовой курсор: прочитано всё с числовым
+    ``external_message_id <=`` него (TG: max_id из UpdateReadHistoryOutbox;
+    сравнение числом, не лексически). ``None`` = канал дал только факт
+    «чат прочитан» (MAX op_130 id сообщения не несёт) — прочитаны все
+    исходящие диалога. Провайдер уже отделил self-прочтения менеджера
+    и setAsUnread. ``read_at`` — только логи/форензика (mark у MAX), не
+    персистится: у TG событие времени не несёт.
+    """
+
+    messenger: Messenger
+    external_chat_id: str
+    up_to_external_id: int | None = None
+    read_at: datetime | None = None

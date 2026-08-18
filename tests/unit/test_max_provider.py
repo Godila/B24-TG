@@ -329,6 +329,74 @@ async def test_self_push_without_id_skipped():
         await provider.disconnect()
 
 
+# --- Read-квитанции (op_130 NOTIF_MARK → ✓✓) --- #
+
+
+def _read_mark_frame(chat_id: int, user_id: int, *, set_as_unread: bool = False) -> dict:
+    """Живой формат op_130 (пойман 2026-08-18): mark — мс-эпоха, не id."""
+    return {
+        "ver": 11,
+        "cmd": 0,
+        "seq": 1,
+        "opcode": 130,
+        "payload": {
+            "setAsUnread": set_as_unread,
+            "chatId": chat_id,
+            "userId": user_id,
+            "mark": 1787038336231,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_read_mark_becomes_receipt():
+    from app.models import Messenger
+
+    fake = FakeMaxClient()
+    provider = _make_provider(fake)
+    await provider.connect()
+    try:
+        # 349157962 = контрагент (клиент прочитал чат).
+        await fake._on_push(_read_mark_frame(53007183, 349157962))
+        receipt = await asyncio.wait_for(provider.read_receipt_stream().__anext__(), timeout=1)
+        assert receipt.messenger is Messenger.max
+        assert receipt.external_chat_id == "53007183"
+        assert receipt.up_to_external_id is None  # курсор ЧАТА
+        assert receipt.read_at is not None
+        # Информация не дублируется в очередь сообщений.
+        assert provider._incoming_queue.empty()
+    finally:
+        await provider.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_read_mark_self_and_unread_skipped():
+    fake = FakeMaxClient()
+    provider = _make_provider(fake)
+    await provider.connect()
+    try:
+        # 401041669 = сам менеджер (прочитал клиента с телефона).
+        await fake._on_push(_read_mark_frame(53007183, 401041669))
+        # «Пометить непрочитанным».
+        await fake._on_push(_read_mark_frame(53007183, 349157962, set_as_unread=True))
+        assert provider._read_queue.empty()
+    finally:
+        await provider.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_disconnect_ends_read_stream():
+    """Сентинел: read-нога gather в forward завершается на disconnect
+    (иначе — зомби-таска при per-account re-register)."""
+    fake = FakeMaxClient()
+    provider = _make_provider(fake)
+    await provider.connect()
+    await provider.disconnect()
+    stream = provider.read_receipt_stream()
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(stream.__anext__(), timeout=1)
+
+
 def _light_push(chat_id: int, sender: int, msg_id: str, text: str) -> dict:
     """Лёгкий пуш (2-е+ сообщения чата): payload.message, без chat.type."""
     return {

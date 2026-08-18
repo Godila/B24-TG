@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-from app.messaging.types import ContentType, IncomingMessage, SendResult
+from app.messaging.types import ContentType, IncomingMessage, ReadReceipt, SendResult
 
 
 class SessionRevokedError(Exception):
@@ -21,8 +21,10 @@ class MessengerProvider(ABC):
     расширения: TelegramProvider (Telethon/MTProto), MaxUserProvider
     (WebSocket web-клиента MAX).
 
-    Статусы доставки (delivered/read) в контракт не входят: outbox закрывает
-    цикл исходящих через mark_sent, платформы дают разную глубину статусов.
+    Read-квитанции исходящих (read) — ОПЦИОНАЛЬНАЯ возможность канала:
+    ``read_receipt_stream`` ниже. Статусы delivered в контракт не входят:
+    user-API обоих каналов их не дают, outbox закрывает цикл исходящих
+    через mark_sent.
     """
 
     @abstractmethod
@@ -52,6 +54,18 @@ class MessengerProvider(ABC):
         self, external_chat_id: str, text: str, *, is_initiation: bool
     ) -> SendResult:
         """Отправить сообщение. is_initiation влияет на throttle."""
+
+    # --- Read-квитанции исходящих: ОПЦИОНАЛЬНАЯ возможность канала ---
+    # --- (прецедент — supports_media): дефолт «пустой поток».       ---
+    async def read_receipt_stream(self) -> AsyncIterator[ReadReceipt]:
+        """Асинхронный поток прочтений наших исходящих клиентом.
+
+        Каналы без read-квитанций наследуют пустой дефолт — потребитель
+        просто не получает событий. MAX завершает поток сентинелом при
+        disconnect() (как incoming_stream).
+        """
+        return
+        yield  # превращает метод в async-генератор (дефолт пуст)
 
     # --- Медиа: ОПЦИОНАЛЬНАЯ возможность канала (прецедент — ---
     # --- is_dead/credential_token): дефолт «не поддержано».   ---

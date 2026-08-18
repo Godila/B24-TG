@@ -47,18 +47,19 @@ def main() -> None:
 
 
 async def run_bridge() -> None:
-    """Запуск bridge-процесса: живой конвейер TG ↔ Bitrix24.
+    """Запуск bridge-процесса: живой конвейер мессенджеры ↔ Bitrix24.
 
     Конструирует wiring (TokenManager → Bitrix24Client → CrmService/ImService
-    → Bitrix24Sync → IncomingHandler), затем активирует конвейер:
+    → Bitrix24Sync → IncomingHandler + ReadMarker), затем активирует конвейер:
       1. загружает активные TgAccount (с eager-load менеджера);
-      2. регистрирует их в SessionManager (подключение TG-сессий);
+      2. регистрирует их в SessionManager (подключение канальных сессий);
       3. запускает OutboxWorker, CrmSyncWorker и HealthChecker фоновыми
          задачами;
-      4. для каждого подключённого аккаунта — подписку на incoming_stream
-         с форвардом в IncomingHandler.
+      4. для каждого подключённого аккаунта — pump (bootstrap.make_account_pump):
+         одна таска = incoming_stream → IncomingHandler + read_receipt_stream
+         → ReadMarker (✓✓).
     Останавливается по сигналу: отменяются все задачи, воркеры/health
-    останавливаются, TG-сессии и общий B24 HTTP-клиент закрываются.
+    останавливаются, канальные сессии и общий B24 HTTP-клиент закрываются.
     """
     from app.b24.client import Bitrix24Client
     from app.b24.crm import CrmService
@@ -66,7 +67,11 @@ async def run_bridge() -> None:
     from app.b24.sync import Bitrix24Sync
     from app.b24.token_manager import TokenManager
     from app.bridge.account_sync import AccountSyncWorker, make_register_failure_hook
-    from app.bridge.bootstrap import forward_incoming, load_active_accounts, register_accounts
+    from app.bridge.bootstrap import (
+        load_active_accounts,
+        make_account_pump,
+        register_accounts,
+    )
     from app.bridge.crm_sync_repo import WorkerCrmSyncRepository
     from app.bridge.crm_sync_worker import CrmSyncWorker
     from app.bridge.health_checker import HealthChecker
@@ -74,6 +79,7 @@ async def run_bridge() -> None:
     from app.bridge.login_worker import LoginCommandWorker
     from app.bridge.outbox_repo_worker import WorkerOutboxRepository
     from app.bridge.outbox_worker import OutboxWorker
+    from app.bridge.read_marker import ReadMarker
     from app.bridge.session_manager import SessionManager
     from app.bridge.throttler import Throttler
     from app.config import get_settings
@@ -103,9 +109,7 @@ async def run_bridge() -> None:
         proxy=telethon_proxy(settings),
         # partial совместим с ProviderBuilder (Callable[[TgAccount], …]) —
         # протокол SessionManager не меняется, хранилище замыкается здесь.
-        builders={
-            Messenger.max: partial(build_max_provider, media_storage=media_storage)
-        },
+        builders={Messenger.max: partial(build_max_provider, media_storage=media_storage)},
         register_timeout_sec=settings.register_timeout_sec,
         media_storage=media_storage,
         media_download_timeout_sec=settings.media_download_timeout_sec,
@@ -146,6 +150,10 @@ async def run_bridge() -> None:
         crm_sync_enqueue=enqueue_crm_sync,
         db_session_factory=async_session,
     )
+    # Read-квитанции (✓✓): консьюмер + pump, объединяющий incoming и read
+    # в одну forward-таску на аккаунт (см. bootstrap.make_account_pump).
+    read_marker = ReadMarker(db_session_factory=async_session)
+    account_pump = make_account_pump(read_marker)
 
     # 1-2. Аккаунты: загрузка + регистрация (подключение TG-сессий).
     accounts = await load_active_accounts(async_session)
@@ -204,6 +212,7 @@ async def run_bridge() -> None:
         sm=sm,
         handler=handler,
         session_factory=async_session,
+        forward=account_pump,
         interval_sec=settings.account_sync_interval_sec,
         on_register_failure=make_register_failure_hook(
             async_session, admin_alert, settings.alert_admin_b24_user_id
@@ -228,7 +237,7 @@ async def run_bridge() -> None:
     for account in registered.values():
         provider = sm.get(account.id)
         if provider is not None:
-            tasks.append(asyncio.create_task(forward_incoming(provider, account, handler)))
+            tasks.append(asyncio.create_task(account_pump(provider, account, handler)))
 
     logger.info(
         "Bridge started: %d account(s) registered, outbox+crm_sync+health+"
