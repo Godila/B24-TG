@@ -145,20 +145,53 @@ async def test_patch_and_remove_member(db):
     assert ei.value.status_code == 404
 
 
-async def test_onboarding_creates_member_row(db):
-    """Self-service подключение (пока жив) сразу заводит участника линии."""
-    m2 = None
+async def test_line_connect_share_flow(db, monkeypatch):
+    """Этап 5: админ выдаёт share-ссылку; публичные роуты /connect работают
+    по токену; новая выдача и отмена гасят прежнюю ссылку."""
+    import pytest
+    from fastapi import HTTPException
+
+    from app.web.routes import connect as connect_routes
+
+    monkeypatch.setattr(connect_routes, "async_session", db)
+    sup = await _sup(db)
+
+    line = await admin_api.create_line(admin_api.LineCreateIn(messenger="tg"), sup)
+    resp = await admin_api.line_connect(line["id"], Messenger.tg, sup)
+    token = resp["share_url"].rsplit("/", 1)[-1]
+
+    # Мусорный токен → страница-заглушка (без раскрытия состояния).
+    html = await connect_routes.connect_page("garbage-token")
+    assert "недействительна" in html.body.decode("utf-8")
+
+    # Валидный токен: статус логина линии.
+    status = await connect_routes.connect_status(token)
+    assert status["status"] == "waiting"
+
+    # 2FA-пароль: не в password_required → 409 (пароль транзитом — отдельно).
+    with pytest.raises(HTTPException) as ei:
+        await connect_routes.connect_password(token, connect_routes.PasswordIn(password="x"))
+    assert ei.value.status_code == 409
+
+    # Повторная выдача гасит прежнюю ссылку (ровно одна активная).
+    resp2 = await admin_api.line_connect(line["id"], Messenger.tg, sup)
+    token2 = resp2["share_url"].rsplit("/", 1)[-1]
+    assert token2 != token
+    with pytest.raises(HTTPException):
+        await connect_routes.connect_status(token)
+
+    # Отмена подключения гасит и активную ссылку.
+    await admin_api.line_connect_cancel(line["id"], Messenger.tg, sup)
+    with pytest.raises(HTTPException):
+        await connect_routes.connect_status(token2)
+
+
+async def test_create_line_placeholder(db):
+    sup = await _sup(db)
+    line = await admin_api.create_line(admin_api.LineCreateIn(messenger="max"), sup)
+    assert line["messenger"] == "max"
+    assert line["status"] == "offline"
+    assert line["members"] == []
     async with db() as s:
-        m2 = await s.get(Manager, 2)
-    await admin_api.onboarding_start(Messenger.tg, m2)
-    async with db() as s:
-        account = (
-            (await s.execute(select(TgAccount).where(TgAccount.manager_id == 2))).scalars()
-        ).one()
-        member = (
-            await s.execute(
-                select(AccountMember).where(AccountMember.account_id == account.id)
-            )
-        ).scalar_one_or_none()
-    assert member is not None and member.manager_id == 2
-    assert member.role == LineRole.participant
+        acc = await s.get(TgAccount, line["id"])
+    assert acc.manager_id is None  # админская линия без призрачного владельца

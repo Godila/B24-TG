@@ -10,7 +10,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.b24.client import Bitrix24Client, Bitrix24Error
@@ -20,6 +20,7 @@ from app.b24.users import fetch_b24_users, is_last_active_supervisor, upsert_man
 from app.db import async_session
 from app.models import (
     AccountMember,
+    ConnectToken,
     Dialog,
     LineRole,
     LoginCommand,
@@ -30,6 +31,7 @@ from app.models import (
     Messenger,
     TgAccount,
     TgAccountStatus,
+    issue_connect_token,
     terminate_active_commands,
 )
 from app.onboarding.protocol import OnboardingChannel
@@ -57,10 +59,6 @@ def _channel(messenger: Messenger) -> OnboardingChannel:
     if channel is None:
         raise HTTPException(status_code=404, detail=f"канал {messenger} не поддерживается")
     return channel
-
-
-class PasswordIn(BaseModel):
-    password: str
 
 
 class ManagerCreateIn(BaseModel):
@@ -102,34 +100,6 @@ async def me(manager: ManagerDep) -> dict:
         "is_readonly": manager.is_readonly,
         "accounts": accounts,
     }
-
-
-@router.post("/onboarding/{channel}/start", response_model=None)
-async def onboarding_start(channel: Messenger, manager: ManagerDep, *, force: bool = False) -> dict:
-    return await _channel(channel).start(manager, force=force)
-
-
-@router.get("/onboarding/{channel}/status", response_model=None)
-async def onboarding_status(channel: Messenger, manager: ManagerDep) -> dict:
-    view = await _channel(channel).login_view(manager.id)
-    if view is None:
-        raise HTTPException(status_code=404, detail="нет активного логина")
-    return view.as_dict()
-
-
-@router.post("/onboarding/{channel}/password", response_model=None)
-async def onboarding_password(channel: Messenger, body: PasswordIn, manager: ManagerDep) -> dict:
-    if not await _channel(channel).submit_password(manager.id, body.password):
-        raise HTTPException(
-            status_code=409, detail="логин не ждёт пароль (статус не password_required)"
-        )
-    return {"status": "submitted"}
-
-
-@router.post("/onboarding/{channel}/cancel", response_model=None)
-async def onboarding_cancel(channel: Messenger, manager: ManagerDep) -> dict:
-    await _channel(channel).cancel(manager.id)
-    return {"status": "cancelled"}
 
 
 # ---------------------------------------------------------------------- #
@@ -254,6 +224,10 @@ async def sync_managers_b24(supervisor: SupervisorDep) -> dict:
 # ---------------------------------------------------------------------- #
 # Линии (аккаунты) и их участники
 # ---------------------------------------------------------------------- #
+class LineCreateIn(BaseModel):
+    messenger: Messenger
+
+
 def _member_dto(am: AccountMember, m: Manager) -> dict:
     return {
         "manager_id": m.id,
@@ -377,6 +351,90 @@ async def remove_line_member(
             account_id, manager_id, supervisor.id,
         )
         return {"status": "removed"}
+
+
+@router.post("/lines", status_code=201, response_model=None)
+async def create_line(body: LineCreateIn, supervisor: SupervisorDep) -> dict:
+    """Заготовка линии: офлайн-аккаунт без участников. Номер «оживает»
+    подключением по share-ссылке (connect), состав назначается после."""
+    async with async_session() as s:
+        account = TgAccount(
+            messenger=body.messenger,
+            phone=f"{body.messenger.value.upper()}-line",
+            status=TgAccountStatus.offline,
+        )
+        s.add(account)
+        await s.commit()
+        logger.info(
+            "Линия создана: account_id=%s messenger=%s (by supervisor %s)",
+            account.id, body.messenger.value, supervisor.id,
+        )
+        return {
+            "id": account.id,
+            "messenger": account.messenger.value,
+            "phone": account.phone,
+            "name": None,
+            "status": account.status.value,
+            "members": [],
+        }
+
+
+@router.post("/lines/{account_id}/connect/{channel}", response_model=None)
+async def line_connect(
+    account_id: int, channel: Messenger, supervisor: SupervisorDep, *, force: bool = False
+) -> dict:
+    """Запустить QR-логин линии и выдать share-ссылку владельцу номера."""
+    async with async_session() as s:
+        account = await s.get(TgAccount, account_id)
+        if account is None:
+            raise HTTPException(status_code=404, detail="линия не найдена")
+        if account.messenger != channel:
+            raise HTTPException(
+                status_code=409, detail=f"линия канала {account.messenger.value}"
+            )
+        from app.config import get_settings as load_settings
+
+        token = await issue_connect_token(
+            s,
+            account=account,
+            created_by=supervisor.id,
+            ttl_sec=load_settings().connect_token_ttl_sec,
+        )
+        await s.commit()
+    data = await _channel(channel).start(account, force=force)
+    logger.info(
+        "Share-ссылка выдана: account_id=%s channel=%s (by supervisor %s)",
+        account_id, channel.value, supervisor.id,
+    )
+    return {
+        **data,
+        "share_url": f"/connect/{token.raw_token}",
+        "expires_at": token.expires_at,
+    }
+
+
+@router.post("/lines/{account_id}/connect/{channel}/cancel", response_model=None)
+async def line_connect_cancel(
+    account_id: int, channel: Messenger, supervisor: SupervisorDep
+) -> dict:
+    """Отменить подключение: живой логин терминализируется, ссылка гасится."""
+    async with async_session() as s:
+        await terminate_active_commands(s, account_id=account_id, messenger=channel)
+        await s.execute(
+            update(ConnectToken)
+            .where(
+                ConnectToken.account_id == account_id,
+                ConnectToken.used_at.is_(None),
+                ConnectToken.revoked_at.is_(None),
+            )
+            .values(revoked_at=func.now())
+        )
+        await s.commit()
+    logger.info(
+        "Подключение линии отменено: account_id=%s (by supervisor %s)",
+        account_id, supervisor.id,
+    )
+    return {"status": "cancelled"}
 
 
 @router.post("/managers", status_code=201, response_model=None)

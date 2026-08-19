@@ -6,7 +6,7 @@
   <title>ЧатМост — панель управления</title>
   <link rel="icon" href="/static/brand/favicon.ico" sizes="48x48">
   <link rel="apple-touch-icon" href="/static/brand/logo-square-192x192.png">
-  <script src="/static/vendor/qrcode.min.js"></script>
+
   <style>
     :root {
       --bg: #f2f4f8;
@@ -104,6 +104,11 @@
       border: 1px solid var(--border); border-radius: 8px; padding: 4px 6px;
       font-size: .85rem; background: #fff; max-width: 180px;
     }
+    .share-panel { margin-top: 8px; }
+    .share-panel .share-url {
+      border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px;
+      font-size: .82rem; background: #fff; min-width: 260px; max-width: 420px;
+    }
 
     /* --- кнопки --- */
     .btn {
@@ -188,14 +193,8 @@
     <img class="brand-mark" src="/static/brand/logo-128x69.png" alt="" aria-hidden="true">
     <h1>ЧатМост <span class="tag">панель управления</span></h1>
   </div>
-  <p class="lead">Мост между мессенджерами и Битрикс24. Подключите свои Telegram и MAX —
-    переписка с клиентами появится в карточках сделок.</p>
-
-  <h2>Мои каналы</h2>
-  <div class="cards">
-    <div id="card-tg"></div>
-    <div id="card-max"></div>
-  </div>
+  <p class="lead">Мост между мессенджерами и Битрикс24: номера подключает
+    администратор (раздел «Линии»), переписка с клиентами попадает в карточки сделок.</p>
 
   <div id="supervisor-zone" style="display:none">
     <h2>Настройки</h2>
@@ -230,6 +229,11 @@
       участников, и номер станет общим: переписка будет видна всем участникам,
       отвечать может любой участник, наблюдатель — только читает.
     </p>
+    <div class="toolbar">
+      <button class="btn" id="add-line-tg" type="button">+ Telegram</button>
+      <button class="btn" id="add-line-max" type="button">+ MAX</button>
+      <span class="hint">новая линия подключается по share-ссылке</span>
+    </div>
     <div class="manager-list" id="lines-list"></div>
 
     <h2>Менеджеры <span class="counter" id="managers-count"></span></h2>
@@ -241,7 +245,6 @@
     <div class="manager-list" id="managers-list"></div>
   </div>
 
-  <script src="/static/admin/channel-connect.js"></script>
   <script>
     async function api(path, opts) {
       const res = await fetch(path, Object.assign({ credentials: "same-origin" }, opts));
@@ -258,35 +261,6 @@
       clearTimeout(toastTimer);
       toastTimer = setTimeout(() => { t.hidden = true; }, 4000);
     }
-
-    function reloadAll() {
-      tg.refresh();
-      max.refresh();
-      loadSupervisor();
-    }
-
-    const tg = createChannelConnect({
-      root: document.getElementById("card-tg"),
-      channel: "tg",
-      labels: {
-        title: "<span class='chan-ico'>✈️</span>Telegram",
-        startLabel: "Подключить Telegram",
-        scanHint: "Telegram → Настройки → Устройства → Подключить устройство — наведите камеру на QR.",
-      },
-      onAuthorized: reloadAll,
-    });
-    const max = createChannelConnect({
-      root: document.getElementById("card-max"),
-      channel: "max",
-      labels: {
-        title: "<span class='chan-ico'>🅜</span>MAX",
-        startLabel: "Подключить MAX",
-        scanHint: "MAX → Профиль → Устройства → Войти по QR-коду — наведите камеру.",
-      },
-      onAuthorized: reloadAll,
-    });
-    tg.mount();
-    max.mount();
 
     // ---- Настройка таймлайна ----
     const TIMELINE_LABELS = {
@@ -458,13 +432,19 @@
             <div class="m-name">${ln.name || ln.phone} ${badge}
               <span class="hint">${ln.messenger.toUpperCase()} · ${ln.phone}</span></div>
             <div class="m-accounts">${chips}</div>
+            <div class="share-panel" data-share-panel="${ln.id}" hidden></div>
           </div>
           <div class="m-actions">
+            <button class="btn btn--ghost btn--sm" data-share="${ln.id}" data-channel="${ln.messenger}" type="button"
+              title="Подключение номера: выдать ссылку владельцу телефона">🔗 Поделиться</button>
             ${options ? `<select class="line-add" data-line="${ln.id}" aria-label="Кого добавить в линию">${options}</select>
             <button class="btn btn--ghost btn--sm" data-add-line="${ln.id}" type="button">+ участник</button>` : ""}
           </div>`;
         box.appendChild(div);
       }
+      box.querySelectorAll("[data-share]").forEach((btn) => {
+        btn.addEventListener("click", () => shareLine(btn.dataset.share, btn.dataset.channel));
+      });
       box.querySelectorAll("[data-add-line]").forEach((btn) => {
         btn.addEventListener("click", async () => {
           const sel = box.querySelector(`select[data-line="${btn.dataset.addLine}"]`);
@@ -499,6 +479,52 @@
           } catch (e) { showToast("Не получилось: " + e.message); }
           loadLines();
         });
+      });
+    }
+
+    async function shareLine(lineId, channel) {
+      const panel = document.querySelector(`[data-share-panel="${lineId}"]`);
+      panel.hidden = false;
+      panel.textContent = "получаем ссылку…";
+      try {
+        const r = await api(`/admin/api/lines/${lineId}/connect/${channel}`, { method: "POST" });
+        const url = location.origin + r.share_url;
+        panel.innerHTML = `
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+            <input class="share-url" readonly value="${url}" aria-label="Ссылка подключения"
+                   onclick="this.select()">
+            <button class="btn btn--ghost btn--sm" data-copy type="button">Скопировать</button>
+            <button class="btn btn--danger btn--sm" data-cancel type="button">Отменить подключение</button>
+          </div>
+          <div class="hint" style="margin-top:4px">
+            Ссылка живёт 30 минут. Перешлите её владельцу телефона: он откроет,
+            отсканирует QR (и введёт 2FA-пароль, если он установлен).
+          </div>`;
+        panel.querySelector("[data-copy]").addEventListener("click", async () => {
+          try { await navigator.clipboard.writeText(url); showToast("Ссылка скопирована"); }
+          catch { panel.querySelector(".share-url").select(); }
+        });
+        panel.querySelector("[data-cancel]").addEventListener("click", async () => {
+          try {
+            await api(`/admin/api/lines/${lineId}/connect/${channel}/cancel`, { method: "POST" });
+          } catch (e) { showToast("Не получилось: " + e.message); }
+          panel.hidden = true;
+        });
+      } catch (e) {
+        panel.textContent = "ошибка: " + e.message;
+      }
+    }
+
+    for (const [id, channel] of [["add-line-tg", "tg"], ["add-line-max", "max"]]) {
+      document.getElementById(id).addEventListener("click", async () => {
+        try {
+          await api("/admin/api/lines", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ messenger: channel }),
+          });
+        } catch (e) { showToast("Не получилось: " + e.message); }
+        loadSupervisor();
       });
     }
 

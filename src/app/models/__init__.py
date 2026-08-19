@@ -11,6 +11,7 @@ from app.models.app_setting import AppSetting
 from app.models.attachment import Attachment, AttachmentType
 from app.models.b24_token import B24Token
 from app.models.base import Base, TimestampMixin
+from app.models.connect_token import ConnectToken, issue_connect_token, load_active_connect_token
 from app.models.contact import Contact
 from app.models.crm_sync import KIND_INBOUND, KIND_OUTBOUND, CrmSyncItem, CrmSyncStatus
 from app.models.dialog import Dialog, DialogStatus, Messenger
@@ -38,6 +39,7 @@ __all__ = [
     "AttachmentType",
     "B24Token",
     "Base",
+    "ConnectToken",
     "Contact",
     "CrmSyncItem",
     "CrmSyncStatus",
@@ -60,5 +62,7 @@ __all__ = [
     "TgAccount",
     "TgAccountStatus",
     "TimestampMixin",
+    "issue_connect_token",
+    "load_active_connect_token",
     "terminate_active_commands",
 ]

@@ -56,8 +56,12 @@ class TgAccount(Base, TimestampMixin):
     status: Mapped[TgAccountStatus] = mapped_column(
         Enum(TgAccountStatus), default=TgAccountStatus.offline
     )
-    manager_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("managers.id"), nullable=False
+    # LEGACY-владелец (до линий): у старых личных аккаунтов — менеджер,
+    # у линий, созданных админом через share-подключение, — NULL. Код
+    # маршрутизации читает состав account_members; колонка убирается
+    # контракт-фазой (Этап 6).
+    manager_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("managers.id"), nullable=True
     )
 
     manager: Mapped["Manager"] = relationship(back_populates="tg_accounts")

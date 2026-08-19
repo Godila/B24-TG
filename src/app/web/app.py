@@ -119,6 +119,10 @@ def create_app() -> FastAPI:
     # supervisor-панель). Каналы регистрируются сюда же.
     app.include_router(admin.router)
     app.include_router(admin_api.router)
+    # Публичная share-страница подключения линии (без авторизации ЧатМост).
+    from app.web.routes import connect
+
+    app.include_router(connect.router)
     from app.models import Messenger
     from app.onboarding.max_channel import MaxOnboardingChannel
     from app.onboarding.tg_channel import TgOnboardingChannel

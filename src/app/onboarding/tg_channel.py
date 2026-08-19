@@ -5,9 +5,9 @@
 обратно; web только читает. Инвариант «.session пишет только bridge»
 сохранён, web не имеет доступа к session-volume.
 
-Телефон НЕ спрашиваем: ``qr_login()`` он не нужен. Аккаунт создаётся с
-placeholder-телефоном, реальный номер/имя bridge-backfill'ит из ``get_me()``
-после авторизации.
+Субъект — линия (аккаунт): админ выдаёт share-ссылку, телефон владельца
+сканирует QR. Телефон НЕ спрашиваем: ``qr_login()`` он не нужен; номер/
+имя bridge-backfill'ит из ``get_me()`` после авторизации.
 """
 
 import logging
@@ -19,11 +19,9 @@ from app.config import get_settings
 from app.db import async_session
 from app.models import (
     ACTIVE_STATUSES,
-    AccountMember,
     LoginCommand,
     LoginCommandKind,
     LoginCommandStatus,
-    Manager,
     Messenger,
     TgAccount,
     TgAccountStatus,
@@ -78,8 +76,7 @@ class TgOnboardingChannel:
         account = await self._find_account(manager_id)
         return _profile_dto(account) if account is not None else None
 
-    async def start(self, manager: Manager, *, force: bool = False) -> dict:
-        account = await self._find_account(manager.id)
+    async def start(self, account: TgAccount, *, force: bool = False) -> dict:
         if (
             account is not None
             and account.status == TgAccountStatus.active
@@ -91,26 +88,14 @@ class TgOnboardingChannel:
             seconds=get_settings().tg_onboarding_deadline_sec
         )
         async with self._session_factory() as s:
-            # Терминализируем живые команды менеджера — и освобождаем
+            # Терминализируем живые команды линии — и освобождаем
             # partial unique, и гасим идущий bridge-флоу (он увидит статус).
             await terminate_active_commands(
-                s, manager_id=manager.id, messenger=Messenger.tg
+                s, account_id=account.id, messenger=Messenger.tg
             )
-            if account is None:
-                account = TgAccount(
-                    messenger=Messenger.tg,
-                    phone=f"TG-mgr{manager.id}",  # placeholder; backfill после QR
-                    status=TgAccountStatus.offline,
-                    manager_id=manager.id,
-                )
-                s.add(account)
-                await s.flush()
-                # Линия нового аккаунта: подключающий — первый участник
-                # (инвариант account_members, пока онбординг персональный).
-                s.add(AccountMember(account_id=account.id, manager_id=manager.id))
             s.add(
                 LoginCommand(
-                    manager_id=manager.id,
+                    manager_id=account.manager_id,
                     account_id=account.id,
                     messenger=Messenger.tg,
                     kind=LoginCommandKind.qr_login,
@@ -119,21 +104,20 @@ class TgOnboardingChannel:
                 )
             )
             await s.commit()
-        logger.info("TG QR-команда создана: manager_id=%s", manager.id)
+        logger.info("TG QR-команда создана: account_id=%s", account.id)
         return {
             "status": OnboardingStatus.waiting.value,
             "qr_link": None,
             "detail": "qr_pending",
         }
 
-    async def login_view(self, manager_id: int) -> LoginView | None:
+    async def login_view(self, account_id: int) -> LoginView | None:
         async with self._session_factory() as s:
             cmd = (
                 await s.execute(
                     select(LoginCommand)
                     .where(
-                        LoginCommand.manager_id == manager_id,
-                        LoginCommand.messenger == Messenger.tg,
+                        LoginCommand.account_id == account_id,
                         LoginCommand.kind == LoginCommandKind.qr_login,
                     )
                     .order_by(LoginCommand.id.desc())
@@ -156,13 +140,12 @@ class TgOnboardingChannel:
             return None
         return LoginView(status=view_status, qr_link=cmd.qr_link, error=cmd.error)
 
-    async def submit_password(self, manager_id: int, password: str) -> bool:
+    async def submit_password(self, account_id: int, password: str) -> bool:
         async with self._session_factory() as s:
             result = await s.execute(
                 update(LoginCommand)
                 .where(
-                    LoginCommand.manager_id == manager_id,
-                    LoginCommand.messenger == Messenger.tg,
+                    LoginCommand.account_id == account_id,
                     LoginCommand.status == LoginCommandStatus.password_required,
                 )
                 .values(password_transit=password)
@@ -170,9 +153,7 @@ class TgOnboardingChannel:
             await s.commit()
             return result.rowcount > 0
 
-    async def cancel(self, manager_id: int) -> None:
+    async def cancel(self, account_id: int) -> None:
         async with self._session_factory() as s:
-            await terminate_active_commands(
-                s, manager_id=manager_id, messenger=Messenger.tg
-            )
+            await terminate_active_commands(s, account_id=account_id)
             await s.commit()

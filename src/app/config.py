@@ -132,6 +132,9 @@ class Settings(BaseSettings):
     tg_onboarding_deadline_sec: float = Field(900.0)  # окно всей команды
     login_password_timeout_sec: float = Field(120.0)  # ожидание 2FA-ввода
     login_worker_poll_sec: float = Field(2.0)  # каденс LoginCommandWorker
+    # Share-ссылка подключения линии (/connect/<token>): TTL щедрее QR-окна —
+    # ссылку ещё нужно переслать владельцу телефона.
+    connect_token_ttl_sec: float = Field(1800.0)
 
 
 @lru_cache(maxsize=1)

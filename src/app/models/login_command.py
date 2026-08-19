@@ -59,12 +59,11 @@ ACTIVE_STATUSES = (
 class LoginCommand(Base, TimestampMixin):
     __tablename__ = "login_commands"
     __table_args__ = (
-        # Не более одного живого логина на пару (менеджер, канал) на уровне БД:
-        # повторный /start терминализирует прежнюю строку в той же транзакции.
+        # Не более одного живого логина на ЛИНИЮ (аккаунт) на уровне БД:
+        # повторный старт терминализирует прежнюю строку в той же транзакции.
         Index(
             "uq_login_commands_active",
-            "manager_id",
-            "messenger",
+            "account_id",
             unique=True,
             postgresql_where=text(
                 "status IN ('pending', 'waiting', 'password_required')"
@@ -80,8 +79,9 @@ class LoginCommand(Base, TimestampMixin):
         primary_key=True,
         autoincrement=True,
     )
-    manager_id: Mapped[int] = mapped_column(
-        ForeignKey("managers.id"), nullable=False, index=True
+    # LEGACY (личные подключения до линий); NULL у команд админских линий.
+    manager_id: Mapped[int | None] = mapped_column(
+        ForeignKey("managers.id"), nullable=True, index=True
     )
     account_id: Mapped[int] = mapped_column(
         ForeignKey("tg_accounts.id"), nullable=False, index=True

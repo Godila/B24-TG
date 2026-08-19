@@ -128,17 +128,15 @@ async def test_me_includes_accounts(db):
     assert [a["messenger"] for a in me["accounts"]] == ["tg"]
 
 
-async def test_onboarding_start_through_api(db):
-    m = await _manager(db, 2)
-    resp = await admin_api.onboarding_start(Messenger.tg, m)
+async def test_line_connect_issues_share_url(db):
+    sup = await _manager(db, 1)
+    resp = await admin_api.line_connect(7, Messenger.tg, sup)
     assert resp["status"] == "waiting"
-
-
-async def test_onboarding_status_404_when_none(db):
-    m = await _manager(db, 2)
+    assert resp["share_url"].startswith("/connect/")
+    # Канал обязан совпадать с линией.
     with pytest.raises(HTTPException) as ei:
-        await admin_api.onboarding_status(Messenger.tg, m)
-    assert ei.value.status_code == 404
+        await admin_api.line_connect(7, Messenger.max, sup)
+    assert ei.value.status_code == 409
 
 
 async def test_supervisor_gate_rejects_manager_role(db):
