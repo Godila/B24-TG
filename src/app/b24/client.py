@@ -78,7 +78,7 @@ class Bitrix24Client:
 
         await self._throttle()
         resp = await self._http.request(method_http, url, json=body)
-        data = resp.json()
+        data = self._decode(resp, method)
 
         if isinstance(data, dict) and data.get("error") == "QUERY_LIMIT_EXCEEDED":
             # Free-портал жёстко режет частоту (~2 rps). Одна повторная
@@ -87,7 +87,7 @@ class Bitrix24Client:
             await asyncio.sleep(1.5)
             await self._throttle()
             resp = await self._http.request(method_http, url, json=body)
-            data = resp.json()
+            data = self._decode(resp, method)
 
         if isinstance(data, dict) and "error" in data:
             raise Bitrix24Error(
@@ -95,6 +95,24 @@ class Bitrix24Client:
                 description=data.get("error_description", ""),
             )
         return data.get("result")
+
+    @staticmethod
+    def _decode(resp: httpx.Response, method: str) -> Any:
+        """REST-методы отвечают JSON; всё остальное (HTML-заглушка домена,
+        страница логина, прокси-ошибка) — превращаем в Bitrix24Error, а не
+        в голый JSONDecodeError с 500 без объяснения (живой кейс: перенос
+        стенда, токен ещё указывает на мёртвый портал)."""
+        try:
+            return resp.json()
+        except ValueError:
+            raise Bitrix24Error(
+                code="invalid_response",
+                description=(
+                    f"{method}: HTTP {resp.status_code}, ответ не JSON "
+                    "(портал недоступен или токен от прежнего портала — "
+                    "переустановите приложение)"
+                ),
+            ) from None
 
     async def aclose(self) -> None:
         """Закрыть общий HTTP-клиент (вызывать при остановке процесса)."""

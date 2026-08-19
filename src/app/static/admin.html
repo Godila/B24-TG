@@ -38,7 +38,7 @@
     /* --- секции: eyebrow + действия в одной строке --- */
     .section-head {
       display: flex; align-items: center; gap: 10px;
-      margin: 34px 0 12px;
+      margin: 34px 0 8px;
     }
     .section-head:first-of-type { margin-top: 0; }
     .section-title {
@@ -51,7 +51,8 @@
       font-variant-numeric: tabular-nums;
     }
     .section-head .btn { margin-left: auto; }
-    .section-hint { color: var(--muted); font-size: var(--fs-sm); margin: -4px 0 12px; }
+    /* Единый вертикальный ритм секций: заголовок → подпись → контент. */
+    .section-hint { color: var(--muted); font-size: var(--fs-sm); margin: 0 0 12px; }
 
     /* --- карточки --- */
     .stack { display: flex; flex-direction: column; gap: 10px; }
@@ -72,8 +73,9 @@
     .line-title { flex: 1 1 220px; min-width: 0; }
     .line-name { font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .line-meta { color: var(--muted); font-size: var(--fs-xs); margin-top: 2px; font-variant-numeric: tabular-nums; }
-    /* Провод моста (фирменный знак из лого): цел — связь есть,
-       пунктир — линия не подключена. Маячок = статус. */
+    /* Провод моста (фирменный знак из лого): линия связи канала со статусом.
+       Сплошная — подключён, пунктир — offline/ожидает; маячок = статус. */
+    .line-status { display: flex; align-items: center; gap: 7px; flex: none; cursor: help; }
     .bridge { color: var(--ok); flex: none; }
     .bridge.wait { color: var(--wait); }
     .bridge.warn { color: var(--warn); }
@@ -211,7 +213,17 @@
       width: min(480px, calc(100vw - 32px));
     }
     dialog::backdrop { background: rgba(15, 23, 32, .45); }
-    .wz { padding: 22px 24px 24px; }
+    .wz { padding: 22px 24px 24px; position: relative; }
+    /* Крестик закрытия — на каждом шаге визарда (Esc тоже работает,
+       но выход должен быть видимым). */
+    .wz-close {
+      position: absolute; top: 12px; right: 12px; z-index: 1;
+      width: 30px; height: 30px; border: none; border-radius: var(--r-sm);
+      background: transparent; color: var(--muted); cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .wz-close:hover { background: var(--bg); color: var(--ink); }
+    .wz-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
     .wz h3 { margin: 0 0 4px; font-size: var(--fs-lg); display: flex; align-items: center; gap: 10px; }
     .wz .wz-sub { color: var(--muted); font-size: var(--fs-sm); margin: 0 0 16px; }
     .wz-channels { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -272,16 +284,18 @@
         <span class="section-title">Менеджеры</span>
         <span class="section-count" id="managers-count" hidden></span>
         <button class="btn btn--ghost" id="sync-b24" type="button">
-          <svg class="i" aria-hidden="true"><use href="/static/icons.svg#refresh"/></svg>
-          Обновить из CRM
+          <svg class="i" aria-hidden="true"><use href="/static/icons.svg#users"/></svg>
+          Синхронизировать из CRM
         </button>
       </div>
-      <p class="section-hint" id="sync-b24-state"></p>
+      <p class="section-hint">Список менеджеров подтягивается из пользователей
+        Битрикс24. <span id="sync-b24-state"></span></p>
       <div class="stack" id="managers-list"></div>
     </section>
 
     <section id="sec-settings">
       <div class="section-head"><span class="section-title">Настройки</span></div>
+      <p class="section-hint">Как переписка с клиентами попадает в карточки сделок.</p>
       <div class="card settings-card">
         <div class="set-row">
           <strong>Дублировать переписку в таймлайн CRM:</strong>
@@ -465,11 +479,14 @@
         '<div class="line-head">' +
           '<span class="line-ico ' + ln.messenger + '">' + ic(ico, "i--18") + "</span>" +
           '<div class="line-title">' +
-            '<div class="line-name">' + esc(ln.name || (isBlank ? "Новый номер" : ln.phone)) +
-              lineStatusBadge(ln, isBlank) + "</div>" +
+            '<div class="line-name">' + esc(ln.name || (isBlank ? "Новый номер" : ln.phone)) + "</div>" +
             '<div class="line-meta">' + meta + " · " + metaTail + "</div>" +
           "</div>" +
-          bridgeSvg(ln.status === "active" ? "active" : isBlank ? "wait" : ln.status) +
+          '<div class="line-status" title="Связь мессенджера с ЧатМост:' +
+            ' сплошная линия — подключён, пунктир — offline или ожидает подключения">' +
+            bridgeSvg(ln.status === "active" ? "active" : isBlank ? "wait" : ln.status) +
+            lineStatusBadge(ln, isBlank) +
+          "</div>" +
         "</div>" +
         '<div class="line-members">' + (chips || "") + "</div>" +
         '<p class="members-hint"' + (chips ? " hidden" : "") + '>Нет участников — у линии нет ответственных.</p>' +
@@ -742,15 +759,24 @@
     // Esc: cancel → закрытие → close-событие → wzCleanup (спека <dialog>).
     wzEl.addEventListener("close", wzCleanup);
 
-    function wzStepChannel() {
+    /** Каркас шага визарда: контент + крестик закрытия на каждом шаге. */
+    function wzShell(html) {
       wzBody.innerHTML =
+        '<button class="wz-close" type="button" title="Закрыть (подключение отменится)"' +
+        ' aria-label="Закрыть окно подключения">' + ic("x") + "</button>" + html;
+      wzBody.querySelector(".wz-close").addEventListener("click", wzClose);
+    }
+
+    function wzStepChannel() {
+      wzShell(
         "<h3>Подключить номер</h3>" +
         '<p class="wz-sub">Выберите мессенджер — номер подключит владелец телефона' +
         " по ссылке с QR-кодом, у него есть 30 минут.</p>" +
         '<div class="wz-channels">' +
           '<button class="wz-channel tg" data-channel="tg" type="button">' + ic("send") + "Telegram</button>" +
           '<button class="wz-channel max" data-channel="max" type="button">' + ic("message") + "MAX</button>" +
-        "</div>";
+        "</div>"
+      );
       wzBody.querySelectorAll(".wz-channel").forEach((b) => {
         b.addEventListener("click", async () => {
           b.disabled = true;
@@ -773,8 +799,10 @@
     }
 
     async function wzStepConnect() {
-      wzBody.innerHTML = "<h3>Подключение — " + CHANNEL[wzState.channel] + "</h3>" +
-        '<p class="wz-sub">Получаем ссылку подключения…</p>';
+      wzShell(
+        "<h3>Подключение — " + CHANNEL[wzState.channel] + "</h3>" +
+        '<p class="wz-sub">Получаем ссылку подключения…</p>'
+      );
       let r;
       try {
         r = await api("/admin/api/lines/" + wzState.accountId + "/connect/" + wzState.channel,
@@ -789,7 +817,7 @@
         const el = wzBody.querySelector(".wz-state");
         if (el) { el.textContent = text || ""; el.className = "wz-state" + (cls ? " " + cls : ""); }
       };
-      wzBody.innerHTML =
+      wzShell(
         "<h3>" + ic("qr") + "Подключение — " + CHANNEL[wzState.channel] + "</h3>" +
         '<p class="wz-sub">Перешлите ссылку владельцу телефона или покажите QR,' +
         " когда он рядом. 2FA-пароль владелец введёт на странице ссылки.</p>" +
@@ -803,15 +831,12 @@
           '<div><div class="wz-state">Получаем QR-код…</div>' +
           '<p class="wz-note">Наведите камеру телефона (Настройки → Устройства →' +
           " Подключить по QR-коду).</p></div>" +
-        "</div>" +
-        '<div class="wz-foot">' +
-          '<button class="btn btn--danger btn--sm" data-wz-cancel type="button">Отменить подключение</button>' +
-        "</div>";
+        "</div>"
+      );
       wzBody.querySelector("[data-copy]").addEventListener("click", async () => {
         try { await navigator.clipboard.writeText(wzState.shareUrl); showToast("Ссылка скопирована"); }
         catch { wzBody.querySelector(".wz-url").select(); }
       });
-      wzBody.querySelector("[data-wz-cancel]").addEventListener("click", wzClose);
       const qrbox = wzBody.querySelector(".wz-qrbox");
       wzState.poll = setInterval(async () => {
         if (!wzEl.open) { wzStopPoll(); return; }
@@ -850,7 +875,7 @@
     }
 
     function wzStepSuccess() {
-      wzBody.innerHTML =
+      wzShell(
         '<div class="wz-success">' +
           ic("check") +
           "<h3>Номер подключён</h3>" +
@@ -860,7 +885,8 @@
         '<div class="wz-foot">' +
           '<button class="btn btn--ghost" data-wz-done type="button">Готово</button>' +
           '<button class="btn" data-wz-members type="button">' + ic("plus") + "Добавить участников</button>" +
-        "</div>";
+        "</div>"
+      );
       wzBody.querySelector("[data-wz-done]").addEventListener("click", wzClose);
       wzBody.querySelector("[data-wz-members]").addEventListener("click", () => {
         const id = wzState.accountId;

@@ -162,3 +162,27 @@ async def test_aclose_closes_shared_http_client():
     finally:
         patcher.stop()
     mock_http.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_call_non_json_response_raises_b24_error():
+    """HTML-ответ (мёртвый портал/заглушка домена) — Bitrix24Error
+    invalid_response, а не голый JSONDecodeError с 500 (кейс переноса стенда)."""
+    import json as _json
+
+    def _raise():
+        raise _json.JSONDecodeError("Expecting value", "<html>", 0)
+
+    resp = MagicMock()
+    resp.status_code = 502
+    resp.json = _raise
+    patcher, _ = _patch_httpx(resp)
+    try:
+        client = Bitrix24Client(client_endpoint="https://dead.bitrix24.ru/rest/", min_interval=0)
+        with pytest.raises(Bitrix24Error) as ei:
+            await client.call("user.get", auth_token="tok")
+    finally:
+        patcher.stop()
+
+    assert ei.value.code == "invalid_response"
+    assert "не JSON" in ei.value.description
