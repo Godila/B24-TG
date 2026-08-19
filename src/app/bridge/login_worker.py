@@ -32,7 +32,7 @@ from telethon.errors import FloodWaitError, SessionPasswordNeededError
 from app.bridge.session_manager import SessionManager
 from app.config import get_settings
 from app.db import async_session
-from app.messaging.telegram.paths import tg_session_path
+from app.messaging.telegram.paths import account_session_dir, tg_session_path
 from app.messaging.telegram.proxy import telethon_proxy
 from app.models import (
     ACTIVE_STATUSES,
@@ -53,6 +53,12 @@ class _Cancelled(Exception):
 
 def _default_client_factory(account_id: int) -> TelegramClient:
     settings = get_settings()
+    # Каталог сессии создаёт ЛОГИН — он её пишет (контракт telegram/paths.py).
+    # Раньше каталог подкладывали CLI-аут/провайдер ПОСЛЕ логина — новые
+    # линии падали «unable to open database file» («internal error» в панели).
+    account_session_dir(settings.tg_sessions_dir, account_id).mkdir(
+        parents=True, exist_ok=True
+    )
     # Конвенция пути — telegram/paths.py (единый контракт с SessionManager).
     session_path = str(tg_session_path(settings.tg_sessions_dir, account_id))
     return TelegramClient(
@@ -345,7 +351,7 @@ class LoginCommandWorker:
             await self._account_sync.force_unregister(
                 account.id, reason="admin unlink"
             )
-        else:
+        elif tg_session_path(get_settings().tg_sessions_dir, account.id).exists():
             client = self._client_factory(account.id)
             await client.connect()
             try:
@@ -356,6 +362,8 @@ class LoginCommandWorker:
                     await client.disconnect()
                 except Exception:
                     logger.debug("logout client disconnect failed", exc_info=True)
+        # Файла сессии нет (болванка удалённой линии) — клиента не строим:
+        # он создал бы пустой .session и нечего было бы разлогинивать.
         async with self._session_factory() as s:
             await s.execute(
                 update(TgAccount)

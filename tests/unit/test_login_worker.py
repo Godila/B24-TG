@@ -304,3 +304,59 @@ async def test_startup_selfheal_expires_active(db):
     await worker._startup_selfheal()
     cmd = await _get_cmd(db, cmd_id)
     assert cmd.status is LoginCommandStatus.expired
+
+
+# ---------------------------------------------------------------------- #
+# Регрессия «internal error» при QR новых линий (08-19)
+# ---------------------------------------------------------------------- #
+def test_default_client_factory_creates_session_dir(tmp_path, monkeypatch):
+    """Фабрика логин-клиента создаёт per-account каталог сессии: без него
+    SQLiteSession падала «unable to open database file» на любой НОВОЙ
+    линии (каталог раньше подкладывали CLI-аут/провайдер после логина)."""
+    from types import SimpleNamespace
+
+    from app.bridge import login_worker as lw
+
+    monkeypatch.setattr(
+        lw,
+        "get_settings",
+        lambda: SimpleNamespace(
+            tg_sessions_dir=str(tmp_path),
+            tg_api_id=1,
+            tg_api_hash="test",
+            tg_proxy_scheme="",
+            tg_proxy_host="",
+            tg_proxy_port=0,
+            tg_proxy_username="",
+            tg_proxy_password="",
+        ),
+    )
+    target = tmp_path / "account_42"
+    assert not target.exists()
+    lw._default_client_factory(42)
+    assert target.is_dir()  # каталог создан ДО TelegramClient — раньше падало
+
+
+async def test_log_out_without_session_file_skips_client(db):
+    """Болванка удалённой линии (файла сессии нет): done без построения
+    клиента — раньше падало «unable to open database file»."""
+    built = []
+
+    def counting_factory(account_id):
+        built.append(account_id)
+        return FakeClient()
+
+    sm, sync = FakeSm(), FakeAccountSync()
+    worker = LoginCommandWorker(
+        sm=sm, account_sync=sync, session_factory=db,
+        client_factory=counting_factory,
+        control_poll_sec=0.01, password_timeout_sec=1.0, qr_iterations=3,
+    )
+    cmd_id = await _make_cmd(db, kind=LoginCommandKind.log_out)
+
+    await worker._run_log_out(await _get_cmd(db, cmd_id))
+
+    cmd = await _get_cmd(db, cmd_id)
+    assert cmd.status is LoginCommandStatus.done
+    assert built == []  # клиента не строили — файла сессии нет
+    assert (await _get_account(db)).status is TgAccountStatus.offline
