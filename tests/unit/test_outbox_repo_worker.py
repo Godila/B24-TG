@@ -78,19 +78,3 @@ async def test_mark_sent_across_two_fresh_sessions(session_factory):
     async with session_factory() as s:
         refreshed = await s.get(OutboxItem, 1)
         assert refreshed.status == OutboxStatus.sent
-
-
-@pytest.mark.asyncio
-async def test_enqueue_then_fetch_roundtrip(session_factory):
-    repo = WorkerOutboxRepository(session_factory)
-    await repo.enqueue(
-        dialog_id=10,
-        tg_account_id=7,
-        external_chat_id="999",
-        text="roundtrip",
-        is_initiation=False,
-    )
-
-    due = await repo.fetch_due(limit=10)
-    assert len(due) == 1
-    assert due[0].text == "roundtrip"

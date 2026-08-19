@@ -74,15 +74,11 @@ _UPLOAD_MIME_EXACT = frozenset(
 _SAFE_EXT_RE = re.compile(r"^[a-z0-9]{1,8}$")
 
 
-class MediaStorageError(Exception):
-    """Базовая ошибка хранилища медиа."""
-
-
-class MediaTooLargeError(MediaStorageError):
+class MediaTooLargeError(Exception):
     """Файл больше настроенного лимита (HTTP 413)."""
 
 
-class MediaPathError(MediaStorageError):
+class MediaPathError(Exception):
     """Путь выходит за пределы медиа-тома (битые данные в БД)."""
 
 

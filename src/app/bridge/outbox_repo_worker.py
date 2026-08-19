@@ -52,30 +52,3 @@ class WorkerOutboxRepository(OutboxRepository):
                 error=error,
                 count_attempt=count_attempt,
             )
-
-    async def enqueue(
-        self,
-        *,
-        dialog_id: int,
-        tg_account_id: int,
-        external_chat_id: str,
-        text: str,
-        is_initiation: bool = False,
-        message_id: int | None = None,
-        attachment_id: int | None = None,
-    ) -> OutboxItem:
-        # В отличие от SqlAlchemyOutboxRepository.enqueue, здесь коммитим сами:
-        # вызывающий (воркер/роут) не управляет сессией адаптера.
-        async with self._session_factory() as s:
-            inner = SqlAlchemyOutboxRepository(s)
-            item = await inner.enqueue(
-                dialog_id=dialog_id,
-                tg_account_id=tg_account_id,
-                external_chat_id=external_chat_id,
-                text=text,
-                is_initiation=is_initiation,
-                message_id=message_id,
-                attachment_id=attachment_id,
-            )
-            await s.commit()
-            return item
