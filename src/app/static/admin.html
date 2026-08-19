@@ -216,11 +216,10 @@
     </div>
 
     <h2>Менеджеры <span class="counter" id="managers-count"></span></h2>
-    <form class="toolbar" id="add-manager">
-      <input id="m-name" placeholder="Имя менеджера" required>
-      <input id="m-b24" type="number" placeholder="ID пользователя Битрикс24" required>
-      <button class="btn" type="submit">Добавить</button>
-    </form>
+    <div class="toolbar">
+      <button class="btn" id="sync-b24" type="button">Обновить из CRM</button>
+      <span class="hint" id="sync-b24-state"></span>
+    </div>
     <div id="add-manager-err" class="err-line"></div>
     <div class="manager-list" id="managers-list"></div>
   </div>
@@ -367,6 +366,10 @@
             <div class="m-accounts">${accounts}</div>
           </div>
           <div class="m-actions">
+            <button class="btn btn--ghost btn--sm" data-patch="${m.id}" data-field="role"
+              data-value="${m.role === "supervisor" ? "manager" : "supervisor"}" type="button"
+              title="Роль в ЧатМосте: администратор управляет панелью и видит все диалоги">
+              ${m.role === "supervisor" ? "🛡 администратор" : "👤 менеджер"}</button>
             <button class="btn btn--ghost btn--sm" data-patch="${m.id}" data-field="is_readonly"
               data-value="${!m.is_readonly}" type="button"
               title="Права на отправку сообщений из виджета">
@@ -387,7 +390,10 @@
       });
       list.querySelectorAll("[data-patch]").forEach((btn) => {
         btn.addEventListener("click", async () => {
-          const body = {}; body[btn.dataset.field] = btn.dataset.value === "true";
+          const body = {};
+          body[btn.dataset.field] = btn.dataset.field === "role"
+            ? btn.dataset.value
+            : btn.dataset.value === "true";
           try { await api(`/admin/api/managers/${btn.dataset.patch}`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
@@ -398,23 +404,25 @@
       });
     }
 
-    document.getElementById("add-manager").addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const errBox = document.getElementById("add-manager-err");
-      errBox.textContent = "";
+    document.getElementById("sync-b24").addEventListener("click", async () => {
+      const btn = document.getElementById("sync-b24");
+      const state = document.getElementById("sync-b24-state");
+      btn.disabled = true;
+      state.textContent = "обновляем…";
       try {
-        await api("/admin/api/managers", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: document.getElementById("m-name").value.trim(),
-            b24_user_id: Number(document.getElementById("m-b24").value),
-          }),
-        });
-        document.getElementById("m-name").value = "";
-        document.getElementById("m-b24").value = "";
+        const r = await api("/admin/api/managers/sync_b24", { method: "POST" });
+        const parts = [];
+        if (r.created) parts.push("новых: " + r.created);
+        if (r.updated) parts.push("обновлено: " + r.updated);
+        if (r.deactivated) parts.push("деактивировано: " + r.deactivated);
+        state.textContent = parts.length ? parts.join(", ") : "изменений нет";
+        if (r.warnings && r.warnings.length) showToast(r.warnings.join("; "));
         loadSupervisor();
-      } catch (err) { errBox.textContent = err.message; }
+      } catch (e) {
+        state.textContent = "";
+        showToast("Не получилось: " + e.message);
+      }
+      btn.disabled = false;
     });
 
     loadSupervisor();

@@ -13,7 +13,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from app.b24.client import Bitrix24Client, Bitrix24Error
 from app.b24.sync import TIMELINE_MODES
+from app.b24.token_manager import TokenManager
+from app.b24.users import fetch_b24_users, is_last_active_supervisor, upsert_managers_from_b24
 from app.db import async_session
 from app.models import (
     LoginCommand,
@@ -64,6 +67,7 @@ class ManagerCreateIn(BaseModel):
 
 class ManagerPatchIn(BaseModel):
     name: str | None = None
+    role: ManagerRole | None = None
     is_active: bool | None = None
     is_readonly: bool | None = None
 
@@ -191,6 +195,50 @@ async def list_managers(supervisor: SupervisorDep) -> list[dict]:
     return [_manager_dto(m, by_manager.get(m.id, [])) for m in managers]
 
 
+@router.post("/managers/sync_b24", response_model=None)
+async def sync_managers_b24(supervisor: SupervisorDep) -> dict:
+    """«Обновить из CRM»: user.get → upsert справочника менеджеров."""
+    # Локальный импорт: глобальное имя get_settings в этом модуле занято
+    # роутом настроек таймлайна ниже.
+    from app.config import get_settings
+
+    settings = get_settings()
+    token = await TokenManager(
+        client_id=settings.b24_client_id,
+        client_secret=settings.b24_client_secret,
+    ).get_token()
+    if token is None:
+        raise HTTPException(
+            status_code=503, detail="Приложение ЧатМост не установлено в Битрикс24"
+        )
+    # Одноразовый клиент на запрос (web-процесс; паттерн placement.py).
+    client = Bitrix24Client(
+        client_endpoint=token.client_endpoint or settings.b24_portal.rstrip("/") + "/rest/",
+        min_interval=settings.b24_min_call_interval,
+    )
+    try:
+        users = await fetch_b24_users(client, token.access_token)
+    except Bitrix24Error as e:
+        if e.code == "ERROR_SCOPE":
+            raise HTTPException(
+                status_code=400,
+                detail="У приложения нет права «Пользователи» — "
+                "переустановите приложение с этим разрешением",
+            ) from None
+        raise HTTPException(status_code=502, detail=f"Битрикс24: {e}") from None
+    finally:
+        await client.aclose()
+    result = await upsert_managers_from_b24(async_session, users)
+    logger.info(
+        "Синк менеджеров из B24: created=%s updated=%s deactivated=%s (by supervisor %s)",
+        result["created"],
+        result["updated"],
+        result["deactivated"],
+        supervisor.id,
+    )
+    return result
+
+
 @router.post("/managers", status_code=201, response_model=None)
 async def create_manager(body: ManagerCreateIn, supervisor: SupervisorDep) -> dict:
     async with async_session() as s:
@@ -249,8 +297,20 @@ async def patch_manager(manager_id: int, body: ManagerPatchIn, supervisor: Super
                     status_code=409,
                     detail=f"сначала отключите активные аккаунты ({channels})",
                 )
+        if (
+            body.role is not None
+            and body.role != m.role
+            and m.role == ManagerRole.supervisor
+            and await is_last_active_supervisor(s, m)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="нельзя снять роль администратора с последнего активного администратора",
+            )
         if body.name is not None:
             m.name = body.name
+        if body.role is not None:
+            m.role = body.role
         if body.is_active is not None:
             m.is_active = body.is_active
         if body.is_readonly is not None:
