@@ -6,6 +6,7 @@ SQLAlchemy смог разрешить строковые forward-refs в ``rela
 ``from app.models import Base, Manager, ...``.
 """
 
+from app.models.account_member import AccountMember, LineRole
 from app.models.app_setting import AppSetting
 from app.models.attachment import Attachment, AttachmentType
 from app.models.b24_token import B24Token
@@ -30,6 +31,7 @@ __all__ = [
     "ACTIVE_STATUSES",
     "KIND_INBOUND",
     "KIND_OUTBOUND",
+    "AccountMember",
     "AppSetting",
     "Attachment",
     "AttachmentType",
@@ -40,6 +42,7 @@ __all__ = [
     "CrmSyncStatus",
     "Dialog",
     "DialogStatus",
+    "LineRole",
     "LoginCommand",
     "LoginCommandKind",
     "LoginCommandStatus",

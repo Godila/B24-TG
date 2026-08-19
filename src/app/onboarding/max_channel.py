@@ -19,7 +19,7 @@ from app.db import async_session
 from app.messaging.max.factory import make_onboarding_client
 from app.messaging.max.login import MaxQrLoginFlow, MaxSession
 from app.messaging.max.protocol import build_user_agent
-from app.models import Manager, Messenger, TgAccount, TgAccountStatus
+from app.models import AccountMember, Manager, Messenger, TgAccount, TgAccountStatus
 from app.onboarding.types import LoginView, OnboardingStatus
 
 logger = logging.getLogger(__name__)
@@ -154,6 +154,9 @@ class MaxOnboardingChannel:
                 )
                 s.add(acc)
                 try:
+                    await s.flush()
+                    # Линия нового аккаунта: подключающий — первый участник.
+                    s.add(AccountMember(account_id=acc.id, manager_id=manager.id))
                     await s.commit()
                     return acc
                 except IntegrityError:

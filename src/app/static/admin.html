@@ -95,6 +95,15 @@
       display: inline-flex; align-items: center; justify-content: center; padding: 0;
     }
     .chip-x:hover { background: rgba(0,0,0,.18); }
+    .chip-btn {
+      border: none; cursor: pointer; background: rgba(0,0,0,.08); color: inherit;
+      border-radius: 999px; padding: 2px 8px; font-size: .72rem; font-weight: 600;
+    }
+    .chip-btn:hover { background: rgba(0,0,0,.18); }
+    select.line-add {
+      border: 1px solid var(--border); border-radius: 8px; padding: 4px 6px;
+      font-size: .85rem; background: #fff; max-width: 180px;
+    }
 
     /* --- кнопки --- */
     .btn {
@@ -215,6 +224,14 @@
       </p>
     </div>
 
+    <h2>Линии <span class="counter" id="lines-count"></span></h2>
+    <p class="hint" style="margin:0 0 10px">
+      Линия — подключённый номер. Номер с одним участником — личный; добавьте
+      участников, и номер станет общим: переписка будет видна всем участникам,
+      отвечать может любой участник, наблюдатель — только читает.
+    </p>
+    <div class="manager-list" id="lines-list"></div>
+
     <h2>Менеджеры <span class="counter" id="managers-count"></span></h2>
     <div class="toolbar">
       <button class="btn" id="sync-b24" type="button">Обновить из CRM</button>
@@ -328,7 +345,9 @@
       });
     });
 
-    // ---- Supervisor-зона: менеджеры ----
+    // ---- Supervisor-зона: менеджеры и линии ----
+    let managersCache = [];
+
     function initials(name) {
       return (name || "?").trim().split(/\s+/).slice(0, 2)
         .map((w) => w[0]).join("").toUpperCase();
@@ -350,6 +369,7 @@
       document.getElementById("supervisor-zone").style.display = "";
 
       const rows = await api("/admin/api/managers");
+      managersCache = rows;
       document.getElementById("managers-count").textContent = "· " + rows.length;
       const list = document.getElementById("managers-list");
       list.innerHTML = "";
@@ -400,6 +420,84 @@
             body: JSON.stringify(body),
           }); } catch (e) { showToast("Не получилось: " + e.message); }
           loadSupervisor();
+        });
+      });
+      loadLines();  // после обновления кэша менеджеров (селекты участников)
+    }
+
+    // ---- Supervisor-зона: линии (номера и участники) ----
+    async function loadLines() {
+      let lines;
+      try { lines = await api("/admin/api/lines"); }
+      catch { return; /* не supervisor — секция скрыта */ }
+      document.getElementById("lines-count").textContent = "· " + lines.length;
+      const box = document.getElementById("lines-list");
+      box.innerHTML = "";
+      for (const ln of lines) {
+        const ico = ln.messenger === "tg" ? "✈️" : "🅜";
+        const badge = ln.status === "active" ? "<span class='badge ok'>активна</span>"
+          : ln.status === "banned" ? "<span class='badge err'>заблокирована</span>"
+          : "<span class='badge warn'>офлайн</span>";
+        const memberIds = new Set(ln.members.map((m) => m.manager_id));
+        const options = managersCache
+          .filter((m) => m.is_active && !memberIds.has(m.id))
+          .map((m) => `<option value="${m.id}">${m.name}</option>`).join("");
+        const chips = ln.members.map((mem) => `
+          <span class="chip">${mem.name}
+            <button class="chip-btn" data-line="${ln.id}" data-manager="${mem.manager_id}"
+              data-role="${mem.role === "participant" ? "observer" : "participant"}" type="button"
+              title="Переключить роль участника">${mem.role === "participant" ? "участник" : "наблюдатель"}</button>
+            <button class="chip-x" data-line="${ln.id}" data-manager="${mem.manager_id}" type="button"
+              title="Убрать из линии" aria-label="Убрать ${mem.name} из линии">×</button>
+          </span>`).join("") || "<span class='hint'>нет участников</span>";
+        const div = document.createElement("div");
+        div.className = "manager-row";
+        div.innerHTML = `
+          <div class="m-avatar">${ico}</div>
+          <div class="m-main">
+            <div class="m-name">${ln.name || ln.phone} ${badge}
+              <span class="hint">${ln.messenger.toUpperCase()} · ${ln.phone}</span></div>
+            <div class="m-accounts">${chips}</div>
+          </div>
+          <div class="m-actions">
+            ${options ? `<select class="line-add" data-line="${ln.id}" aria-label="Кого добавить в линию">${options}</select>
+            <button class="btn btn--ghost btn--sm" data-add-line="${ln.id}" type="button">+ участник</button>` : ""}
+          </div>`;
+        box.appendChild(div);
+      }
+      box.querySelectorAll("[data-add-line]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const sel = box.querySelector(`select[data-line="${btn.dataset.addLine}"]`);
+          if (!sel || !sel.value) return;
+          try {
+            await api(`/admin/api/lines/${btn.dataset.addLine}/members`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ manager_id: Number(sel.value) }),
+            });
+          } catch (e) { showToast("Не получилось: " + e.message); }
+          loadLines();
+        });
+      });
+      box.querySelectorAll(".chip-btn[data-line]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          try {
+            await api(`/admin/api/lines/${btn.dataset.line}/members/${btn.dataset.manager}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ role: btn.dataset.role }),
+            });
+          } catch (e) { showToast("Не получилось: " + e.message); }
+          loadLines();
+        });
+      });
+      box.querySelectorAll(".chip-x[data-line]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          try {
+            await api(`/admin/api/lines/${btn.dataset.line}/members/${btn.dataset.manager}`, {
+              method: "DELETE" });
+          } catch (e) { showToast("Не получилось: " + e.message); }
+          loadLines();
         });
       });
     }

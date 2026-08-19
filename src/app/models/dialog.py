@@ -47,12 +47,28 @@ class Dialog(Base, TimestampMixin):
             "messenger",
             name="uq_dialogs_chat_per_manager",
         ),
+        # Идентичность диалога по линии (аккаунту): у общих линий
+        # ответственного может не быть (NULL не дедуплицируется старым
+        # ключом), а один и тот же клиент может писать на разные линии.
+        # Legacy-ключ выше живёт до уборки assigned-семантики (Этап 6).
+        UniqueConstraint(
+            "external_chat_id",
+            "messenger",
+            "account_id",
+            name="uq_dialogs_chat_per_account",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id"), nullable=False, index=True)
     messenger: Mapped[Messenger] = mapped_column(Enum(Messenger), nullable=False)
     external_chat_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    # Линия (аккаунт), через которую идёт переписка: у личных линий
+    # совпадает с аккаунтом владельца, у общих — единственная связь
+    # диалога с номером (отправка/квитанции/видимость участников).
+    account_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("tg_accounts.id"), nullable=True, index=True
+    )
     crm_deal_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     crm_entity_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     assigned_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)

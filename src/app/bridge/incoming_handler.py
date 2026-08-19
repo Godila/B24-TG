@@ -55,7 +55,8 @@ class IncomingHandler:
         # 1. Сохранение в нашей БД — всегда, независимо от состояния CRM.
         # ВАЖНО: диалог привязываем к Manager.id (ответственный менеджер), НЕ к
         # account.id — API фильтрует диалоги по manager.id (Dialog.assigned_user_id).
-        message_id = await self._persist(msg, manager_id=account.manager_id)
+        # Линия (account_id) пишется сразу: состав линии — источник доступа.
+        message_id = await self._persist(msg, account=account)
         if message_id is None:
             return  # дубль доставки или device-outbound без диалога
 
@@ -70,8 +71,9 @@ class IncomingHandler:
                 msg.external_message_id,
             )
 
-    async def _persist(self, msg: IncomingMessage, *, manager_id: int) -> int | None:
+    async def _persist(self, msg: IncomingMessage, *, account) -> int | None:
         """Сохранить сообщение; вернуть его id или None для дубля доставки."""
+        manager_id = account.manager_id
         if msg.direction == MessageDirection.outbound:
             return await self._persist_outbound(msg, manager_id=manager_id)
         async with self._db_factory() as session:
@@ -83,6 +85,7 @@ class IncomingHandler:
                     contact_id=contact.id,
                     messenger=msg.messenger,
                     external_chat_id=msg.external_chat_id,
+                    account_id=account.id,
                     assigned_user_id=manager_id,
                 )
                 session.add(dialog)

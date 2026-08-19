@@ -17,6 +17,7 @@ from app.models.base import Base, TimestampMixin
 from app.models.dialog import Messenger
 
 if TYPE_CHECKING:
+    from app.models.account_member import AccountMember
     from app.models.manager import Manager
 
 
@@ -60,3 +61,9 @@ class TgAccount(Base, TimestampMixin):
     )
 
     manager: Mapped["Manager"] = relationship(back_populates="tg_accounts")
+    # Состав линии (M:N): личный номер — один участник, общий — несколько.
+    # manager_id — legacy-владелец, дублирует единственного участника до
+    # уборки self-service онбординга (Этап 6 из плана линий).
+    members: Mapped[list["AccountMember"]] = relationship(
+        back_populates="account", cascade="all, delete-orphan"
+    )

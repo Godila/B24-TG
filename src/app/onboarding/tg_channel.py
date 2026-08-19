@@ -19,6 +19,7 @@ from app.config import get_settings
 from app.db import async_session
 from app.models import (
     ACTIVE_STATUSES,
+    AccountMember,
     LoginCommand,
     LoginCommandKind,
     LoginCommandStatus,
@@ -104,6 +105,9 @@ class TgOnboardingChannel:
                 )
                 s.add(account)
                 await s.flush()
+                # Линия нового аккаунта: подключающий — первый участник
+                # (инвариант account_members, пока онбординг персональный).
+                s.add(AccountMember(account_id=account.id, manager_id=manager.id))
             s.add(
                 LoginCommand(
                     manager_id=manager.id,

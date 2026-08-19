@@ -43,6 +43,7 @@ CREATE TABLE dialogs (
     contact_id INTEGER NOT NULL REFERENCES contacts (id),
     messenger VARCHAR(3) NOT NULL,
     external_chat_id VARCHAR(128) NOT NULL,
+    account_id INTEGER,
     crm_deal_id INTEGER,
     crm_entity_type VARCHAR(32),
     assigned_user_id INTEGER,
@@ -105,8 +106,12 @@ def _make_msg(**kw):
     return IncomingMessage(**defaults)
 
 
-def _make_account(manager_id: int, b24_user_id: int = 15) -> MagicMock:
+def _make_account(manager_id: int, b24_user_id: int = 15, account_id: int = 0) -> MagicMock:
     account = MagicMock()
+    # account_id по умолчанию = manager_id — так аккаунты засеяны в тестах
+    # (у каждой линии свой id, иначе уникальность (chat, messenger, account)
+    # схлопывает разные диалоги менеджеров).
+    account.id = account_id or manager_id
     account.manager_id = manager_id
     account.manager.b24_user_id = b24_user_id
     return account

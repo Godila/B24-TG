@@ -10,7 +10,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.b24.client import Bitrix24Client, Bitrix24Error
@@ -19,6 +19,9 @@ from app.b24.token_manager import TokenManager
 from app.b24.users import fetch_b24_users, is_last_active_supervisor, upsert_managers_from_b24
 from app.db import async_session
 from app.models import (
+    AccountMember,
+    Dialog,
+    LineRole,
     LoginCommand,
     LoginCommandKind,
     LoginCommandStatus,
@@ -70,6 +73,15 @@ class ManagerPatchIn(BaseModel):
     role: ManagerRole | None = None
     is_active: bool | None = None
     is_readonly: bool | None = None
+
+
+class LineMemberIn(BaseModel):
+    manager_id: int
+    role: LineRole = LineRole.participant
+
+
+class LineMemberPatchIn(BaseModel):
+    role: LineRole
 
 
 # ---------------------------------------------------------------------- #
@@ -237,6 +249,134 @@ async def sync_managers_b24(supervisor: SupervisorDep) -> dict:
         supervisor.id,
     )
     return result
+
+
+# ---------------------------------------------------------------------- #
+# Линии (аккаунты) и их участники
+# ---------------------------------------------------------------------- #
+def _member_dto(am: AccountMember, m: Manager) -> dict:
+    return {
+        "manager_id": m.id,
+        "name": m.name,
+        "b24_user_id": m.b24_user_id,
+        "role": am.role.value,
+    }
+
+
+@router.get("/lines", response_model=None)
+async def list_lines(supervisor: SupervisorDep) -> list[dict]:
+    async with async_session() as s:
+        accounts = (
+            (await s.execute(select(TgAccount).order_by(TgAccount.id))).scalars().all()
+        )
+        rows = (
+            await s.execute(
+                select(AccountMember, Manager)
+                .join(Manager, AccountMember.manager_id == Manager.id)
+                .order_by(AccountMember.account_id, AccountMember.id)
+            )
+        ).all()
+    by_account: dict[int, list[dict]] = {}
+    for am, m in rows:
+        by_account.setdefault(am.account_id, []).append(_member_dto(am, m))
+    return [
+        {
+            "id": a.id,
+            "messenger": a.messenger.value,
+            "phone": a.phone,
+            "name": a.display_name,
+            "status": a.status.value,
+            "members": by_account.get(a.id, []),
+        }
+        for a in accounts
+    ]
+
+
+async def _load_member(
+    s, account_id: int, manager_id: int
+) -> AccountMember:
+    return (
+        await s.execute(
+            select(AccountMember).where(
+                AccountMember.account_id == account_id,
+                AccountMember.manager_id == manager_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+
+@router.post("/lines/{account_id}/members", status_code=201, response_model=None)
+async def add_line_member(
+    account_id: int, body: LineMemberIn, supervisor: SupervisorDep
+) -> dict:
+    async with async_session() as s:
+        account = await s.get(TgAccount, account_id)
+        if account is None:
+            raise HTTPException(status_code=404, detail="линия не найдена")
+        m = await s.get(Manager, body.manager_id)
+        if m is None or not m.is_active:
+            raise HTTPException(
+                status_code=422, detail="менеджер не найден или неактивен"
+            )
+        member = AccountMember(
+            account_id=account_id, manager_id=body.manager_id, role=body.role
+        )
+        s.add(member)
+        try:
+            await s.commit()
+        except IntegrityError:
+            raise HTTPException(status_code=409, detail="уже участник линии") from None
+        logger.info(
+            "Участник линии добавлен: account_id=%s manager_id=%s role=%s (by supervisor %s)",
+            account_id, body.manager_id, body.role.value, supervisor.id,
+        )
+        return _member_dto(member, m)
+
+
+@router.patch("/lines/{account_id}/members/{manager_id}", response_model=None)
+async def patch_line_member(
+    account_id: int, manager_id: int, body: LineMemberPatchIn, supervisor: SupervisorDep
+) -> dict:
+    async with async_session() as s:
+        member = await _load_member(s, account_id, manager_id)
+        if member is None:
+            raise HTTPException(status_code=404, detail="участник не найден")
+        member.role = body.role
+        await s.commit()
+        m = await s.get(Manager, manager_id)
+        logger.info(
+            "Роль участника линии: account_id=%s manager_id=%s role=%s (by supervisor %s)",
+            account_id, manager_id, body.role.value, supervisor.id,
+        )
+        return _member_dto(member, m)
+
+
+@router.delete("/lines/{account_id}/members/{manager_id}", response_model=None)
+async def remove_line_member(
+    account_id: int, manager_id: int, supervisor: SupervisorDep
+) -> dict:
+    async with async_session() as s:
+        member = await _load_member(s, account_id, manager_id)
+        if member is None:
+            raise HTTPException(status_code=404, detail="участник не найден")
+        await s.delete(member)
+        # Ответственный из состава линии сбрасывается: диалоги линии
+        # становятся «без ответственного», а не висят на невидимом им
+        # бывшем участнике.
+        await s.execute(
+            update(Dialog)
+            .where(
+                Dialog.account_id == account_id,
+                Dialog.assigned_user_id == manager_id,
+            )
+            .values(assigned_user_id=None)
+        )
+        await s.commit()
+        logger.info(
+            "Участник линии удалён: account_id=%s manager_id=%s (by supervisor %s)",
+            account_id, manager_id, supervisor.id,
+        )
+        return {"status": "removed"}
 
 
 @router.post("/managers", status_code=201, response_model=None)
