@@ -1,10 +1,11 @@
-# Ротация docker-логов: без лимита json-file растёт бесконечно (bridge
-# с телеметрией каналов — главный генератор). 10М × 3 файла на контейнер.
+# Логи в journald: переживают пересоздание контейнеров при деплоях
+# (json-file умирал вместе с контейнером — инцидент 08-18 разбирали
+# вслепую) и ротируются самим журналом. Смотреть:
+#   journalctl -t chatmost.<имя-контейнера>   |   docker compose logs
 x-logging: &default-logging
-  driver: json-file
+  driver: journald
   options:
-    max-size: "10m"
-    max-file: "3"
+    tag: "chatmost.{{.Name}}"
 
 services:
   postgres:

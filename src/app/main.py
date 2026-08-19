@@ -51,7 +51,7 @@ async def run_bridge() -> None:
 
     Конструирует wiring (TokenManager → Bitrix24Client → CrmService/ImService
     → Bitrix24Sync → IncomingHandler + ReadMarker), затем активирует конвейер:
-      1. загружает активные TgAccount (с eager-load менеджера);
+      1. загружает активные TgAccount (маршрутизация — по линиям, без менеджера);
       2. регистрирует их в SessionManager (подключение канальных сессий);
       3. запускает OutboxWorker, CrmSyncWorker и HealthChecker фоновыми
          задачами;

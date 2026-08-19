@@ -1,8 +1,8 @@
-"""Unit-тесты HealthChecker (план 009): персист статусов + transition-only алерты.
+"""Unit-тесты HealthChecker: наблюдатель — алерты transition-only, БД не трогает.
 
-Чекер ходит в реальную in-memory SQLite (StaticPool) через
-``session_factory`` и зовёт ``notifier``-колбэк только на переходе
-active→offline. Провайдеры — фейки с ``_client.is_connected()``.
+Инцидент 08-18: чекер, писавший offline по факту дисконнекта, вышибал
+аккаунт с живым токеном из active-сета навсегда. Теперь статус в БД —
+неприкосновенен (его пишут только failure-hook и QR-флоу).
 """
 
 from unittest.mock import AsyncMock
@@ -22,9 +22,9 @@ from app.models import Base, Manager, TgAccount, TgAccountStatus
 
 
 class FakeProvider:
-    """Фейк под контракт ABC: sync is_connected()."""
+    """Фейк под контракт ABC: sync is_connected(), состояние переключаемое."""
 
-    def __init__(self, connected: bool):
+    def __init__(self, connected: bool = True):
         self._connected = connected
 
     def is_connected(self) -> bool:
@@ -54,6 +54,7 @@ async def _seed_account(SessionLocal, status: TgAccountStatus) -> int:
         s.add(
             TgAccount(
                 id=7,
+                messenger="tg",
                 phone="+79990000001",
                 session_path="/tmp/s7",
                 manager_id=1,
@@ -64,9 +65,9 @@ async def _seed_account(SessionLocal, status: TgAccountStatus) -> int:
     return 7
 
 
-def _make_sm(connected: bool) -> SessionManager:
+def _make_sm(provider: FakeProvider) -> SessionManager:
     sm = SessionManager(api_id=1, api_hash="x", sessions_dir="/tmp")
-    sm._providers[7] = FakeProvider(connected)  # type: ignore[assignment]
+    sm._providers[7] = provider  # type: ignore[assignment]
     return sm
 
 
@@ -79,12 +80,12 @@ async def _get_status(SessionLocal, account_id: int) -> TgAccountStatus:
 
 
 @pytest.mark.asyncio
-async def test_connected_account_stays_active_and_no_alert(db):
-    """Подключённый аккаунт: статус active (становится/остаётся), алерта нет."""
-    account_id = await _seed_account(db, TgAccountStatus.active)
+async def test_connected_account_no_alert(db):
+    """Подключённый аккаунт: алерта нет, статус в БД не тронут."""
+    await _seed_account(db, TgAccountStatus.active)
     notifier = AsyncMock()
     checker = HealthChecker(
-        _make_sm(connected=True),
+        _make_sm(FakeProvider(connected=True)),
         session_factory=db,
         notifier=notifier,
         admin_user_id=1,
@@ -92,17 +93,18 @@ async def test_connected_account_stays_active_and_no_alert(db):
 
     await checker._check_once()
 
-    assert await _get_status(db, account_id) is TgAccountStatus.active
+    assert await _get_status(db, 7) is TgAccountStatus.active
     notifier.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_disconnect_persists_offline_and_alerts(db):
-    """Отключение при active в БД: status=offline + алерт с account_id."""
-    account_id = await _seed_account(db, TgAccountStatus.active)
+async def test_disconnect_alerts_but_never_touches_db(db):
+    """РЕГРЕССИЯ инцидента 08-18: дисконнект = алерт, но статус active
+    в БД остаётся (аккаунт не вылетает из active-сета AccountSync)."""
+    await _seed_account(db, TgAccountStatus.active)
     notifier = AsyncMock()
     checker = HealthChecker(
-        _make_sm(connected=False),
+        _make_sm(FakeProvider(connected=False)),
         session_factory=db,
         notifier=notifier,
         admin_user_id=42,
@@ -110,67 +112,75 @@ async def test_disconnect_persists_offline_and_alerts(db):
 
     await checker._check_once()
 
-    assert await _get_status(db, account_id) is TgAccountStatus.offline
+    assert await _get_status(db, 7) is TgAccountStatus.active  # ключевое
     notifier.assert_awaited_once()
     user_id, text = notifier.await_args.args
     assert user_id == 42
     assert "id=7" in text
     assert "+79990000001" in text
+    assert "TG" in text
 
 
 @pytest.mark.asyncio
-async def test_no_notifier_no_crash(db):
-    """notifier=None (старый режим): статус пишется, ничего не падает."""
-    account_id = await _seed_account(db, TgAccountStatus.active)
-    checker = HealthChecker(
-        _make_sm(connected=False),
-        session_factory=db,
-    )
-
-    await checker._check_once()  # не должен бросить
-
-    assert await _get_status(db, account_id) is TgAccountStatus.offline
-
-
-@pytest.mark.asyncio
-async def test_alert_not_repeated_when_already_offline(db):
-    """Transition-only: повторная проверка офлайн-аккаунта — БЕЗ алерта."""
-    account_id = await _seed_account(db, TgAccountStatus.active)
+async def test_alert_transition_only(db):
+    """Повторные проверки дисконнекта — без повторных алертов."""
+    await _seed_account(db, TgAccountStatus.active)
     notifier = AsyncMock()
     checker = HealthChecker(
-        _make_sm(connected=False),
+        _make_sm(FakeProvider(connected=False)),
         session_factory=db,
         notifier=notifier,
         admin_user_id=1,
     )
 
-    await checker._check_once()  # active → offline: алерт
-    await checker._check_once()  # уже offline: без алерта
+    await checker._check_once()  # переход → алерт
+    await checker._check_once()  # всё ещё дисконнект → молчит
 
-    assert await _get_status(db, account_id) is TgAccountStatus.offline
     notifier.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_recovery_updates_status_without_alert(db):
-    """Обратный переход offline→active: просто UPDATE, алерта нет."""
-    account_id = await _seed_account(db, TgAccountStatus.offline)
+async def test_restore_no_alert_then_realert_on_new_drop(db):
+    """Реконнект — молча; новый обрыв после него — снова алерт."""
+    await _seed_account(db, TgAccountStatus.active)
+    provider = FakeProvider(connected=False)
     notifier = AsyncMock()
     checker = HealthChecker(
-        _make_sm(connected=True),
+        _make_sm(provider), session_factory=db, notifier=notifier, admin_user_id=1
+    )
+
+    await checker._check_once()  # алерт №1
+    provider._connected = True
+    await checker._check_once()  # восстановление — молча
+    provider._connected = False
+    await checker._check_once()  # новый обрыв — алерт №2
+
+    assert notifier.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_no_notifier_no_crash(db):
+    """notifier=None: только логи, ничего не падает, БД не тронута."""
+    await _seed_account(db, TgAccountStatus.active)
+    checker = HealthChecker(
+        _make_sm(FakeProvider(connected=False)),
         session_factory=db,
-        notifier=notifier,
-        admin_user_id=1,
     )
 
     await checker._check_once()
 
-    assert await _get_status(db, account_id) is TgAccountStatus.active
-    notifier.assert_not_awaited()
+    assert await _get_status(db, 7) is TgAccountStatus.active
 
 
 @pytest.mark.asyncio
-async def test_legacy_mode_without_session_factory_only_logs():
-    """Без session_factory (Фаза 1): только логирование, БД не трогается."""
-    checker = HealthChecker(_make_sm(connected=False))
-    await checker._check_once()  # не должен бросить
+async def test_legacy_mode_without_session_factory():
+    """Без session_factory: алерт без метаданных («?»), БД вообще не нужна."""
+    notifier = AsyncMock()
+    checker = HealthChecker(
+        _make_sm(FakeProvider(connected=False)),
+        notifier=notifier,
+        admin_user_id=1,
+    )
+    await checker._check_once()
+    notifier.assert_awaited_once()
+    assert "id=7" in notifier.await_args.args[1]

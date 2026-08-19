@@ -1,8 +1,9 @@
 """Интеграционные DB-тесты /health (план 009): реальные счётчики статусов.
 
-Web-процесс не знает is_connected — он читает ``tg_accounts.status``, куда
-их пишет bridge-овый HealthChecker. Здесь сием статусы напрямую и сверяем
-ответ эндпоинта: ok / degraded (503) / error (БД недоступна).
+Web-процесс не знает is_connected — он читает ``tg_accounts.status``
+(пишут failure-hook терминальных auth-отказов и QR-флоу). Здесь сием
+статусы напрямую и сверяем ответ эндпоинта: ok / degraded (503) /
+error (БД недоступна).
 """
 
 import pytest
