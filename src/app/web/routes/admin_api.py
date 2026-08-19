@@ -409,7 +409,7 @@ async def delete_line(account_id: int, supervisor: SupervisorDep) -> dict:
         if account.status == TgAccountStatus.active:
             raise HTTPException(
                 status_code=409,
-                detail="сначала отключите линию (Отменить подключение или отключите аккаунт)",
+                detail="сначала отключите линию кнопкой «Отключить» в её строке",
             )
         await terminate_active_commands(s, account_id=account.id)
         await s.execute(
@@ -600,7 +600,7 @@ async def unlink_account(account_id: int, supervisor: SupervisorDep) -> dict:
     локальная деактивация (токен стирается, AccountSync снимет провайдера)."""
     async with async_session() as s:
         account = await s.get(TgAccount, account_id)
-        if account is None:
+        if account is None or account.is_removed:
             raise HTTPException(status_code=404, detail="аккаунт не найден")
         if account.messenger == Messenger.tg:
             # Гасим живые логин-команды аккаунта и ставим log_out (одна txn —

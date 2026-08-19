@@ -494,6 +494,12 @@
         '<div class="line-members">' + (chips || "") + "</div>" +
         '<p class="members-hint"' + (chips ? " hidden" : "") + '>Нет участников — у линии нет ответственных.</p>' +
         '<div class="line-actions">' + addControl +
+          (ln.status === "active"
+            ? '<button class="btn btn--ghost btn--sm" data-unlink-line="' + ln.id + '" type="button"' +
+              ' title="Отключить номер: сессия мессенджера завершится на стороне Telegram/MAX,' +
+              ' переписка остановится; переподключить можно новой ссылкой">' +
+              ic("power") + "Отключить</button>"
+            : "") +
           '<button class="btn btn--ghost btn--sm" data-share="' + ln.id + '" data-channel="' + ln.messenger +
           '" type="button" title="Выдать ссылку подключения владельцу телефона">' +
           ic("link") + (isBlank ? "Подключить" : "Ссылка") + "</button>" +
@@ -649,6 +655,30 @@
       const share = e.target.closest("[data-share]");
       if (share) {
         wzOpen(Number(share.dataset.share), share.dataset.channel);
+        return;
+      }
+      const unlinkLine = e.target.closest("[data-unlink-line]");
+      if (unlinkLine) {
+        const lineId = Number(unlinkLine.dataset.unlinkLine);
+        unlinkLine.disabled = true;
+        try {
+          await api("/admin/api/accounts/" + lineId + "/unlink", { method: "POST" });
+        } catch (err) {
+          unlinkLine.disabled = false;
+          showToast("Не получилось: " + err.message);
+          return;
+        }
+        // Статус меняет bridge (TG — логин-воркер ~2-4с, MAX — сразу):
+        // точечно дожидаемся offline в строке, чтобы «Удалить» открылся.
+        for (let i = 0; i < 6; i++) {
+          await new Promise((r) => setTimeout(r, 1200));
+          try {
+            const lines = await api("/admin/api/lines");
+            const ln = lines.find((l) => l.id === lineId);
+            if (!ln || ln.status !== "active") break;
+          } catch { break; }
+        }
+        loadSupervisor();
         return;
       }
       const del = e.target.closest("[data-del-line]");

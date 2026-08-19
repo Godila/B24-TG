@@ -251,3 +251,15 @@ async def test_settings_media_to_timeline_roundtrip(db):
 
     await admin_api.put_settings(admin_api.SettingsIn(media_to_timeline=False), supervisor)
     assert (await admin_api.get_settings(supervisor))["media_to_timeline"] is False
+
+
+async def test_unlink_removed_line_returns_404(db):
+    """Удалённая (is_removed) линия не отключается — гард симметричен delete_line."""
+    sup = await _manager(db, 1)
+    async with db() as s:
+        acc = await s.get(TgAccount, 7)
+        acc.is_removed = True
+        await s.commit()
+    with pytest.raises(HTTPException) as ei:
+        await admin_api.unlink_account(7, sup)
+    assert ei.value.status_code == 404
