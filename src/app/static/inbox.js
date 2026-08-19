@@ -292,9 +292,10 @@ function inboxApp() {
       this.markRead(d);
     },
 
-    /** Гасит непрочитанные владельца; supervisor чужой диалог не гасит. */
+    /** Гасит СВОИ непрочитанные (курсор пер-менеджерный: владелец,
+     *  участник общего номера и supervisor двигают только свой). */
     async markRead(d) {
-      if (!d || !d.is_mine) return;
+      if (!d) return;
       d.unread_count = 0; // оптимистично; при сбое poll вернёт счётчик
       try {
         await fetch(`/api/inbox/dialogs/${d.id}/read`, {

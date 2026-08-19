@@ -4,13 +4,14 @@
 трогаем — inbox-списку нужны агрегаты (неотвеченные/непрочитанные) и
 supervisor-видимость, которых у виджета нет. История и отправка
 переиспользуют существующие GET/POST /api/dialogs/{id}/messages
-(GET релаксирован до «владелец ИЛИ supervisor»).
+(GET релаксирован до «владелец, участник линии ИЛИ supervisor»).
 """
 
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, case, func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -18,6 +19,7 @@ from app.db import get_session
 from app.models import (
     Contact,
     Dialog,
+    DialogRead,
     DialogStatus,
     Manager,
     ManagerRole,
@@ -26,7 +28,7 @@ from app.models import (
     Messenger,
 )
 from app.web.deps import get_current_manager, verify_origin
-from app.web.routes.dialogs import _load_dialog_accessible
+from app.web.routes.dialogs import _load_dialog_accessible, _visible_dialogs_cond
 from app.web.schemas import InboxDialogOut, InboxDialogsPageOut, ReadResultOut
 
 # verify_origin: прод-кука SameSite=none (iframe B24) летит и на
@@ -64,9 +66,9 @@ async def list_inbox_dialogs(
 ) -> InboxDialogsPageOut:
     """Список диалогов для двухпанельного UI «Чатов» (постранично).
 
-    Менеджер видит только свои диалоги; supervisor — все активные
-    диалоги портала (фильтр ``assigned``: id ответственного или -1 =
-    без ответственного). Ответ — две секции: ``unanswered`` (ВСЕ
+    Менеджер видит свои диалоги и диалоги линий своего участия; supervisor
+    — все активные диалоги портала (фильтр ``assigned``: id ответственного
+    или -1 = без ответственного). Ответ — две секции: ``unanswered`` (ВСЕ
     неотвеченные, кто дольше ждёт — выше) и ``dialogs`` — страница
     отвечавших по свежести (last_msg_at DESC), «Показать ещё» — ключом
     ``before`` (keyset по (last_msg_at, id), стабильнее offset при
@@ -78,8 +80,8 @@ async def list_inbox_dialogs(
     # Скоуп видимости + фильтры — общие для всех запросов ниже.
     conds = [Dialog.status == DialogStatus.active]
     if not is_supervisor:
-        conds.append(Dialog.assigned_user_id == manager.id)
-        # assigned для менеджера бессмыслен: его скоуп уже «свои диалоги».
+        conds.append(_visible_dialogs_cond(manager))
+        # assigned для менеджера бессмыслен: его скоуп уже видимое ему.
     if messenger is not None:
         conds.append(Dialog.messenger == messenger)
     if is_supervisor and assigned is not None:
@@ -119,9 +121,20 @@ async def list_inbox_dialogs(
         .group_by(Message.dialog_id)
         .subquery()
     )
+    # Курсор прочтения текущего менеджера: непрочитанные — состояние
+    # наблюдателя (участники общего номера и supervisor гасят свои бейджи
+    # независимо); COALESCE: нет строки = «не открывал» = всё непрочитано.
+    read_sq = (
+        select(
+            DialogRead.dialog_id.label("dialog_id"),
+            DialogRead.last_read_msg_id.label("last_read_msg_id"),
+        )
+        .where(DialogRead.manager_id == manager.id)
+        .subquery()
+    )
     # Оба счётчика — условная агрегация: неотвеченные = inbound после
     # последнего исходящего (или все, если исходящих нет); непрочитанные =
-    # inbound после курсора владельца (COALESCE: NULL = «не открывал»).
+    # inbound после курсора менеджера.
     agg_stmt = (
         select(
             last_out_sq.c.dialog_id.label("dialog_id"),
@@ -143,7 +156,7 @@ async def list_inbox_dialogs(
                     (
                         and_(
                             Message.direction == MessageDirection.inbound,
-                            Message.id > func.coalesce(Dialog.last_read_msg_id, 0),
+                            Message.id > func.coalesce(read_sq.c.last_read_msg_id, 0),
                         ),
                         1,
                     ),
@@ -153,7 +166,10 @@ async def list_inbox_dialogs(
         )
         .join(Message, Message.dialog_id == last_out_sq.c.dialog_id)
         .join(Dialog, Dialog.id == last_out_sq.c.dialog_id)
-        .group_by(last_out_sq.c.dialog_id, last_out_sq.c.last_msg_id)
+        .outerjoin(read_sq, read_sq.c.dialog_id == last_out_sq.c.dialog_id)
+        .group_by(
+            last_out_sq.c.dialog_id, last_out_sq.c.last_msg_id, read_sq.c.last_read_msg_id
+        )
     )
     agg_rows = (await session.execute(agg_stmt)).all()
     counters = {
@@ -257,32 +273,68 @@ async def mark_dialog_read(
     manager: ManagerDep,
     session: SessionDep,
 ) -> ReadResultOut:
-    """Отметить диалог прочитанным: курсор владельца = MAX(messages.id).
+    """Отметить диалог прочитанным: курсор СВОЙ = MAX(messages.id).
 
-    Только ответственный — supervisor чужую историю видит, но курсор
-    владельца не двигает (бейдж непрочитанных — состояние владельца).
-    Курсор идём только вперёд; пустой диалог курсор не меняет.
+    Любой, кому диалог виден (владелец, участник/наблюдатель линии,
+    supervisor), двигает только собственный курсор в dialog_reads —
+    чужие бейджи не трогает. Курсор идём только вперёд; пустой диалог
+    курсор не меняет.
     """
-    dialog = await _load_dialog_accessible(session, dialog_id, manager)
-    if dialog.assigned_user_id != manager.id:
-        raise HTTPException(
-            status_code=403,
-            detail=("Отметку прочитанного может ставить только ответственный менеджер"),
-        )
+    await _load_dialog_accessible(session, dialog_id, manager)
     max_id = await session.scalar(
         select(func.max(Message.id)).where(Message.dialog_id == dialog_id)
     )
-    if max_id is not None:
-        # Условный UPDATE одним statement: параллельные read не откатят
-        # курсор назад (опоздавший с меньшим MAX не перезапишет больший).
+    cursor = (
         await session.execute(
-            update(Dialog)
-            .where(
-                Dialog.id == dialog_id,
-                func.coalesce(Dialog.last_read_msg_id, 0) < max_id,
+            select(DialogRead).where(
+                DialogRead.dialog_id == dialog_id,
+                DialogRead.manager_id == manager.id,
             )
-            .values(last_read_msg_id=max_id)
         )
-        await session.commit()
-        dialog.last_read_msg_id = max(dialog.last_read_msg_id or 0, max_id)
-    return ReadResultOut(dialog_id=dialog_id, last_read_msg_id=dialog.last_read_msg_id)
+    ).scalar_one_or_none()
+    if max_id is None:
+        return ReadResultOut(
+            dialog_id=dialog_id,
+            last_read_msg_id=cursor.last_read_msg_id if cursor else None,
+        )
+    if cursor is None:
+        # ponytail: вставка без ON CONFLICT (диалект-зависимый) — гонка двух
+        # параллельных отметок одного менеджера даст 500, перезапрос лечит;
+        # per-manager upsert, если замелькает.
+        session.add(
+            DialogRead(
+                dialog_id=dialog_id, manager_id=manager.id, last_read_msg_id=max_id
+            )
+        )
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            cursor = (
+                await session.execute(
+                    select(DialogRead).where(
+                        DialogRead.dialog_id == dialog_id,
+                        DialogRead.manager_id == manager.id,
+                    )
+                )
+            ).scalar_one()
+            await _advance_cursor(session, cursor, max_id)
+        return ReadResultOut(dialog_id=dialog_id, last_read_msg_id=max_id)
+    await _advance_cursor(session, cursor, max_id)
+    return ReadResultOut(dialog_id=dialog_id, last_read_msg_id=cursor.last_read_msg_id)
+
+
+async def _advance_cursor(session: AsyncSession, cursor: DialogRead, max_id: int) -> None:
+    """Курсор только вперёд: опоздавший с меньшим MAX не откатит больший."""
+    if (cursor.last_read_msg_id or 0) >= max_id:
+        return
+    await session.execute(
+        update(DialogRead)
+        .where(
+            DialogRead.id == cursor.id,
+            func.coalesce(DialogRead.last_read_msg_id, 0) < max_id,
+        )
+        .values(last_read_msg_id=max_id)
+    )
+    await session.commit()
+    cursor.last_read_msg_id = max_id

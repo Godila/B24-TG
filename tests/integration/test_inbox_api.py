@@ -354,12 +354,14 @@ def test_read_marks_dialog_read_and_zeroes_unread(inbox_app):
     assert by_id[20]["unanswered_count"] == 1
 
 
-def test_read_supervisor_foreign_403_and_owner_untouched(inbox_app):
+def test_read_supervisor_own_cursor_owner_untouched(inbox_app):
+    """Курсоры пер-менеджерные: supervisor гасит СВОЙ бейдж, курсор
+    владельца (Ольги) не двигает."""
     client, state, _ = inbox_app
     state["manager_id"] = 3
     r = client.post("/api/inbox/dialogs/21/read")
-    assert r.status_code == 403
-    # Курсор Ольги не тронут: непрочитанные на месте.
+    assert r.status_code == 200
+    # Курсор Ольги не тронут: её непрочитанные на месте.
     state["manager_id"] = 2
     by_id = _all(client.get("/api/inbox/dialogs").json())
     assert by_id[21]["unread_count"] == 1

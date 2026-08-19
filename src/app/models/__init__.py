@@ -14,6 +14,7 @@ from app.models.base import Base, TimestampMixin
 from app.models.contact import Contact
 from app.models.crm_sync import KIND_INBOUND, KIND_OUTBOUND, CrmSyncItem, CrmSyncStatus
 from app.models.dialog import Dialog, DialogStatus, Messenger
+from app.models.dialog_read import DialogRead
 from app.models.login_command import (
     ACTIVE_STATUSES,
     LoginCommand,
@@ -41,6 +42,7 @@ __all__ = [
     "CrmSyncItem",
     "CrmSyncStatus",
     "Dialog",
+    "DialogRead",
     "DialogStatus",
     "LineRole",
     "LoginCommand",

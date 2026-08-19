@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy import inspect as sa_inspect
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -25,6 +25,7 @@ from app.media.storage import (
 )
 from app.messaging.types import MEDIA_PLACEHOLDERS
 from app.models import (
+    AccountMember,
     Attachment,
     Contact,
     Dialog,
@@ -106,21 +107,53 @@ def _message_dto(msg: Message) -> MessageOut:
     )
 
 
+def _visible_dialogs_cond(manager: Manager):
+    """Скоуп видимости не-supervisor: свои диалогы ИЛИ диалоги линий,
+    где менеджер — участник (любой роли). Supervisor видит всё — без скоупа."""
+    return or_(
+        Dialog.assigned_user_id == manager.id,
+        Dialog.account_id.in_(
+            select(AccountMember.account_id).where(
+                AccountMember.manager_id == manager.id
+            )
+        ),
+    )
+
+
+async def _is_line_member(
+    session: AsyncSession, dialog: Dialog, manager: Manager
+) -> bool:
+    if dialog.account_id is None:
+        return False
+    member_id = await session.scalar(
+        select(AccountMember.id).where(
+            AccountMember.account_id == dialog.account_id,
+            AccountMember.manager_id == manager.id,
+        ).limit(1)
+    )
+    return member_id is not None
+
+
 async def _load_dialog_accessible(
     session: AsyncSession, dialog_id: int, manager: Manager
 ) -> Dialog:
     """Диалог существует и ВИДЕН менеджеру, иначе 404.
 
-    Видимость: владелец ИЛИ supervisor (надзор — читает все диалоги
-    портала, включая неназначенные). 404, а не 403, для невидимых —
-    не раскрываем существование чужих диалогов (контракт виджета сделки).
+    Видимость: владелец, участник линии диалога (участник/наблюдатель) ИЛИ
+    supervisor (надзор — читает все диалоги портала, включая неназначенные).
+    404, а не 403, для невидимых — не раскрываем существование чужих
+    диалогов (контракт виджета сделки).
     """
     dialog = (
         await session.execute(select(Dialog).where(Dialog.id == dialog_id))
     ).scalar_one_or_none()
     if dialog is None:
         raise HTTPException(status_code=404, detail="Диалог не найден")
-    if dialog.assigned_user_id != manager.id and manager.role != ManagerRole.supervisor:
+    if (
+        dialog.assigned_user_id != manager.id
+        and manager.role != ManagerRole.supervisor
+        and not await _is_line_member(session, dialog, manager)
+    ):
         raise HTTPException(status_code=404, detail="Диалог не найден")
     return dialog
 
@@ -147,7 +180,7 @@ async def list_dialogs(
     stmt = (
         select(Dialog, Contact)
         .join(Contact, Dialog.contact_id == Contact.id)
-        .where(Dialog.assigned_user_id == manager.id)
+        .where(_visible_dialogs_cond(manager))
     )
     if deal_id is not None:
         stmt = stmt.where(Dialog.crm_deal_id == deal_id)

@@ -75,11 +75,8 @@ class Dialog(Base, TimestampMixin):
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[DialogStatus] = mapped_column(Enum(DialogStatus), default=DialogStatus.active)
     last_msg_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    # Курсор прочтения ВЛАДЕЛЬЦА: максимальный Message.id на момент открытия
-    # диалога; непрочитанные = inbound с id > курсора. Диалог пер-менеджерный
-    # (один владелец — см. uq_dialogs_chat_per_manager), поэтому курсор — поле
-    # строки, а не отдельная таблица; supervisor просмотр чужого диалога курсор
-    # не двигает. id монотонны — курсор по id корректен без timestamp.
+    # LEGACY (Этап 3 перенёс курсоры в dialog_reads — пер-менеджерные):
+    # колонка больше не пишется кодом, живёт до контракт-фазы (Этап 6).
     last_read_msg_id: Mapped[int | None] = mapped_column(
         BigInteger().with_variant(Integer, "sqlite"), nullable=True
     )
