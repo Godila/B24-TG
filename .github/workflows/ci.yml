@@ -12,3 +12,4 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: ruff check src/ tests/
       - run: pytest -q
+      - run: python scripts/check_js_sync.py

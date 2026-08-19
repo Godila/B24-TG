@@ -1,0 +1,58 @@
+{
+  "same": [
+    "attKind",
+    "attSrc",
+    "channelLabel",
+    "clearFile",
+    "closeLightbox",
+    "downloadAttachment",
+    "fileLabel",
+    "formatSize",
+    "formatTime",
+    "guessAttType",
+    "loadTemplates",
+    "onDrop",
+    "onFilePicked",
+    "onPaste",
+    "openAttachment",
+    "pickFile",
+    "refreshPendingStatuses",
+    "scrollBottom",
+    "setFile",
+    "showError",
+    "startPolling",
+    "statusLabel",
+    "stopPolling",
+    "useTemplate"
+  ],
+  "diff": {
+    "init": {
+      "app": "66642b4d23711b7c2749308b90d70b3b64934c4f4dcc2b48b20558a295c43b37",
+      "inbox": "105400cf4d01e97b89d29424406f73bf6222f44ca8de92b04c7aa36cdc6b25f7"
+    },
+    "loadMe": {
+      "app": "e3ec2394951d8a314829172da4734302dc052fb6265cccf6aaae288ea5b438b4",
+      "inbox": "33a463ff9715d0705fd23272ab527a06739054a78cd93dfd2c75df2a126624d7"
+    },
+    "loadMessages": {
+      "app": "73a256d5e690864e2031df4ea233312f6731d61a1d003540f2c8ee9da22bd0eb",
+      "inbox": "074895e0af4efa0cc79b5bc0b203f0648eb530ae8f872b622621bc643ed14b6b"
+    },
+    "loadOlder": {
+      "app": "33907bf4ffd32d2652fe8b5a1ea1fbeda1a0442570be0a06d59f4aee3e786935",
+      "inbox": "1942bd7431a84d6aa3ea5e3c97baa38fd722727c9936b3af5e4ffb69c5b5d00b"
+    },
+    "poll": {
+      "app": "cc4c3b9dc12f3bb9ae18ef148e718bcdd2fc2ad7b889e9c932e7f6bc7c5f36c1",
+      "inbox": "7435ea438f98716fb6ff3ce00806fd9885a42c7e48d1dc0d95ded23dec51a4a6"
+    },
+    "send": {
+      "app": "7dfdd78cff688df7a36189fdd4a531d4767a7481c92210f5428a9385bd839d8e",
+      "inbox": "af99090914e7fe4d88d5541800a5e31bd4a5da8a893b9a0957d7a2c8f2330224"
+    },
+    "sendFile": {
+      "app": "999cfb19717a78ebdc0e2b74f8ecad93b9bbdbe8e470f8eb4ca0ba6c1c9382eb",
+      "inbox": "94a470add898eeda04002b490a3226694cb54f0ae1af3891284593d971b36fca"
+    }
+  }
+}
