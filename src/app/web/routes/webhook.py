@@ -3,6 +3,7 @@
 import hmac
 import logging
 
+import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
@@ -22,27 +23,39 @@ def get_token_manager() -> TokenManager:
     return TokenManager(client_id=s.b24_client_id, client_secret=s.b24_client_secret)
 
 
+async def _token_belongs_to_portal(auth: OnAppInstallAuth) -> bool:
+    """Токен из payload валиден на endpoint из того же payload?
+
+    B24 не умеет подписывать ONAPPINSTALL заголовками — реальный install-вызов
+    с портала всегда без ``X-Webhook-Secret``. Подделка события бессмысленна:
+    чужой/битый access_token не пройдёт user.current, а валидный токен можно
+    получить только от самого портала.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                auth.client_endpoint.rstrip("/") + "/user.current",
+                params={"auth": auth.access_token},
+            )
+        data = resp.json()
+        return resp.status_code == 200 and isinstance(data.get("result"), dict)
+    except (httpx.HTTPError, ValueError):
+        # Сетевой сбой или не-JSON ответ: самопроверка не прошла — 401.
+        logger.warning("ONAPPINSTALL: token self-check failed (network/invalid)")
+        return False
+
+
 @router.post("/onappinstall")
 async def on_app_install(request: Request) -> JSONResponse:
     """Обработчик события установки приложения.
 
     Bitrix24 присылает OAuth-токены в POST body (поле auth).
 
-    Безопасность: без секретного заголовка запрос отвергается. Bitrix24
-    НЕ умеет подписывать ONAPPINSTALL и не передаёт наш заголовок — реальные
-    install-вызовы с портала получат 401. Это осознанный trade-off: endpoint
-    используется вручную (при переустановке приложения) — передай заголовок
-    ``X-Webhook-Secret`` со значением ``B24_WEBHOOK_SECRET`` из .env.
+    Авторизация — один из двух эшелонов: ручной вызов несёт заголовок
+    ``X-Webhook-Secret`` (``B24_WEBHOOK_SECRET`` из .env); реальный вызов
+    с портала заголовка не имеет (B24 их не подписывает) и допускается
+    самовалидацией токена через user.current (_token_belongs_to_portal).
     """
-    settings = get_settings()
-    secret = request.headers.get("X-Webhook-Secret", "")
-    # Сравниваем байты: compare_digest(str, str) падает TypeError на не-ASCII
-    # значениях заголовка (latin-1) — было бы 500 вместо 401.
-    if not settings.b24_webhook_secret or not hmac.compare_digest(
-        secret.encode("utf-8"), settings.b24_webhook_secret.encode("utf-8")
-    ):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
-
     try:
         payload = await request.json()
     except ValueError:
@@ -55,6 +68,16 @@ async def on_app_install(request: Request) -> JSONResponse:
     except ValidationError:
         logger.warning("ONAPPINSTALL: invalid auth payload rejected")
         return JSONResponse({"error": "validation error"}, status_code=422)
+
+    settings = get_settings()
+    secret = request.headers.get("X-Webhook-Secret", "")
+    # Сравниваем байты: compare_digest(str, str) падает TypeError на не-ASCII
+    # значениях заголовка (latin-1) — было бы 500 вместо 401.
+    header_ok = bool(settings.b24_webhook_secret) and hmac.compare_digest(
+        secret.encode("utf-8"), settings.b24_webhook_secret.encode("utf-8")
+    )
+    if not header_ok and not await _token_belongs_to_portal(auth):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
 
     logger.info("ONAPPINSTALL received: member_id=%s", auth.member_id)
 

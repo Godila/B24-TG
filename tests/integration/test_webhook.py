@@ -30,8 +30,10 @@ def client(monkeypatch):
 
 
 def test_onappinstall_without_secret_header_returns_401(client):
-    """Без заголовка X-Webhook-Secret токены не сохраняются."""
-    with patch("app.web.routes.webhook.get_token_manager") as mock_get:
+    """Без заголовка и с непрошедшим self-check токена — 401, не сохраняем."""
+    with patch("app.web.routes.webhook.get_token_manager") as mock_get, \
+         patch("app.web.routes.webhook._token_belongs_to_portal",
+               new=AsyncMock(return_value=False)):
         tm = AsyncMock()
         tm.save_install_data = AsyncMock()
         mock_get.return_value = tm
@@ -43,14 +45,51 @@ def test_onappinstall_without_secret_header_returns_401(client):
     tm.save_install_data.assert_not_awaited()
 
 
+def test_onappinstall_without_header_selfcheck_ok_saves(client):
+    """Реальный вызов с портала: заголовка нет, но токен валиден на endpoint
+    payload → 200 и токены сохранены (self-check через user.current)."""
+    with patch("app.web.routes.webhook.get_token_manager") as mock_get, \
+         patch("app.web.routes.webhook._token_belongs_to_portal",
+               new=AsyncMock(return_value=True)):
+        tm = AsyncMock()
+        tm.save_install_data = AsyncMock()
+        mock_get.return_value = tm
+        response = client.post(
+            "/webhook/b24/onappinstall", json={"event": "ONAPPINSTALL", "auth": AUTH_PAYLOAD},
+        )
+
+    assert response.status_code == 200
+    tm.save_install_data.assert_awaited_once()
+
+
 def test_onappinstall_with_wrong_secret_returns_401(client):
-    """Неверное значение секрета — тоже 401."""
-    response = client.post(
-        "/webhook/b24/onappinstall",
-        json={"event": "ONAPPINSTALL", "auth": AUTH_PAYLOAD},
-        headers={"X-Webhook-Secret": "wrong-secret"},
-    )
-    assert response.status_code == 401
+    """Неверное значение секрета и битый токен (self-check fail) — тоже 401."""
+    with patch("app.web.routes.webhook._token_belongs_to_portal",
+               new=AsyncMock(return_value=False)):
+        response = client.post(
+            "/webhook/b24/onappinstall",
+            json={"event": "ONAPPINSTALL", "auth": AUTH_PAYLOAD},
+            headers={"X-Webhook-Secret": "wrong-secret"},
+        )
+        assert response.status_code == 401
+
+
+def test_onappinstall_with_secret_skips_selfcheck(client):
+    """Верный заголовок — self-check не нужен (ручной доверенный путь)."""
+    with patch("app.web.routes.webhook.get_token_manager") as mock_get, \
+         patch("app.web.routes.webhook._token_belongs_to_portal",
+               new=AsyncMock(return_value=False)) as selfcheck:
+        tm = AsyncMock()
+        tm.save_install_data = AsyncMock()
+        mock_get.return_value = tm
+        response = client.post(
+            "/webhook/b24/onappinstall",
+            json={"event": "ONAPPINSTALL", "auth": AUTH_PAYLOAD},
+            headers={"X-Webhook-Secret": WEBHOOK_SECRET},
+        )
+
+    assert response.status_code == 200
+    selfcheck.assert_not_awaited()
 
 
 def test_onappinstall_with_secret_saves_token(client):

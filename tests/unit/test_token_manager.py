@@ -74,3 +74,32 @@ async def test_get_token_returns_none_if_not_installed():
     tm._load_from_db = AsyncMock(return_value=None)
     token = await tm.get_token()
     assert token is None
+
+
+@pytest.mark.asyncio
+async def test_save_install_data_removes_stale_portal_row():
+    """Перенос стенда: install с новым member_id сносит строку прежнего
+    портала — _load_from_db читает единственную строку без фильтра."""
+    from sqlalchemy import Delete
+
+    tm = TokenManager(client_id="c", client_secret="s")
+    upserted = _make_token()
+    upserted.member_id = "m2"
+    tm._upsert = AsyncMock(return_value=upserted)
+
+    session = AsyncMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=session)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    with patch("app.b24.token_manager.async_session", return_value=ctx):
+        result = await tm.save_install_data({
+            "access_token": "a", "refresh_token": "r", "member_id": "m2",
+            "client_endpoint": "https://new/rest/", "domain": "new.portal",
+            "user_id": "1", "expires_in": "3600", "scope": "crm",
+        })
+
+    assert result is upserted
+    stmt = session.execute.await_args_list[0].args[0]
+    assert isinstance(stmt, Delete)
+    tm._upsert.assert_awaited_once()
+    session.commit.assert_awaited_once()

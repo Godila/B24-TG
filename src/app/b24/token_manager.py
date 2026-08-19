@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 import anyio
 import httpx
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import async_session
@@ -43,19 +43,29 @@ class TokenManager:
         return token
 
     async def save_install_data(self, auth_data: dict) -> B24Token:
-        """Сохраняет токены из ONAPPINSTALL payload (поле auth)."""
-        return await self._save_to_db(
-            {
-                "access_token": auth_data["access_token"],
-                "refresh_token": auth_data["refresh_token"],
-                "member_id": auth_data["member_id"],
-                "client_endpoint": auth_data.get("client_endpoint", ""),
-                "domain": auth_data.get("domain", ""),
-                "user_id": int(auth_data.get("user_id", 0)),
-                "scope": auth_data.get("scope", ""),
-                "expires_in": int(auth_data.get("expires_in", 3600)),
-            }
-        )
+        """Сохраняет токены из ONAPPINSTALL payload (поле auth).
+
+        Перенос стенда на другой портал: строка прежнего member_id сносится —
+        ``_load_from_db`` читает единственную строку без фильтра, и вторая
+        строка делала бы выбор токена недетерминированным.
+        """
+        data = {
+            "access_token": auth_data["access_token"],
+            "refresh_token": auth_data["refresh_token"],
+            "member_id": auth_data["member_id"],
+            "client_endpoint": auth_data.get("client_endpoint", ""),
+            "domain": auth_data.get("domain", ""),
+            "user_id": int(auth_data.get("user_id", 0)),
+            "scope": auth_data.get("scope", ""),
+            "expires_in": int(auth_data.get("expires_in", 3600)),
+        }
+        async with async_session() as session:
+            await session.execute(
+                delete(B24Token).where(B24Token.member_id != data["member_id"])
+            )
+            token = await self._upsert(session, data)
+            await session.commit()
+            return token
 
     async def _load_from_db(self) -> B24Token | None:
         async with async_session() as session:
