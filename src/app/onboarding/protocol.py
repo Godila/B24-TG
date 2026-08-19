@@ -18,12 +18,6 @@ class OnboardingChannel(Protocol):
     #: Канал, который обслуживает имплементация.
     messenger: Messenger
 
-    async def account_view(self, manager_id: int) -> dict | None:
-        """Подключённый аккаунт менеджера в этом канале (или None).
-
-        LEGACY для /admin/api/me («Мои каналы»): ищет по legacy-владельцу."""
-        ...
-
     async def start(self, account: TgAccount, *, force: bool = False) -> dict:
         """Запустить логин линии. Аккаунт active и не force → ``already_active``.
         Повторный старт отменяет прежнюю попытку."""

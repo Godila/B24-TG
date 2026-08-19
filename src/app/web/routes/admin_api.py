@@ -87,18 +87,12 @@ class LineMemberPatchIn(BaseModel):
 # ---------------------------------------------------------------------- #
 @router.get("/me", response_model=None)
 async def me(manager: ManagerDep) -> dict:
-    accounts = []
-    for channel in _channels.values():
-        view = await channel.account_view(manager.id)
-        if view is not None:
-            accounts.append(view)
     return {
         "id": manager.id,
         "name": manager.name,
         "b24_user_id": manager.b24_user_id,
         "role": manager.role.value,
         "is_readonly": manager.is_readonly,
-        "accounts": accounts,
     }
 
 

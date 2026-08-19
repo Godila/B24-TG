@@ -121,11 +121,11 @@ async def _manager(db, mid) -> Manager:
         return await s.get(Manager, mid)
 
 
-async def test_me_includes_accounts(db):
+async def test_me_returns_profile(db):
     me = await admin_api.me(await _manager(db, 2))
     assert me["role"] == "manager"
     assert me["is_readonly"] is False
-    assert [a["messenger"] for a in me["accounts"]] == ["tg"]
+    assert "accounts" not in me  # «Мои каналы» снесены — линии в своей секции
 
 
 async def test_line_connect_issues_share_url(db):

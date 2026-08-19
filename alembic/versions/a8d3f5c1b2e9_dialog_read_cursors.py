@@ -57,6 +57,20 @@ def upgrade() -> None:
         "SELECT id, assigned_user_id, last_read_msg_id, now(), now() FROM dialogs "
         "WHERE assigned_user_id IS NOT NULL AND last_read_msg_id IS NOT NULL"
     )
+    # Курсоры стали персональными (supervisor больше не «читает» чужой
+    # курсор владельца) — без стартовой строки бейджи supervisor'a после
+    # деплоя показали бы ВСЕ входящие всех диалогов как непрочитанные.
+    # Стартуем его с курсора владельца: дальше расходится его чтением.
+    op.execute(
+        "INSERT INTO dialog_reads (dialog_id, manager_id, last_read_msg_id, created_at, updated_at) "
+        "SELECT d.id, sup.id, d.last_read_msg_id, now(), now() "
+        "FROM dialogs d CROSS JOIN managers sup "
+        "WHERE sup.role = 'supervisor' AND sup.is_active = true "
+        "AND d.assigned_user_id IS NOT NULL AND d.last_read_msg_id IS NOT NULL "
+        "AND sup.id <> d.assigned_user_id "
+        "AND NOT EXISTS (SELECT 1 FROM dialog_reads r "
+        "WHERE r.dialog_id = d.id AND r.manager_id = sup.id)"
+    )
 
 
 def downgrade() -> None:

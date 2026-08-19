@@ -61,21 +61,6 @@ class TgOnboardingChannel:
     def __init__(self, session_factory=None):
         self._session_factory = session_factory or async_session
 
-    async def _find_account(self, manager_id: int) -> TgAccount | None:
-        async with self._session_factory() as s:
-            return (
-                await s.execute(
-                    select(TgAccount).where(
-                        TgAccount.manager_id == manager_id,
-                        TgAccount.messenger == Messenger.tg,
-                    )
-                )
-            ).scalar_one_or_none()
-
-    async def account_view(self, manager_id: int) -> dict | None:
-        account = await self._find_account(manager_id)
-        return _profile_dto(account) if account is not None else None
-
     async def start(self, account: TgAccount, *, force: bool = False) -> dict:
         if (
             account is not None

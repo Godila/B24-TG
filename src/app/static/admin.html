@@ -322,6 +322,14 @@
     // ---- Supervisor-зона: менеджеры и линии ----
     let managersCache = [];
 
+    // Данные менеджеров/линий приходят из B24 и профилей мессенджеров —
+    // экранируем всё, что попадает в innerHTML (граница доверия).
+    function esc(s) {
+      return String(s ?? "").replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+      })[c]);
+    }
+
     function initials(name) {
       return (name || "?").trim().split(/\s+/).slice(0, 2)
         .map((w) => w[0]).join("").toUpperCase();
@@ -353,9 +361,9 @@
         const accounts = m.accounts.map(accountChip).join("") ||
           "<span class='hint'>нет подключённых каналов</span>";
         div.innerHTML = `
-          <div class="m-avatar">${initials(m.name)}</div>
+          <div class="m-avatar">${esc(initials(m.name))}</div>
           <div class="m-main">
-            <div class="m-name">${m.name}<span class="hint">Битрикс24 #${m.b24_user_id}</span>
+            <div class="m-name">${esc(m.name)}<span class="hint">Битрикс24 #${esc(m.b24_user_id)}</span>
               ${m.is_active ? "" : " <span class='badge err'>деактивирован</span>"}</div>
             <div class="m-accounts">${accounts}</div>
           </div>
@@ -415,22 +423,22 @@
         const memberIds = new Set(ln.members.map((m) => m.manager_id));
         const options = managersCache
           .filter((m) => m.is_active && !memberIds.has(m.id))
-          .map((m) => `<option value="${m.id}">${m.name}</option>`).join("");
+          .map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join("");
         const chips = ln.members.map((mem) => `
-          <span class="chip">${mem.name}
+          <span class="chip">${esc(mem.name)}
             <button class="chip-btn" data-line="${ln.id}" data-manager="${mem.manager_id}"
               data-role="${mem.role === "participant" ? "observer" : "participant"}" type="button"
               title="Переключить роль участника">${mem.role === "participant" ? "участник" : "наблюдатель"}</button>
             <button class="chip-x" data-line="${ln.id}" data-manager="${mem.manager_id}" type="button"
-              title="Убрать из линии" aria-label="Убрать ${mem.name} из линии">×</button>
+              title="Убрать из линии" aria-label="Убрать из линии">×</button>
           </span>`).join("") || "<span class='hint'>нет участников</span>";
         const div = document.createElement("div");
         div.className = "manager-row";
         div.innerHTML = `
           <div class="m-avatar">${ico}</div>
           <div class="m-main">
-            <div class="m-name">${ln.name || ln.phone} ${badge}
-              <span class="hint">${ln.messenger.toUpperCase()} · ${ln.phone}</span></div>
+            <div class="m-name">${esc(ln.name || ln.phone)} ${badge}
+              <span class="hint">${esc(ln.messenger.toUpperCase())} · ${esc(ln.phone)}</span></div>
             <div class="m-accounts">${chips}</div>
             <div class="share-panel" data-share-panel="${ln.id}" hidden></div>
           </div>
