@@ -79,7 +79,8 @@ class LoginCommand(Base, TimestampMixin):
         primary_key=True,
         autoincrement=True,
     )
-    # LEGACY (личные подключения до линий); NULL у команд админских линий.
+    # ponytail: legacy-колонка инициатора (nullable, кодом не читается);
+    # drop вместе с tg_accounts.manager_id в контракт-релизе.
     manager_id: Mapped[int | None] = mapped_column(
         ForeignKey("managers.id"), nullable=True, index=True
     )

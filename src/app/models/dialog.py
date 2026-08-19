@@ -41,16 +41,10 @@ class Dialog(Base, TimestampMixin):
     # строкой — поэтому в ключ добавлен messenger.
     # Констрейнт создаёт и составной индекс — отдельный не нужен.
     __table_args__ = (
-        UniqueConstraint(
-            "external_chat_id",
-            "assigned_user_id",
-            "messenger",
-            name="uq_dialogs_chat_per_manager",
-        ),
-        # Идентичность диалога по линии (аккаунту): у общих линий
-        # ответственного может не быть (NULL не дедуплицируется старым
-        # ключом), а один и тот же клиент может писать на разные линии.
-        # Legacy-ключ выше живёт до уборки assigned-семантики (Этап 6).
+        # Идентичность диалога — ЛИНИЯ (аккаунт): у общих линий ответственного
+        # может не быть, а один клиент может писать на разные линии. Ключ по
+        # (chat, assigned) убран: он запрещал два личных номера одного
+        # менеджера в одном канале вести переписку с одним клиентом.
         UniqueConstraint(
             "external_chat_id",
             "messenger",
@@ -75,8 +69,8 @@ class Dialog(Base, TimestampMixin):
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[DialogStatus] = mapped_column(Enum(DialogStatus), default=DialogStatus.active)
     last_msg_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    # LEGACY (Этап 3 перенёс курсоры в dialog_reads — пер-менеджерные):
-    # колонка больше не пишется кодом, живёт до контракт-фазы (Этап 6).
+    # ponytail: legacy-курсор владельца (пер-менеджерные — в dialog_reads
+    # с Этапа 3; колонка не пишется и не читается) — drop в контракт-релизе.
     last_read_msg_id: Mapped[int | None] = mapped_column(
         BigInteger().with_variant(Integer, "sqlite"), nullable=True
     )
