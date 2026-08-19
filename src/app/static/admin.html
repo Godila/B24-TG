@@ -203,6 +203,9 @@
       box-shadow: 0 4px 12px rgba(0, 0, 0, .2);
       display: flex; align-items: center; gap: 8px;
     }
+    /* display:flex перебивает ua-стиль hidden — гасим явно (иначе пустой
+       красный овал висит внизу окна постоянно). */
+    .toast[hidden] { display: none; }
 
     .hint { color: var(--muted); font-size: var(--fs-sm); }
 
