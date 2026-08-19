@@ -4,31 +4,56 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Подключение номера — ЧатМост</title>
+  <link rel="icon" href="/static/brand/favicon.ico" sizes="48x48">
+  <link rel="stylesheet" href="/static/tokens.css">
   <style>
-    :root { --border: #d9dee5; --muted: #6b7280; --ok: #1a7f37; --err: #b42318; }
-    body { font-family: system-ui, -apple-system, sans-serif; background: #f6f7f9;
-           color: #1f2328; margin: 0; padding: 24px 16px; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg);
+           color: var(--ink); margin: 0; padding: 24px 16px; }
     .wrap { max-width: 680px; margin: 0 auto; }
     .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
     .brand img { height: 28px; }
-    .brand span { font-weight: 700; font-size: 1.1rem; }
-    .card { background: #fff; border: 1px solid var(--border); border-radius: 14px;
-            padding: 24px; margin-top: 14px; box-shadow: 0 6px 18px rgba(0,0,0,.05); }
-    h1 { font-size: 1.25rem; margin: 0 0 12px; }
+    .brand span { font-weight: 700; font-size: var(--fs-lg); }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg);
+            padding: 24px; margin-top: 14px; box-shadow: 0 6px 18px rgba(0, 0, 0, .05); }
+    h1 { font-size: var(--fs-lg); margin: 0 0 12px; }
     ol { margin: 0; padding-left: 20px; line-height: 1.7; }
     .qrbox { display: grid; place-items: center; min-height: 240px; margin: 16px 0 8px; }
+    /* Скелет QR: страница не выглядит зависшей, пока код не пришёл */
+    .qr-skel {
+      width: 220px; height: 220px; border-radius: var(--r-md);
+      background: linear-gradient(100deg, #eceff3 40%, #f8fafc 50%, #eceff3 60%);
+      background-size: 200% 100%;
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .qr-skel { animation: qr-shimmer 1.2s linear infinite; }
+      @keyframes qr-shimmer { to { background-position: -200% 0; } }
+    }
     .state { color: var(--muted); text-align: center; min-height: 1.4em; margin: 8px 0; }
     .state.ok { color: var(--ok); font-weight: 600; }
     .state.err { color: var(--err); font-weight: 600; }
     .linkrow { text-align: center; margin: 8px 0; word-break: break-all; }
-    .linkrow a { color: #0b57d0; }
+    .linkrow a { color: var(--accent); }
     .pwrow { display: none; max-width: 340px; margin: 12px auto 0; }
     .pwrow input { width: 100%; box-sizing: border-box; border: 1px solid var(--border);
-                   border-radius: 9px; padding: 10px 12px; font-size: 1rem; }
-    .btn { appearance: none; border: none; border-radius: 9px; padding: 10px 18px;
-           font-size: .95rem; font-weight: 600; cursor: pointer; background: #0b57d0;
+                   border-radius: var(--r-md); padding: 10px 12px; font-size: var(--fs-md); }
+    .pwrow input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .btn { appearance: none; border: none; border-radius: var(--r-md); padding: 10px 18px;
+           font-size: var(--fs-md); font-weight: 600; cursor: pointer; background: var(--accent);
            color: #fff; margin-top: 8px; }
-    .hint { color: var(--muted); font-size: .85rem; text-align: center; margin-top: 14px; }
+    .btn:hover { background: var(--accent-hover); }
+    .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .hint { color: var(--muted); font-size: var(--fs-sm); text-align: center; margin-top: 14px; }
+    /* Экран успеха: момент подключения — единственный эмоциональный пик страницы */
+    .done { text-align: center; padding: 12px 0 4px; }
+    .done-ico {
+      width: 64px; height: 64px; margin: 0 auto 12px; border-radius: 50%;
+      background: var(--ok-bg); color: var(--ok);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .done-ico svg { width: 30px; height: 30px; fill: none; stroke: currentColor;
+                    stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .done h2 { margin: 0 0 6px; font-size: var(--fs-lg); }
+    .done p { margin: 0; color: var(--muted); font-size: var(--fs-sm); }
   </style>
 </head>
 <body>
@@ -39,17 +64,17 @@
     </div>
     <div class="card" data-messenger="__MESSENGER__">
       <h1 id="title">Подключение номера</h1>
+      <!-- Статический текст близок к финальному — подмена каналом JS-ом
+           не даёт заметного FOUC (было 3 пункта, перетираемых на 1). -->
       <ol id="steps">
-        <li>Возьмите телефон, на котором установлен мессенджер.</li>
-        <li>Откройте <b>Настройки → Устройства</b> и выберите
+        <li>Откройте в мессенджере <b>Настройки → Устройства</b> и выберите
             <b>подключение по QR-коду</b>.</li>
-        <li>Наведите камеру на код ниже.</li>
       </ol>
-      <div class="qrbox" id="qrbox"><span class="state">Получаем QR-код…</span></div>
+      <div class="qrbox" id="qrbox"><div class="qr-skel" aria-hidden="true"></div></div>
       <div class="linkrow" id="linkrow" hidden></div>
-      <div class="state" id="state"></div>
+      <div class="state" id="state" aria-live="polite"></div>
       <div class="pwrow" id="pwrow">
-        <input id="pwinput" type="password" placeholder="Пароль двухфакторной защиты"
+        <input id="pwinput" type="password" placeholder="2FA-пароль"
                autocomplete="one-time-code" aria-label="Пароль двухфакторной защиты">
         <button class="btn" id="pwsubmit" type="button">Отправить</button>
       </div>
@@ -79,6 +104,15 @@
         el.textContent = text || "";
         el.className = "state" + (cls ? " " + cls : "");
       }
+      function showDone() {
+        document.querySelector(".card").innerHTML =
+          '<div class="done">' +
+            '<div class="done-ico"><svg viewBox="0 0 24 24" aria-hidden="true">' +
+              '<path d="M20 6 9 17l-5-5"/></svg></div>' +
+            "<h2>Номер подключён</h2>" +
+            "<p>Активация займёт ~20 секунд. Страницу можно закрыть.</p>" +
+          "</div>";
+      }
       function render(login) {
         var qrbox = document.getElementById("qrbox");
         document.getElementById("pwrow").style.display = "none";
@@ -103,9 +137,8 @@
           var inp = document.getElementById("pwinput");
           if (document.activeElement !== inp) inp.focus();
         } else if (login.status === "authorized") {
-          qrbox.innerHTML = "";
-          setState("Готово! Номер подключён, активация займёт ~20 секунд.", "ok");
           stop();
+          showDone();
         } else if (login.status === "expired") {
           setState("Время ожидания истекло — попросите администратора прислать новую ссылку.", "err");
           stop();

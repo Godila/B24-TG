@@ -812,14 +812,17 @@ function inboxApp() {
 
     statusLabel(direction, status) {
       if (direction !== "out") return "";
-      const map = {
-        pending: "⏳",
-        sent: "✓",
-        delivered: "✓✓",
-        read: "✓✓",
-        error: "⚠",
-      };
-      return map[status] || "";
+      // Иконки статусов из спрайта (svg-строки — не юзер-данные, x-html ок);
+      // цвета прочитано/ошибка — классы st-read/st-err в CSS.
+      const ICON = (name, cls) =>
+        '<svg class="i ' + (cls || "") + '" aria-hidden="true">' +
+        '<use href="/static/icons.svg#' + name + '"/></svg>';
+      if (status === "pending") return ICON("clock");
+      if (status === "sent") return ICON("check");
+      if (status === "delivered") return ICON("checks");
+      if (status === "read") return ICON("checks", "st-read");
+      if (status === "error") return ICON("warning", "st-err");
+      return "";
     },
   };
 }

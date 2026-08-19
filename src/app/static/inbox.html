@@ -6,6 +6,8 @@
   <title>ЧатМост — Чаты</title>
   <link rel="icon" href="/static/brand/favicon.ico" sizes="48x48">
   <link rel="apple-touch-icon" href="/static/brand/logo-square-192x192.png">
+  <!-- Токены — единый источник цвета/шкал для всех поверхностей. -->
+  <link rel="stylesheet" href="/static/tokens.css">
   <link rel="stylesheet" href="/static/style.css">
   <!-- Раскладка «Чатов» подключается ПОВЕРХ style.css и переиспользует его
        переменные/классы (.bubble*, .composer, .channel-badge…). Отдельный
@@ -50,17 +52,17 @@
               <span class="dialog-avatar" aria-hidden="true" x-text="initials(d.contact_name)"></span>
               <span class="dialog-body">
                 <span class="dialog-row-top">
-                  <span class="channel-badge" :class="d.messenger" x-text="channelLabel(d.messenger)"></span>
                   <span class="dialog-title" x-text="d.contact_name || 'Неизвестный'"></span>
+                  <span class="badge-unanswered" x-show="d.unanswered_count > 0"
+                        x-text="d.unanswered_count"></span>
+                  <span class="dialog-time tnum" x-text="listTime(d.last_msg_at)"></span>
+                </span>
+                <span class="dialog-row-bottom">
+                  <span class="channel-badge" :class="d.messenger" x-text="channelLabel(d.messenger)"></span>
+                  <span class="dialog-preview" x-text="preview(d)"></span>
                   <span class="owner-chip" x-show="isSupervisor && !d.is_mine && d.assigned_manager_name"
                         x-text="d.assigned_manager_name"></span>
                   <span class="wait-age" :class="{hot: waitAgeHot(d)}" x-text="waitAge(d)"></span>
-                  <span class="badge-unanswered" x-show="d.unanswered_count > 0"
-                        x-text="d.unanswered_count"></span>
-                </span>
-                <span class="dialog-row-bottom">
-                  <span class="dialog-preview" x-text="preview(d)"></span>
-                  <span class="dialog-time" x-text="listTime(d.last_msg_at)"></span>
                 </span>
               </span>
             </button>
@@ -74,16 +76,16 @@
           <span class="dialog-avatar" aria-hidden="true" x-text="initials(d.contact_name)"></span>
           <span class="dialog-body">
             <span class="dialog-row-top">
-              <span class="channel-badge" :class="d.messenger" x-text="channelLabel(d.messenger)"></span>
               <span class="dialog-title" x-text="d.contact_name || 'Неизвестный'"></span>
+              <span class="badge-unread" x-show="d.unread_count > 0" x-text="d.unread_count"></span>
+              <span class="dialog-time tnum" x-text="listTime(d.last_msg_at)"></span>
+            </span>
+            <span class="dialog-row-bottom">
+              <span class="channel-badge" :class="d.messenger" x-text="channelLabel(d.messenger)"></span>
+              <span class="dialog-preview" x-text="preview(d)"></span>
               <span class="owner-chip" x-show="isSupervisor && !d.is_mine && d.assigned_manager_name"
                     x-text="d.assigned_manager_name"></span>
               <span class="wait-age" :class="{hot: waitAgeHot(d)}" x-text="waitAge(d)"></span>
-              <span class="badge-unread" x-show="d.unread_count > 0" x-text="d.unread_count"></span>
-            </span>
-            <span class="dialog-row-bottom">
-              <span class="dialog-preview" x-text="preview(d)"></span>
-              <span class="dialog-time" x-text="listTime(d.last_msg_at)"></span>
             </span>
           </span>
         </button>
@@ -107,8 +109,9 @@
             <span class="owner-chip" x-show="isSupervisor && dialog && !dialog.is_mine"
                   x-text="'отвечает: ' + (dialog?.assigned_manager_name || '—')"></span>
           </span>
-          <a class="deal-link" x-show="dialog?.deal_url" :href="dialog?.deal_url"
-             target="_blank" rel="noopener">Сделка ↗</a>
+        <a class="deal-link" x-show="dialog?.deal_url" :href="dialog?.deal_url"
+           target="_blank" rel="noopener">Сделка
+          <svg class="i" aria-hidden="true"><use href="/static/icons.svg#external"/></svg></a>
         </div>
         <div class="status" x-show="!dialog && !loading">
           <span>Выберите диалог из списка слева</span>
@@ -122,7 +125,9 @@
         @dragover.prevent @drop.prevent="onDrop($event)">
         <button class="load-older" type="button"
           x-show="messages.length > 0 && hasOlder"
-          @click="loadOlder()">↑ Загрузить ещё</button>
+          @click="loadOlder()">
+          <svg class="i" aria-hidden="true"><use href="/static/icons.svg#arrow-up"/></svg>
+          Загрузить ещё</button>
         <template x-for="msg in messages" :key="msg.id">
           <div class="bubble" :class="msg.direction === 'out' ? 'bubble-out' : 'bubble-in'">
             <template x-for="att in (msg.attachments || [])" :key="att.id">
@@ -144,9 +149,10 @@
               </div>
             </template>
             <p class="bubble-text" x-show="msg.text" x-text="msg.text"></p>
-            <span class="bubble-meta">
+            <span class="bubble-meta tnum">
               <span x-text="formatTime(msg.created_at)"></span>
-              <span class="status-badge" x-text="statusLabel(msg.direction, msg.status)"></span>
+              <!-- Иконки статусов — наши строки (не юзер-данные), x-html безопасен -->
+              <span class="status-badge" x-html="statusLabel(msg.direction, msg.status)"></span>
             </span>
           </div>
         </template>
@@ -156,7 +162,8 @@
         <!-- Пилюля-якорь (UX-05): тихо появляется, если новые сообщения
              пришли, пока пользователь читает историю выше. -->
         <button class="jump-new" type="button" x-show="newBelow" @click="jumpNew()">
-          ↓ Новые сообщения
+          <svg class="i" aria-hidden="true"><use href="/static/icons.svg#arrow-down"/></svg>
+          Новые сообщения
         </button>
       </main>
       <!-- A11y: анонс новых входящих скринридерам (UX-02). -->
@@ -164,7 +171,9 @@
 
       <div class="templates" x-show="canWrite && templates.length > 0" x-data="{ open: false }">
         <button class="templates-toggle" @click="open = !open" type="button">
-          <span x-text="open ? '▾' : '▸'"></span> Шаблоны (<span x-text="templates.length"></span>)
+          <svg class="i tgl" :class="{ 'tgl--open': open }" aria-hidden="true">
+            <use href="/static/icons.svg#chevron-down"/></svg>
+          Шаблоны (<span x-text="templates.length"></span>)
         </button>
         <ul class="templates-list" x-show="open">
           <template x-for="tpl in templates" :key="tpl.id">
@@ -182,7 +191,8 @@
       </div>
       <footer class="composer" x-show="canWrite">
         <button class="attach-btn" type="button" x-show="canAttach" @click="pickFile()"
-          :disabled="!dialog || sending" title="Прикрепить файл" aria-label="Прикрепить файл">📎</button>
+          :disabled="!dialog || sending" title="Прикрепить файл" aria-label="Прикрепить файл">
+          <svg class="i i--18" aria-hidden="true"><use href="/static/icons.svg#paperclip"/></svg></button>
         <input type="file" x-ref="fileInput" hidden @change="onFilePicked($event)"
           accept="image/*,video/*,audio/*,.pdf,.zip,.doc,.docx,.xls,.xlsx,.ppt,.pptx">
         <textarea
@@ -192,15 +202,18 @@
           placeholder="Напишите сообщение… (Enter — отправить, Shift+Enter — перенос строки)"
           rows="2"
           :disabled="!dialog || sending"></textarea>
-        <button class="send-btn" @click="send()"
-          :disabled="!dialog || (!draft.trim() && !pendingFile) || sending" type="button">
-          <span x-text="sending ? '…' : 'Отправить'"></span>
+        <button class="send-btn" @click="send()" :class="{busy: sending}"
+          :disabled="!dialog || (!draft.trim() && !pendingFile) || sending" type="button"
+          title="Отправить" aria-label="Отправить">
+          <svg class="i i--18" aria-hidden="true"><use href="/static/icons.svg#send"/></svg>
         </button>
         <div class="file-chip" x-show="pendingFile">
           <span class="file-chip-name" x-text="pendingFile ? pendingFile.name : ''"></span>
-          <span class="file-chip-size" x-text="pendingFile ? formatSize(pendingFile.size) : ''"></span>
+          <span class="file-chip-size tnum" x-text="pendingFile ? formatSize(pendingFile.size) : ''"></span>
           <button class="file-chip-x" type="button" @click="clearFile()" title="Убрать файл"
-            aria-label="Убрать файл">✕</button>
+            aria-label="Убрать файл">
+            <svg class="i" aria-hidden="true"><use href="/static/icons.svg#x"/></svg>
+          </button>
         </div>
       </footer>
 

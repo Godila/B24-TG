@@ -1,26 +1,25 @@
-/* Bitrix-TG чат-виджет — минимальные стили (вкладка в карточке сделки B24). */
+/* Bitrix-TG чат-виджет — минимальные стили (вкладка в карточке сделки B24).
+   Цвет/шкалы — из tokens.css (подключается ранее); здесь только локальные
+   имена-алиасы и специфика виджета. */
 
 * { box-sizing: border-box; }
 
+/* Алиасы локальных имён на канонические токены; out-bg/out-text —
+   единственные «свои» цвета (пузырь исходящего). */
 :root {
-  --bg: #f5f7fa;
-  --in-bg: #ffffff;
+  --in-bg: var(--surface);
   --out-bg: #e7f3ff;
   --out-text: #1a3a5c;
-  --in-text: #1f1f1f;
-  /* Канон DESIGN.md (WCAG AA ≥4.5:1 на белом); было #8a94a6 (~3.2:1). */
-  --meta: #66707d;
-  --accent: #2d8cf0;
-  --border: #e4e8ee;
-  --error: #e5484d;
+  --in-text: var(--ink);
+  --meta: var(--muted);
 }
 
 html, body {
   margin: 0;
   height: 100%;
   font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  font-size: 14px;
-  color: #1f1f1f;
+  font-size: var(--fs-md);
+  color: var(--ink);
   background: var(--bg);
 }
 
@@ -35,28 +34,28 @@ html, body {
 /* Шапка */
 .chat-header {
   padding: 10px 14px;
-  background: #fff;
+  background: var(--surface);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 .contact { display: flex; flex-direction: column; }
 .contact-name { font-weight: 600; }
-.contact-meta { font-size: 12px; color: var(--meta); }
+.contact-meta { font-size: var(--fs-xs); color: var(--meta); font-variant-numeric: tabular-nums; }
 
 /* Бейдж канала диалога (TG / MAX) в шапке виджета. */
 .channel-badge {
   display: inline-block;
   margin-right: 6px;
   padding: 1px 6px;
-  border-radius: 4px;
-  font-size: 10px;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-2xs);
   font-weight: 700;
   vertical-align: middle;
   letter-spacing: 0.5px;
 }
-.channel-badge.tg { background: #e1f0fb; color: #1c6fb3; }
-.channel-badge.max { background: #ece4fb; color: #6a3db8; }
-.status { color: var(--meta); font-size: 13px; }
+.channel-badge.tg { background: var(--tg-bg); color: var(--tg); }
+.channel-badge.max { background: var(--max-bg); color: var(--max); }
+.status { color: var(--meta); font-size: var(--fs-sm); }
 
 /* Лента сообщений */
 .messages {
@@ -70,7 +69,7 @@ html, body {
 .bubble {
   max-width: 72%;
   padding: 8px 12px;
-  border-radius: 12px;
+  border-radius: var(--r-md);
   line-height: 1.4;
   word-wrap: break-word;
 }
@@ -90,22 +89,29 @@ html, body {
   justify-content: flex-end;
   gap: 6px;
   margin-top: 4px;
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   color: var(--meta);
+  font-variant-numeric: tabular-nums;
 }
 .status-badge { min-width: 1.5em; text-align: right; }
+.status-badge svg.i { width: 14px; height: 14px; vertical-align: -2px; }
+.status-badge .st-read { color: var(--accent); }
+.status-badge .st-err { color: var(--err); }
 .empty { color: var(--meta); text-align: center; margin-top: 32px; }
 
 /* Догрузка старых сообщений */
 .load-older {
   align-self: center;
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--r-md);
   color: var(--accent);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   padding: 4px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 .load-older:hover { background: var(--out-bg); }
 
@@ -116,9 +122,14 @@ html, body {
   border: none;
   color: var(--accent);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   padding: 4px 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
+.templates-toggle .tgl { width: 14px; height: 14px; transition: transform .15s; transform: rotate(-90deg); }
+.templates-toggle .tgl.tgl--open { transform: none; }
 .templates-list {
   list-style: none;
   padding: 0;
@@ -128,12 +139,12 @@ html, body {
   gap: 6px;
 }
 .templates-list button {
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: 999px;
   padding: 4px 12px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--accent);
 }
 .templates-list button:hover { background: var(--out-bg); }
@@ -144,7 +155,7 @@ html, body {
   flex-wrap: wrap; /* чип файла (flex-basis:100%, order:-1) переносится над полем */
   gap: 8px;
   padding: 10px 14px;
-  background: #fff;
+  background: var(--surface);
   border-top: 1px solid var(--border);
   flex-shrink: 0;
 }
@@ -152,10 +163,10 @@ html, body {
   flex: 1;
   resize: none;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--r-md);
   padding: 8px 10px;
   font-family: inherit;
-  font-size: 14px;
+  font-size: var(--fs-md);
   outline: none;
 }
 .composer textarea:focus { border-color: var(--accent); }
@@ -163,14 +174,21 @@ html, body {
   background: var(--accent);
   color: #fff;
   border: none;
-  border-radius: 8px;
-  padding: 0 18px;
+  border-radius: var(--r-md);
+  width: 40px;
+  height: 38px;
+  align-self: flex-end;
   cursor: pointer;
-  font-size: 14px;
-  font-weight: 500;
-  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
-.send-btn:disabled { background: #b8d4f0; cursor: not-allowed; }
+.send-btn:disabled { background: var(--accent-soft); color: var(--accent-hover); cursor: not-allowed; }
+@media (prefers-reduced-motion: no-preference) {
+  .send-btn.busy svg.i { animation: send-busy 1s ease-in-out infinite; }
+  @keyframes send-busy { 50% { opacity: .35; } }
+}
 
 /* Баннер ошибок */
 .error-banner {
@@ -178,11 +196,11 @@ html, body {
   bottom: 16px;
   left: 50%;
   transform: translateX(-50%);
-  background: var(--error);
+  background: var(--err);
   color: #fff;
   padding: 8px 16px;
-  border-radius: 8px;
-  font-size: 13px;
+  border-radius: var(--r-md);
+  font-size: var(--fs-sm);
   cursor: pointer;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
@@ -192,18 +210,18 @@ html, body {
 .att-photo {
   display: block;
   max-width: 240px;
-  border-radius: 8px;
+  border-radius: var(--r-md);
 }
 .bubble-attachment img {
   max-width: 240px;
   max-height: 240px;
-  border-radius: 8px;
+  border-radius: var(--r-md);
   display: block;
   object-fit: contain;
 }
 .bubble-attachment video {
   max-width: 280px;
-  border-radius: 8px;
+  border-radius: var(--r-md);
   display: block;
 }
 .bubble-attachment audio {
@@ -216,14 +234,12 @@ html, body {
   align-items: center;
   gap: 6px;
   padding: 6px 10px;
-  background: rgba(47, 111, 237, 0.08);
+  background: rgba(47, 111, 237, 0.08);   /* тинт --accent */
   border: 1px solid rgba(47, 111, 237, 0.25);
-  border-radius: 8px;
-  /* Канон --accent из DESIGN.md (#2f6fed, AA на светлом фоне): локальный
-     токен --accent (#2d8cf0) даёт 3.4:1 — ниже WCAG AA для 13px. */
-  color: #2f6fed;
+  border-radius: var(--r-md);
+  color: var(--accent);
   text-decoration: none;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   max-width: 240px;
 }
 .bubble-file-name {
@@ -236,11 +252,11 @@ html, body {
 .attach-btn {
   background: none;
   border: none;
-  font-size: 17px;
   cursor: pointer;
   padding: 0 4px;
   color: var(--meta);
   flex-shrink: 0;
+  display: inline-flex;
 }
 .attach-btn:hover { color: var(--accent); }
 .attach-btn:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -251,10 +267,10 @@ html, body {
   align-items: center;
   gap: 8px;
   padding: 5px 10px;
-  background: #eef3fb;
+  background: var(--accent-soft);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  font-size: 12px;
+  border-radius: var(--r-md);
+  font-size: var(--fs-xs);
 }
 .file-chip-name {
   font-weight: 500;
@@ -262,18 +278,18 @@ html, body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.file-chip-size { color: var(--meta); flex-shrink: 0; }
+.file-chip-size { color: var(--meta); flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .file-chip-x {
   margin-left: auto;
   background: none;
   border: none;
   cursor: pointer;
   color: var(--meta);
-  font-size: 13px;
   padding: 0 2px;
   flex-shrink: 0;
+  display: inline-flex;
 }
-.file-chip-x:hover { color: var(--error); }
+.file-chip-x:hover { color: var(--err); }
 
 /* Лайтбокс фото: просмотр внутри страницы (не новая вкладка) */
 .lightbox {
@@ -290,6 +306,6 @@ html, body {
 .lightbox img {
   max-width: 100%;
   max-height: 100%;
-  border-radius: 8px;
+  border-radius: var(--r-md);
   object-fit: contain;
 }

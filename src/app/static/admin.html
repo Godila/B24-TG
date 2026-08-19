@@ -2,162 +2,135 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8">
-  <script src="/static/vendor/qrcode.min.js"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ЧатМост — панель управления</title>
   <link rel="icon" href="/static/brand/favicon.ico" sizes="48x48">
   <link rel="apple-touch-icon" href="/static/brand/logo-square-192x192.png">
+  <link rel="stylesheet" href="/static/tokens.css">
+  <script src="/static/vendor/qrcode.min.js"></script>
 
   <style>
-    :root {
-      --bg: #f2f4f8;
-      --card: #ffffff;
-      --border: #dfe3ea;
-      --text: #1c2733;
-      --muted: #66707d;
-      --accent: #2f6fed;
-      --accent-dark: #1f57c7;
-      --danger: #b3352f;
-      --ok-bg: #e6f6e6; --ok-fg: #1d7a35;
-      --warn-bg: #fdf3d8; --warn-fg: #8a6d1a;
-      --err-bg: #fde8e8; --err-fg: #b3352f;
-      --wait-bg: #eef4fd; --wait-fg: #2a5fa8;
-    }
     * { box-sizing: border-box; }
     body {
       font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       max-width: 940px; margin: 0 auto; padding: 24px 16px 60px;
-      background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.45;
+      background: var(--bg); color: var(--ink); font-size: var(--fs-md); line-height: 1.45;
     }
 
     /* A11y-пол: видимый фокус с клавиатуры (единый для всех интерактивных) */
     .btn:focus-visible, .segment button:focus-visible, .chip-x:focus-visible,
-    .toolbar input:focus-visible, .pwinput:focus-visible {
+    .chip-role:focus-visible, .line-add:focus-visible, .toolbar input:focus-visible,
+    .pwinput:focus-visible, dialog .btn:focus-visible, .wz-channel:focus-visible {
       outline: 2px solid var(--accent); outline-offset: 2px;
     }
-    .toolbar input:focus, .pwinput:focus { border-color: var(--accent); outline: none; }
+    .line-add:focus, .pwinput:focus { border-color: var(--accent); outline: none; }
 
-    /* --- шапка бренда: знак ЧатМост (пузырь с арками моста) --- */
-    .brand { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; }
-    .brand-mark {
-      height: 44px; width: auto; flex: none; display: block;
-    }
-    .brand h1 { margin: 0; font-size: 1.45rem; letter-spacing: .2px; }
+    /* --- шапка бренда --- */
+    .brand { display: flex; align-items: center; gap: 14px; margin-bottom: 26px; }
+    .brand-mark { height: 40px; width: auto; flex: none; display: block; }
+    .brand h1 { margin: 0; font-size: var(--fs-lg); letter-spacing: .2px; }
     .brand .tag {
       display: inline-block; margin-left: 10px; padding: 2px 10px; border-radius: 999px;
-      background: #e8edf7; color: var(--accent-dark); font-size: .78rem; font-weight: 600;
-      vertical-align: middle;
+      background: var(--accent-soft); color: var(--accent-hover);
+      font-size: var(--fs-2xs); font-weight: 600; vertical-align: middle;
     }
-    .lead { color: var(--muted); margin: 6px 0 26px; font-size: .92rem; }
 
-    h2 {
-      font-size: 1.05rem; margin: 30px 0 12px; display: flex; align-items: center; gap: 8px;
+    /* --- секции: eyebrow + действия в одной строке --- */
+    .section-head {
+      display: flex; align-items: center; gap: 10px;
+      margin: 34px 0 12px;
     }
-    h2 .counter { color: var(--muted); font-weight: 400; font-size: .85rem; }
+    .section-head:first-of-type { margin-top: 0; }
+    .section-title {
+      font-size: var(--fs-2xs); font-weight: 700; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .08em;
+    }
+    .section-count {
+      background: var(--accent-soft); color: var(--accent-hover);
+      border-radius: 999px; padding: 0 8px; font-size: var(--fs-2xs); font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .section-head .btn { margin-left: auto; }
+    .section-hint { color: var(--muted); font-size: var(--fs-sm); margin: -4px 0 12px; }
 
-    /* --- карточки каналов --- */
-    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
-    .channel-card {
-      background: var(--card); border: 1px solid var(--border); border-radius: 14px;
-      padding: 18px; box-shadow: 0 1px 3px rgba(20, 30, 50, .05);
+    /* --- карточки --- */
+    .stack { display: flex; flex-direction: column; gap: 10px; }
+    .card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg);
+      padding: 14px 16px; box-shadow: var(--shadow-1);
     }
-    .channel-card h3 { margin: 0 0 10px; font-size: 1.05rem; display: flex; align-items: center; gap: 8px; }
-    .channel-card h3 .chan-ico {
-      width: 30px; height: 30px; border-radius: 8px; flex: none; font-size: 15px;
+    .card.flash { border-color: var(--accent); }
+
+    /* --- линия --- */
+    .line-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .line-ico {
+      width: 36px; height: 36px; border-radius: var(--r-md); flex: none;
       display: inline-flex; align-items: center; justify-content: center;
     }
-    #card-tg  .chan-ico { background: #e5f1fb; }
-    #card-max .chan-ico { background: #f0e9fd; }
-    .qrbox { margin: 14px auto; width: max-content; padding: 10px; background: #fff; border: 1px solid var(--border); border-radius: 12px; }
-    .qrbox img, .qrbox canvas { display: block; }
-    .pwrow { display: flex; gap: 8px; margin: 10px 0; }
-    .pwrow input { flex: 1; min-width: 0; }
-
-    /* --- бейджи/чипы --- */
-    .badge {
-      display: inline-block; padding: 3px 10px; border-radius: 999px;
-      font-size: .78rem; font-weight: 600; white-space: nowrap;
+    .line-ico.tg { background: var(--tg-bg); color: var(--tg); }
+    .line-ico.max { background: var(--max-bg); color: var(--max); }
+    .line-title { flex: 1 1 220px; min-width: 0; }
+    .line-name { font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .line-meta { color: var(--muted); font-size: var(--fs-xs); margin-top: 2px; font-variant-numeric: tabular-nums; }
+    /* Провод моста (фирменный знак из лого): цел — связь есть,
+       пунктир — линия не подключена. Маячок = статус. */
+    .bridge { color: var(--ok); flex: none; }
+    .bridge.wait { color: var(--wait); }
+    .bridge.warn { color: var(--warn); }
+    .bridge.err { color: var(--err); }
+    .bridge .bridge-deck { stroke-dasharray: none; }
+    .bridge.warn .bridge-deck, .bridge.err .bridge-deck { stroke-dasharray: 4 3; }
+    .bridge .bridge-beacon { fill: currentColor; stroke: none; }
+    @media (prefers-reduced-motion: no-preference) {
+      .bridge.pulse .bridge-beacon { animation: beacon 1.2s ease-in-out infinite; }
+      @keyframes beacon { 50% { opacity: .25; } }
     }
-    .badge.ok { background: var(--ok-bg); color: var(--ok-fg); }
-    .badge.warn { background: var(--warn-bg); color: var(--warn-fg); }
-    .badge.err { background: var(--err-bg); color: var(--err-fg); }
-    .badge.wait { background: var(--wait-bg); color: var(--wait-fg); }
 
+    .line-members { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+    .line-actions { margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .line-add {
+      border: 1px solid var(--border); border-radius: var(--r-sm); padding: 4px 6px;
+      font-size: var(--fs-sm); background: var(--surface); max-width: 200px;
+    }
+    .members-hint { color: var(--muted); font-size: var(--fs-xs); margin: 6px 0 0; }
+
+    /* --- чипы участников/аккаунтов --- */
     .chip {
-      display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px 4px 12px;
-      border-radius: 999px; font-size: .8rem; font-weight: 600; white-space: nowrap;
-      background: var(--ok-bg); color: var(--ok-fg);
+      display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px 3px 4px;
+      border-radius: 999px; font-size: var(--fs-xs); font-weight: 600; white-space: nowrap;
+      background: var(--accent-soft); color: var(--accent-hover);
     }
-    .chip.warn { background: var(--warn-bg); color: var(--warn-fg); }
-    .chip.err { background: var(--err-bg); color: var(--err-fg); }
+    .chip.ok { background: var(--ok-bg); color: var(--ok); }
+    .chip.warn { background: var(--warn-bg); color: var(--warn); }
+    .chip.err { background: var(--err-bg); color: var(--err); }
+    .chip-ava {
+      width: 20px; height: 20px; border-radius: 50%; flex: none;
+      background: rgba(255, 255, 255, .7); color: var(--ink);
+      font-size: 10px; font-weight: 700;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .chip-role {
+      border: 1px solid transparent; cursor: pointer; color: inherit;
+      border-radius: 999px; padding: 1px 7px; font-size: var(--fs-2xs); font-weight: 600;
+      display: inline-flex; align-items: center; gap: 4px;
+    }
+    .chip-role:hover { border-color: currentColor; }
+    .chip-role svg.i { width: 12px; height: 12px; }
     .chip-x {
-      border: none; cursor: pointer; background: rgba(0,0,0,.08); color: inherit;
+      border: none; cursor: pointer; background: rgba(0, 0, 0, .08); color: inherit;
       width: 18px; height: 18px; border-radius: 50%; font-size: 12px; line-height: 1;
       display: inline-flex; align-items: center; justify-content: center; padding: 0;
     }
-    .chip-x:hover { background: rgba(0,0,0,.18); }
-    .chip-btn {
-      border: none; cursor: pointer; background: rgba(0,0,0,.08); color: inherit;
-      border-radius: 999px; padding: 2px 8px; font-size: .72rem; font-weight: 600;
-    }
-    .chip-btn:hover { background: rgba(0,0,0,.18); }
-    select.line-add {
-      border: 1px solid var(--border); border-radius: 8px; padding: 4px 6px;
-      font-size: .85rem; background: #fff; max-width: 180px;
-    }
-    .share-panel { margin-top: 8px; }
-    .share-panel .share-url {
-      border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px;
-      font-size: .82rem; background: #fff; min-width: 260px; max-width: 420px;
-    }
+    .chip-x:hover { background: rgba(0, 0, 0, .18); }
+    .chip-x svg.i { width: 11px; height: 11px; }
 
-    /* --- кнопки --- */
-    .btn {
-      appearance: none; border: 1px solid transparent; border-radius: 9px;
-      padding: 9px 18px; font-size: .9rem; font-weight: 600; cursor: pointer;
-      background: var(--accent); color: #fff;
-    }
-    @media (prefers-reduced-motion: no-preference) {
-      .btn { transition: background .15s; }
-    }
-    .btn:hover { background: var(--accent-dark); }
-    .btn:disabled { opacity: .55; cursor: default; }
-    .btn--ghost {
-      background: transparent; color: var(--text); border-color: var(--border);
-    }
-    .btn--ghost:hover { background: #eef1f6; }
-    .btn--danger { background: transparent; color: var(--danger); border-color: #ecd2d0; }
-    .btn--danger:hover { background: #fbf0ef; }
-    .btn--sm { padding: 6px 12px; font-size: .8rem; border-radius: 7px; }
-    .channel-card .start { margin-top: 10px; }
-
-    /* --- сегмент-контрол (настройка таймлайна) --- */
-    .settings-card {
-      background: var(--card); border: 1px solid var(--border); border-radius: 14px;
-      padding: 16px 18px; box-shadow: 0 1px 3px rgba(20,30,50,.05);
-    }
-    .settings-card .set-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-    .segment { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
-    .segment button {
-      appearance: none; border: none; cursor: pointer; padding: 8px 14px;
-      font-size: .85rem; font-weight: 600; background: #fff; color: var(--muted);
-      border-right: 1px solid var(--border);
-    }
-    .segment button:last-child { border-right: none; }
-    .segment button.active { background: var(--accent); color: #fff; }
-    .set-state { font-size: .85rem; color: var(--muted); }
-
-    /* --- менеджеры: ряды-карточки вместо тесной таблицы --- */
-    .manager-list { display: flex; flex-direction: column; gap: 10px; }
-    .manager-row {
-      background: var(--card); border: 1px solid var(--border); border-radius: 14px;
-      padding: 14px 16px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
-      box-shadow: 0 1px 3px rgba(20,30,50,.05);
-    }
+    /* --- менеджеры --- */
+    .manager-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
     .manager-row.inactive { opacity: .62; }
     .m-avatar {
-      width: 38px; height: 38px; border-radius: 50%; flex: none;
-      background: #e8edf7; color: var(--accent-dark); font-weight: 700; font-size: .9rem;
+      width: 36px; height: 36px; border-radius: 50%; flex: none;
+      background: var(--accent-soft); color: var(--accent-hover);
+      font-weight: 700; font-size: var(--fs-sm);
       display: flex; align-items: center; justify-content: center;
     }
     .m-main { flex: 1 1 240px; min-width: 0; }
@@ -166,26 +139,110 @@
     .m-accounts { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; }
     .m-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
-    /* --- форма добавления --- */
-    .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
-    .toolbar input {
-      border: 1px solid var(--border); border-radius: 9px; padding: 8px 12px;
-      font-size: .9rem; background: #fff; min-width: 140px;
+    /* --- бейджи --- */
+    .badge {
+      display: inline-block; padding: 2px 10px; border-radius: 999px;
+      font-size: var(--fs-2xs); font-weight: 600; white-space: nowrap;
     }
-    input.pwinput {
-      border: 1px solid var(--border); border-radius: 9px; padding: 8px 12px;
-      font-size: .9rem; background: #fff;
+    .badge.ok { background: var(--ok-bg); color: var(--ok); }
+    .badge.warn { background: var(--warn-bg); color: var(--warn); }
+    .badge.err { background: var(--err-bg); color: var(--err); }
+    .badge.wait { background: var(--wait-bg); color: var(--wait); }
+
+    /* --- кнопки --- */
+    .btn {
+      appearance: none; border: 1px solid transparent; border-radius: var(--r-md);
+      padding: 8px 16px; font-size: var(--fs-sm); font-weight: 600; cursor: pointer;
+      background: var(--accent); color: #fff;
+      display: inline-flex; align-items: center; gap: 7px;
     }
+    .btn svg.i { width: 15px; height: 15px; }
+    @media (prefers-reduced-motion: no-preference) {
+      .btn { transition: background .15s; }
+    }
+    .btn:hover { background: var(--accent-hover); }
+    .btn:disabled { opacity: .55; cursor: default; }
+    .btn--ghost { background: transparent; color: var(--ink); border-color: var(--border); }
+    .btn--ghost:hover { background: var(--bg); }
+    .btn--danger { background: transparent; color: var(--err); border-color: #ecd2d0; }
+    .btn--danger:hover { background: var(--err-bg); }
+    .btn--danger.is-confirming {
+      background: var(--err); color: #fff; border-color: var(--err);
+    }
+    .btn--sm { padding: 5px 11px; font-size: var(--fs-xs); border-radius: var(--r-sm); }
 
-    .hint { color: var(--muted); font-size: .85rem; }
-    .err-line { color: var(--err-fg); font-size: .85rem; min-height: 1.2em; margin: 6px 0; }
+    /* --- настройки --- */
+    .settings-card .set-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .segment { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
+    .segment button {
+      appearance: none; border: none; cursor: pointer; padding: 8px 14px;
+      font-size: var(--fs-sm); font-weight: 600; background: var(--surface); color: var(--muted);
+      border-right: 1px solid var(--border); font-family: inherit;
+    }
+    .segment button:last-child { border-right: none; }
+    .segment button.active { background: var(--accent); color: #fff; }
+    .set-state { font-size: var(--fs-sm); color: var(--muted); }
 
-    /* Toast ошибок (UX-09): паттерн error-banner из «Чатов» — вместо alert() */
+    /* --- пустые состояния: приглашение к действию, не заглушка --- */
+    .empty-state {
+      display: flex; flex-direction: column; align-items: center; gap: 10px;
+      padding: 34px 16px; text-align: center;
+      border: 1px dashed var(--border); border-radius: var(--r-lg);
+      color: var(--muted);
+    }
+    .empty-state svg.i { width: 24px; height: 24px; opacity: .55; }
+    .empty-state .btn { margin-top: 4px; }
+
+    /* --- Toast ошибок: паттерн error-banner из «Чатов» --- */
     .toast {
       position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
-      background: var(--err-fg); color: #fff; padding: 8px 16px;
-      border-radius: 8px; font-size: 13px; z-index: 20;
-      box-shadow: 0 4px 12px rgba(0,0,0,.2);
+      background: var(--err); color: #fff; padding: 8px 16px;
+      border-radius: var(--r-md); font-size: var(--fs-sm); z-index: 20;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, .2);
+      display: flex; align-items: center; gap: 8px;
+    }
+
+    .hint { color: var(--muted); font-size: var(--fs-sm); }
+
+    /* --- визард подключения (dialog) --- */
+    dialog {
+      border: none; border-radius: var(--r-lg); padding: 0;
+      box-shadow: 0 24px 64px rgba(15, 23, 32, .25);
+      width: min(480px, calc(100vw - 32px));
+    }
+    dialog::backdrop { background: rgba(15, 23, 32, .45); }
+    .wz { padding: 22px 24px 24px; }
+    .wz h3 { margin: 0 0 4px; font-size: var(--fs-lg); display: flex; align-items: center; gap: 10px; }
+    .wz .wz-sub { color: var(--muted); font-size: var(--fs-sm); margin: 0 0 16px; }
+    .wz-channels { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .wz-channel {
+      appearance: none; cursor: pointer; font-family: inherit;
+      border: 1px solid var(--border); border-radius: var(--r-md);
+      background: var(--surface); padding: 18px 12px;
+      display: flex; flex-direction: column; align-items: center; gap: 8px;
+      font-size: var(--fs-md); font-weight: 600; color: var(--ink);
+    }
+    .wz-channel svg.i { width: 22px; height: 22px; }
+    .wz-channel:hover { border-color: var(--accent); background: var(--accent-soft); }
+    .wz-channel.tg svg.i { color: var(--tg); }
+    .wz-channel.max svg.i { color: var(--max); }
+    .wz-urlrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0 12px; }
+    .wz-url {
+      flex: 1 1 200px; min-width: 0; border: 1px solid var(--border); border-radius: var(--r-sm);
+      padding: 7px 10px; font-size: var(--fs-xs); background: var(--surface);
+      color: var(--ink);
+    }
+    .wz-qrwrap { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+    .wz-qrbox { background: #fff; border: 1px solid var(--border); border-radius: var(--r-md); padding: 8px; }
+    .wz-state { font-size: var(--fs-sm); min-height: 1.4em; }
+    .wz-state.ok { color: var(--ok); font-weight: 600; }
+    .wz-state.err { color: var(--err); font-weight: 600; }
+    .wz-note { color: var(--muted); font-size: var(--fs-xs); margin-top: 6px; max-width: 300px; }
+    .wz-foot { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
+    .wz-success { text-align: center; padding: 8px 0 4px; }
+    .wz-success svg.i {
+      width: 52px; height: 52px; color: var(--ok);
+      background: var(--ok-bg); border-radius: 50%; padding: 12px;
     }
   </style>
 </head>
@@ -194,57 +251,68 @@
     <img class="brand-mark" src="/static/brand/logo-128x69.png" alt="" aria-hidden="true">
     <h1>ЧатМост <span class="tag">панель управления</span></h1>
   </div>
-  <p class="lead">Мост между мессенджерами и Битрикс24: номера подключает
-    администратор (раздел «Линии»), переписка с клиентами попадает в карточки сделок.</p>
 
   <div id="supervisor-zone" style="display:none">
-    <h2>Настройки</h2>
-    <div class="settings-card">
-      <div class="set-row">
-        <strong>Дублировать переписку в таймлайн CRM:</strong>
-        <div class="segment" id="timeline-segment">
-          <button data-mode="first" type="button">Только первое сообщение</button>
-          <button data-mode="all" type="button">Все сообщения</button>
-          <button data-mode="none" type="button">Выключено</button>
+    <section id="sec-lines">
+      <div class="section-head">
+        <span class="section-title">Линии</span>
+        <span class="section-count" id="lines-count" hidden></span>
+        <button class="btn" id="connect-line" type="button">
+          <svg class="i" aria-hidden="true"><use href="/static/icons.svg#plus"/></svg>
+          Подключить номер
+        </button>
+      </div>
+      <p class="section-hint">Линия — подключённый номер мессенджера. Номер с одним
+        участником — личный; добавьте участников, и он станет общим: переписка видна
+        всем, отвечает любой участник, наблюдатель только читает.</p>
+      <div class="stack" id="lines-list"></div>
+    </section>
+
+    <section id="sec-managers">
+      <div class="section-head">
+        <span class="section-title">Менеджеры</span>
+        <span class="section-count" id="managers-count" hidden></span>
+        <button class="btn btn--ghost" id="sync-b24" type="button">
+          <svg class="i" aria-hidden="true"><use href="/static/icons.svg#refresh"/></svg>
+          Обновить из CRM
+        </button>
+      </div>
+      <p class="section-hint" id="sync-b24-state"></p>
+      <div class="stack" id="managers-list"></div>
+    </section>
+
+    <section id="sec-settings">
+      <div class="section-head"><span class="section-title">Настройки</span></div>
+      <div class="card settings-card">
+        <div class="set-row">
+          <strong>Дублировать переписку в таймлайн CRM:</strong>
+          <div class="segment" id="timeline-segment">
+            <button data-mode="first" type="button">Только первое сообщение</button>
+            <button data-mode="all" type="button">Все сообщения</button>
+            <button data-mode="none" type="button">Выключено</button>
+          </div>
         </div>
-        <span class="set-state" id="timeline-state"></span>
+        <div class="set-row" style="margin-top:12px">
+          <strong>Прикреплять файлы к комментариям CRM:</strong>
+          <label style="display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-sm)">
+            <input type="checkbox" id="media-to-timeline" aria-label="Прикреплять файлы к комментариям CRM">
+            вложения (фото/файлы ≤5 МБ) попадают в карточку сделки
+          </label>
+        </div>
+        <p class="hint" style="margin:10px 0 0">
+          «Только первое» — в карточку сделки попадает комментарий о новом диалоге, остальная
+          переписка живёт во вкладке чата. «Все сообщения» — полный аудит в таймлайне.
+          Уведомления менеджеру о новых клиентах работают в любом режиме.
+        </p>
       </div>
-      <div class="set-row" style="margin-top:12px">
-        <strong>Прикреплять файлы к комментариям CRM:</strong>
-        <label style="display:inline-flex;align-items:center;gap:6px;font-size:.85rem">
-          <input type="checkbox" id="media-to-timeline" aria-label="Прикреплять файлы к комментариям CRM">
-          вложения (фото/файлы ≤5 МБ) попадают в карточку сделки
-        </label>
-        <span class="set-state" id="media-state"></span>
-      </div>
-      <p class="hint" style="margin:10px 0 0">
-        «Только первое» — в карточку сделки попадает комментарий о новом диалоге, остальная
-        переписка живёт во вкладке чата. «Все сообщения» — полный аудит в таймлайне.
-        Уведомления менеджеру о новых клиентах работают в любом режиме.
-      </p>
-    </div>
-
-    <h2>Линии <span class="counter" id="lines-count"></span></h2>
-    <p class="hint" style="margin:0 0 10px">
-      Линия — подключённый номер. Номер с одним участником — личный; добавьте
-      участников, и номер станет общим: переписка будет видна всем участникам,
-      отвечать может любой участник, наблюдатель — только читает.
-    </p>
-    <div class="toolbar">
-      <button class="btn" id="add-line-tg" type="button">+ Telegram</button>
-      <button class="btn" id="add-line-max" type="button">+ MAX</button>
-      <span class="hint">новая линия подключается по share-ссылке</span>
-    </div>
-    <div class="manager-list" id="lines-list"></div>
-
-    <h2>Менеджеры <span class="counter" id="managers-count"></span></h2>
-    <div class="toolbar">
-      <button class="btn" id="sync-b24" type="button">Обновить из CRM</button>
-      <span class="hint" id="sync-b24-state"></span>
-    </div>
-    <div id="add-manager-err" class="err-line"></div>
-    <div class="manager-list" id="managers-list"></div>
+    </section>
   </div>
+
+  <!-- Визард подключения: выбор канала → QR-флоу → готово. Закрытие до
+       авторизации удаляет созданную болванку — мусорных линий не остаётся. -->
+  <dialog id="wz">
+    <div class="wz" id="wz-body"></div>
+  </dialog>
 
   <script>
     async function api(path, opts) {
@@ -263,65 +331,10 @@
       toastTimer = setTimeout(() => { t.hidden = true; }, 4000);
     }
 
-    // ---- Настройка таймлайна ----
-    const TIMELINE_LABELS = {
-      first: "только первое сообщение",
-      all: "все сообщения",
-      none: "выключено",
-    };
-    function renderTimelineMode(mode) {
-      document.querySelectorAll("#timeline-segment button").forEach((b) => {
-        b.classList.toggle("active", b.dataset.mode === mode);
-      });
-      document.getElementById("timeline-state").textContent =
-        "сохранено: " + (TIMELINE_LABELS[mode] || mode);
+    function ic(name, cls) {
+      return '<svg class="i' + (cls ? " " + cls : "") + '" aria-hidden="true">' +
+        '<use href="/static/icons.svg#' + name + '"/></svg>';
     }
-    const mediaToggle = document.getElementById("media-to-timeline");
-    const mediaState = document.getElementById("media-state");
-    function renderMediaToTimeline(on) {
-      mediaToggle.checked = !!on;
-      mediaState.textContent = on ? "включено" : "выключено";
-    }
-    mediaToggle.addEventListener("change", async () => {
-      mediaState.textContent = "сохраняем…";
-      try {
-        await api("/admin/api/settings", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ media_to_timeline: mediaToggle.checked }),
-        });
-        renderMediaToTimeline(mediaToggle.checked);
-      } catch (e) {
-        mediaState.textContent = "ошибка: " + e.message;
-      }
-    });
-    async function loadSettings() {
-      try {
-        const s = await api("/admin/api/settings");
-        renderTimelineMode(s.timeline_mode);
-        renderMediaToTimeline(s.media_to_timeline);
-      }
-      catch { /* не supervisor — секция скрыта целиком */ }
-    }
-    document.querySelectorAll("#timeline-segment button").forEach((b) => {
-      b.addEventListener("click", async () => {
-        renderTimelineMode(b.dataset.mode);
-        document.getElementById("timeline-state").textContent = "сохраняем…";
-        try {
-          await api("/admin/api/settings", {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ timeline_mode: b.dataset.mode }),
-          });
-          renderTimelineMode(b.dataset.mode);
-        } catch (e) {
-          document.getElementById("timeline-state").textContent = "ошибка: " + e.message;
-        }
-      });
-    });
-
-    // ---- Supervisor-зона: менеджеры и линии ----
-    let managersCache = [];
 
     // Данные менеджеров/линий приходят из B24 и профилей мессенджеров —
     // экранируем всё, что попадает в innerHTML (граница доверия).
@@ -336,276 +349,341 @@
         .map((w) => w[0]).join("").toUpperCase();
     }
 
+    // ---- Настройки ----
+    const TIMELINE_LABELS = {
+      first: "только первое сообщение",
+      all: "все сообщения",
+      none: "выключено",
+    };
+    function renderTimelineMode(mode) {
+      document.querySelectorAll("#timeline-segment button").forEach((b) => {
+        b.classList.toggle("active", b.dataset.mode === mode);
+      });
+    }
+    const mediaToggle = document.getElementById("media-to-timeline");
+    mediaToggle.addEventListener("change", async () => {
+      try {
+        await api("/admin/api/settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ media_to_timeline: mediaToggle.checked }),
+        });
+      } catch (e) {
+        mediaToggle.checked = !mediaToggle.checked;
+        showToast("Не получилось сохранить: " + e.message);
+      }
+    });
+    document.querySelectorAll("#timeline-segment button").forEach((b) => {
+      b.addEventListener("click", async () => {
+        renderTimelineMode(b.dataset.mode);
+        try {
+          await api("/admin/api/settings", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ timeline_mode: b.dataset.mode }),
+          });
+        } catch (e) {
+          showToast("Не получилось сохранить: " + e.message);
+          loadSettings();
+        }
+      });
+    });
+    async function loadSettings() {
+      try {
+        const s = await api("/admin/api/settings");
+        renderTimelineMode(s.timeline_mode);
+        mediaToggle.checked = !!s.media_to_timeline;
+      }
+      catch { /* не supervisor — секция скрыта целиком */ }
+    }
+
+    // ---- Supervisor-зона ----
+    let managersCache = [];
+
     function accountChip(a) {
-      const cls = a.status === "active" ? "" : a.status === "banned" ? "err" : "warn";
+      const cls = a.status === "active" ? "ok" : a.status === "banned" ? "err" : "warn";
       const label = a.messenger.toUpperCase() + " · " +
         (a.status === "active" ? "активен" : a.status === "banned" ? "заблокирован" : "офлайн");
       const x = a.status === "active"
-        ? `<button class="chip-x" data-unlink="${a.id}" title="Отключить аккаунт" aria-label="Отключить аккаунт ${a.messenger.toUpperCase()}">×</button>` : "";
-      return `<span class="chip ${cls}">${label}${x}</span>`;
+        ? '<button class="chip-x" data-unlink="' + a.id + '" title="Отключить аккаунт" aria-label="Отключить аккаунт ' +
+          a.messenger.toUpperCase() + '">' + ic("x") + "</button>"
+        : "";
+      return '<span class="chip ' + cls + '">' + esc(label) + x + "</span>";
     }
 
+    /** Провод моста со статус-маячком (см. .bridge в CSS). */
+    function bridgeSvg(status) {
+      const cls = status === "banned" ? "err" : status === "wait" ? "wait" : status === "active" ? "" : "warn";
+      return '<svg class="bridge ' + cls + '" width="92" height="14"' +
+        ' viewBox="0 0 92 14" aria-hidden="true">' +
+        '<path class="bridge-deck" d="M2 7H14A6 6 0 0 0 26 7H38A6 6 0 0 0 50 7H62A6 6 0 0 0 74 7H82"' +
+        ' fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>' +
+        '<circle class="bridge-beacon" cx="87" cy="7" r="3.5"/></svg>';
+    }
+
+    function lineStatusBadge(ln, isBlank) {
+      if (ln.status === "active") return '<span class="badge ok">активна</span>';
+      if (ln.status === "banned") return '<span class="badge err">заблокирована</span>';
+      return isBlank
+        ? '<span class="badge wait">ожидает подключения</span>'
+        : '<span class="badge warn">офлайн</span>';
+    }
+
+    /** Строка линии. Плейсхолдер телефона (`TG-line-…`) наружу не показываем. */
+    function lineRow(ln) {
+      const ico = ln.messenger === "tg" ? "send" : "message";
+      const isBlank = /-line-/.test(ln.phone || "");
+      const meta = ln.messenger === "tg" ? "Telegram" : "MAX";
+      const metaTail = isBlank ? "номер ещё не подключён" : esc(ln.phone);
+      const memberIds = new Set(ln.members.map((m) => m.manager_id));
+      const options = managersCache
+        .filter((m) => m.is_active && !memberIds.has(m.id))
+        .map((m) => '<option value="' + m.id + '">' + esc(m.name) + "</option>").join("");
+      const chips = ln.members.map((mem) => {
+        const isPart = mem.role === "participant";
+        return '<span class="chip">' +
+          '<span class="chip-ava">' + esc(initials(mem.name)) + "</span>" +
+          esc(mem.name) +
+          '<button class="chip-role" data-line="' + ln.id + '" data-manager="' + mem.manager_id +
+          '" data-role="' + (isPart ? "observer" : "participant") + '" type="button"' +
+          ' title="Нажмите, чтобы переключить роль: участник отвечает клиентам, наблюдатель только читает">' +
+          ic(isPart ? "user" : "eye") + (isPart ? "участник" : "наблюдатель") + "</button>" +
+          '<button class="chip-x" data-line="' + ln.id + '" data-manager="' + mem.manager_id +
+          '" type="button" title="Убрать из линии" aria-label="Убрать ' + esc(mem.name) + ' из линии">' +
+          ic("x") + "</button></span>";
+      }).join("");
+      const addControl = options
+        ? '<select class="line-add" data-line="' + ln.id + '" aria-label="Кого добавить в линию">' + options + "</select>" +
+          '<button class="btn btn--ghost btn--sm" data-add-line="' + ln.id + '" type="button">' +
+          ic("plus") + "Добавить</button>"
+        : '<span class="hint">' + (ln.members.length
+            ? "все активные менеджеры уже в линии"
+            : "нет активных менеджеров — обновите список из CRM") + "</span>";
+      const div = document.createElement("article");
+      div.className = "card";
+      div.dataset.lineRow = ln.id;
+      div.innerHTML =
+        '<div class="line-head">' +
+          '<span class="line-ico ' + ln.messenger + '">' + ic(ico, "i--18") + "</span>" +
+          '<div class="line-title">' +
+            '<div class="line-name">' + esc(ln.name || (isBlank ? "Новый номер" : ln.phone)) +
+              lineStatusBadge(ln, isBlank) + "</div>" +
+            '<div class="line-meta">' + meta + " · " + metaTail + "</div>" +
+          "</div>" +
+          bridgeSvg(ln.status === "active" ? "active" : isBlank ? "wait" : ln.status) +
+        "</div>" +
+        '<div class="line-members">' + (chips || "") + "</div>" +
+        '<p class="members-hint"' + (chips ? " hidden" : "") + '>Нет участников — у линии нет ответственных.</p>' +
+        '<div class="line-actions">' + addControl +
+          '<button class="btn btn--ghost btn--sm" data-share="' + ln.id + '" data-channel="' + ln.messenger +
+          '" type="button" title="Выдать ссылку подключения владельцу телефона">' +
+          ic("link") + (isBlank ? "Подключить" : "Ссылка") + "</button>" +
+          '<button class="btn btn--danger btn--sm" data-del-line="' + ln.id + '" type="button"' +
+          ' title="Удалить линию из панели (после отключения)">' + ic("trash") + "Удалить</button>" +
+        "</div>";
+      return div;
+    }
+
+    function managerRow(m) {
+      const div = document.createElement("article");
+      div.className = "card manager-row" + (m.is_active ? "" : " inactive");
+      div.dataset.managerRow = m.id;
+      const accounts = m.accounts.map(accountChip).join("") ||
+        '<span class="hint">нет подключённых каналов</span>';
+      const isSup = m.role === "supervisor";
+      const ro = m.is_readonly;
+      div.innerHTML =
+        '<div class="m-avatar">' + esc(initials(m.name)) + "</div>" +
+        '<div class="m-main">' +
+          '<div class="m-name">' + esc(m.name) + '<span class="hint">Битрикс24 #' + esc(m.b24_user_id) + "</span>" +
+            (m.is_active ? "" : ' <span class="badge err">деактивирован</span>') + "</div>" +
+          '<div class="m-accounts">' + accounts + "</div>" +
+        "</div>" +
+        '<div class="m-actions">' +
+          '<button class="btn btn--ghost btn--sm" data-patch="' + m.id + '" data-field="role"' +
+          ' data-value="' + (isSup ? "manager" : "supervisor") + '" type="button"' +
+          ' title="Роль в ЧатМосте: администратор управляет панелью и видит все диалоги">' +
+          ic(isSup ? "shield" : "user") + (isSup ? "администратор" : "менеджер") + "</button>" +
+          '<button class="btn btn--ghost btn--sm" data-patch="' + m.id + '" data-field="is_readonly"' +
+          ' data-value="' + !ro + '" type="button" title="Права на отправку сообщений из виджета">' +
+          ic(ro ? "eye" : "pencil") + (ro ? "только чтение" : "чтение и запись") + "</button>" +
+          (m.is_active
+            ? '<button class="btn btn--danger btn--sm" data-patch="' + m.id + '" data-field="is_active"' +
+              ' data-value="false" type="button">Деактивировать</button>'
+            : '<button class="btn btn--ghost btn--sm" data-patch="' + m.id + '" data-field="is_active"' +
+              ' data-value="true" type="button">Активировать</button>') +
+        "</div>";
+      return div;
+    }
+
+    function emptyState(icon, text, btnId, btnLabel) {
+      const div = document.createElement("div");
+      div.className = "empty-state";
+      div.innerHTML = ic(icon) + "<div>" + text + "</div>" +
+        (btnId ? '<button class="btn" id="' + btnId + '" type="button">' + ic("plus") + btnLabel + "</button>" : "");
+      return div;
+    }
+
+    // Офлайн/заблокированные линии — первыми: это то, что требует внимания.
+    const LINE_ORDER = { banned: 0, offline: 1, active: 2 };
+
+    async function loadManagers() {
+      let rows;
+      try { rows = await api("/admin/api/managers"); }
+      catch { return; }
+      managersCache = rows;
+      const count = document.getElementById("managers-count");
+      count.textContent = String(rows.length);
+      count.hidden = rows.length === 0;
+      const list = document.getElementById("managers-list");
+      list.innerHTML = "";
+      if (!rows.length) {
+        list.appendChild(emptyState("users",
+          "Менеджеры появятся после синхронизации с Битрикс24.", null));
+        return;
+      }
+      for (const m of rows) list.appendChild(managerRow(m));
+    }
+
+    async function loadLines() {
+      let lines;
+      try { lines = await api("/admin/api/lines"); }
+      catch { return; }
+      const count = document.getElementById("lines-count");
+      count.textContent = String(lines.length);
+      count.hidden = lines.length === 0;
+      const box = document.getElementById("lines-list");
+      box.innerHTML = "";
+      if (!lines.length) {
+        box.appendChild(emptyState("smartphone",
+          "Ни один номер не подключён — переписка начнёт попадать в CRM после подключения линии.",
+          "empty-connect", "Подключить номер"));
+        document.getElementById("empty-connect").addEventListener("click", () => wzOpen());
+        return;
+      }
+      lines.sort((a, b) => (LINE_ORDER[a.status] ?? 3) - (LINE_ORDER[b.status] ?? 3) || a.id - b.id);
+      for (const ln of lines) box.appendChild(lineRow(ln));
+    }
+
+    /** Точечная замена одной строки (без перерисовки списка — не мигает). */
+    function replaceLineRow(ln) {
+      const old = document.querySelector('[data-line-row="' + ln.id + '"]');
+      if (!old) return loadLines();
+      old.replaceWith(lineRow(ln));
+    }
+
+    async function refreshLineRow(lineId) {
+      try {
+        const lines = await api("/admin/api/lines");
+        const ln = lines.find((l) => l.id === lineId);
+        if (ln) replaceLineRow(ln);
+      } catch { /* не supervisor */ }
+    }
+
+    let supervisorsZoneShown = false;
     async function loadSupervisor() {
       let me;
       try { me = await api("/admin/api/me"); } catch { return; }
       if (me.role !== "supervisor") return;
-      document.getElementById("supervisor-zone").style.display = "";
-
-      const rows = await api("/admin/api/managers");
-      managersCache = rows;
-      document.getElementById("managers-count").textContent = "· " + rows.length;
-      const list = document.getElementById("managers-list");
-      list.innerHTML = "";
-      for (const m of rows) {
-        const div = document.createElement("div");
-        div.className = "manager-row" + (m.is_active ? "" : " inactive");
-        const accounts = m.accounts.map(accountChip).join("") ||
-          "<span class='hint'>нет подключённых каналов</span>";
-        div.innerHTML = `
-          <div class="m-avatar">${esc(initials(m.name))}</div>
-          <div class="m-main">
-            <div class="m-name">${esc(m.name)}<span class="hint">Битрикс24 #${esc(m.b24_user_id)}</span>
-              ${m.is_active ? "" : " <span class='badge err'>деактивирован</span>"}</div>
-            <div class="m-accounts">${accounts}</div>
-          </div>
-          <div class="m-actions">
-            <button class="btn btn--ghost btn--sm" data-patch="${m.id}" data-field="role"
-              data-value="${m.role === "supervisor" ? "manager" : "supervisor"}" type="button"
-              title="Роль в ЧатМосте: администратор управляет панелью и видит все диалоги">
-              ${m.role === "supervisor" ? "🛡 администратор" : "👤 менеджер"}</button>
-            <button class="btn btn--ghost btn--sm" data-patch="${m.id}" data-field="is_readonly"
-              data-value="${!m.is_readonly}" type="button"
-              title="Права на отправку сообщений из виджета">
-              ${m.is_readonly ? "🔒 только чтение" : "✏️ чтение и запись"}</button>
-            ${m.is_active
-              ? `<button class="btn btn--danger btn--sm" data-patch="${m.id}" data-field="is_active" data-value="false" type="button">Деактивировать</button>`
-              : `<button class="btn btn--ghost btn--sm" data-patch="${m.id}" data-field="is_active" data-value="true" type="button">Активировать</button>`}
-          </div>`;
-        list.appendChild(div);
+      if (!supervisorsZoneShown) {
+        document.getElementById("supervisor-zone").style.display = "";
+        supervisorsZoneShown = true;
       }
-      list.querySelectorAll("[data-unlink]").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          btn.disabled = true;
-          try { await api(`/admin/api/accounts/${btn.dataset.unlink}/unlink`, { method: "POST" }); }
-          catch (e) { showToast("Не получилось отключить: " + e.message); }
-          loadSupervisor();
-        });
-      });
-      list.querySelectorAll("[data-patch]").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          const body = {};
-          body[btn.dataset.field] = btn.dataset.field === "role"
-            ? btn.dataset.value
-            : btn.dataset.value === "true";
-          try { await api(`/admin/api/managers/${btn.dataset.patch}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-          }); } catch (e) { showToast("Не получилось: " + e.message); }
-          loadSupervisor();
-        });
-      });
-      loadLines();  // после обновления кэша менеджеров (селекты участников)
+      await loadManagers();
+      await loadLines();
     }
 
-    // ---- Supervisor-зона: линии (номера и участники) ----
-    async function loadLines() {
-      let lines;
-      try { lines = await api("/admin/api/lines"); }
-      catch { return; /* не supervisor — секция скрыта */ }
-      document.getElementById("lines-count").textContent = "· " + lines.length;
-      const box = document.getElementById("lines-list");
-      box.innerHTML = "";
-      for (const ln of lines) {
-        const ico = ln.messenger === "tg" ? "✈️" : "🅜";
-        const badge = ln.status === "active" ? "<span class='badge ok'>активна</span>"
-          : ln.status === "banned" ? "<span class='badge err'>заблокирована</span>"
-          : "<span class='badge warn'>офлайн</span>";
-        const memberIds = new Set(ln.members.map((m) => m.manager_id));
-        const options = managersCache
-          .filter((m) => m.is_active && !memberIds.has(m.id))
-          .map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join("");
-        const chips = ln.members.map((mem) => `
-          <span class="chip">${esc(mem.name)}
-            <button class="chip-btn" data-line="${ln.id}" data-manager="${mem.manager_id}"
-              data-role="${mem.role === "participant" ? "observer" : "participant"}" type="button"
-              title="Переключить роль участника">${mem.role === "participant" ? "участник" : "наблюдатель"}</button>
-            <button class="chip-x" data-line="${ln.id}" data-manager="${mem.manager_id}" type="button"
-              title="Убрать из линии" aria-label="Убрать из линии">×</button>
-          </span>`).join("") || "<span class='hint'>нет участников</span>";
-        const div = document.createElement("div");
-        div.className = "manager-row";
-        div.innerHTML = `
-          <div class="m-avatar">${ico}</div>
-          <div class="m-main">
-            <div class="m-name">${esc(ln.name || ln.phone)} ${badge}
-              <span class="hint">${esc(ln.messenger.toUpperCase())} · ${esc(ln.phone)}</span></div>
-            <div class="m-accounts">${chips}</div>
-            <div class="share-panel" data-share-panel="${ln.id}" hidden></div>
-          </div>
-          <div class="m-actions">
-            <button class="btn btn--ghost btn--sm" data-share="${ln.id}" data-channel="${ln.messenger}" type="button"
-              title="Подключение номера: выдать ссылку владельцу телефона">🔗 Поделиться</button>
-            <button class="btn btn--danger btn--sm" data-del-line="${ln.id}" type="button"
-              title="Удалить линию из панели (после отключения)">🗑</button>
-            ${options ? `<select class="line-add" data-line="${ln.id}" aria-label="Кого добавить в линию">${options}</select>
-            <button class="btn btn--ghost btn--sm" data-add-line="${ln.id}" type="button">+ участник</button>` : ""}
-          </div>`;
-        box.appendChild(div);
-      }
-      box.querySelectorAll("[data-share]").forEach((btn) => {
-        btn.addEventListener("click", () => shareLine(btn.dataset.share, btn.dataset.channel));
-      });
-      box.querySelectorAll("[data-del-line]").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          if (!confirm("Удалить линию из панели? Диалоги и история останутся у своих ответственных.")) return;
-          try {
-            await api(`/admin/api/lines/${btn.dataset.delLine}`, { method: "DELETE" });
-          } catch (e) { showToast("Не получилось: " + e.message); }
-          loadSupervisor();
-        });
-      });
-      box.querySelectorAll("[data-add-line]").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          const sel = box.querySelector(`select[data-line="${btn.dataset.addLine}"]`);
-          if (!sel || !sel.value) return;
-          try {
-            await api(`/admin/api/lines/${btn.dataset.addLine}/members`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ manager_id: Number(sel.value) }),
-            });
-          } catch (e) { showToast("Не получилось: " + e.message); }
-          loadLines();
-        });
-      });
-      box.querySelectorAll(".chip-btn[data-line]").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          try {
-            await api(`/admin/api/lines/${btn.dataset.line}/members/${btn.dataset.manager}`, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ role: btn.dataset.role }),
-            });
-          } catch (e) { showToast("Не получилось: " + e.message); }
-          loadLines();
-        });
-      });
-      box.querySelectorAll(".chip-x[data-line]").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          try {
-            await api(`/admin/api/lines/${btn.dataset.line}/members/${btn.dataset.manager}`, {
-              method: "DELETE" });
-          } catch (e) { showToast("Не получилось: " + e.message); }
-          loadLines();
-        });
-      });
-    }
-
-    let sharePoll = null;
-    let sharePollLink = null;
-    function stopSharePoll() {
-      if (sharePoll) { clearInterval(sharePoll); sharePoll = null; }
-      sharePollLink = null;
-    }
-
-    /** Панель «Поделиться»: ссылка + QR + живой статус подключения —
-     *  админ может подключить номер сам, не открывая ссылку в новой вкладке. */
-    async function shareLine(lineId, channel) {
-      stopSharePoll();
-      const panel = document.querySelector(`[data-share-panel="${lineId}"]`);
-      panel.hidden = false;
-      panel.textContent = "получаем ссылку…";
-      try {
-        const r = await api(`/admin/api/lines/${lineId}/connect/${channel}`, { method: "POST" });
-        const url = location.origin + r.share_url;
-        panel.innerHTML = `
-          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-            <input class="share-url" readonly value="${url}" aria-label="Ссылка подключения"
-                   onclick="this.select()">
-            <button class="btn btn--ghost btn--sm" data-copy type="button">Скопировать</button>
-            <button class="btn btn--danger btn--sm" data-cancel type="button">Отменить подключение</button>
-          </div>
-          <div class="share-qr-wrap" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:10px">
-            <div class="share-qrbox" style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:8px"></div>
-            <div>
-              <div class="share-state hint" style="font-size:.9rem">Получаем QR-код…</div>
-              <div class="hint" style="margin-top:6px;max-width:340px">
-                Наведите камеру (Настройки → Устройства → Подключить), или перешлите
-                ссылку владельцу телефона — у него 30 минут; 2FA-пароль он введёт у себя.
-              </div>
-            </div>
-          </div>`;
-        panel.querySelector("[data-copy]").addEventListener("click", async () => {
-          try { await navigator.clipboard.writeText(url); showToast("Ссылка скопирована"); }
-          catch { panel.querySelector(".share-url").select(); }
-        });
-        panel.querySelector("[data-cancel]").addEventListener("click", async () => {
-          stopSharePoll();
-          try {
-            await api(`/admin/api/lines/${lineId}/connect/${channel}/cancel`, { method: "POST" });
-          } catch (e) { showToast("Не получилось: " + e.message); }
-          panel.hidden = true;
-        });
-        const qrbox = panel.querySelector(".share-qrbox");
-        const state = panel.querySelector(".share-state");
-        const setState = (text, ok) => {
-          state.textContent = text;
-          state.style.color = ok === true ? "var(--ok-fg, #1a7f37)"
-            : ok === false ? "var(--err-fg, #b42318)" : "";
-        };
-        sharePoll = setInterval(async () => {
-          if (!panel.isConnected) { stopSharePoll(); return; }
-          try {
-            const res = await fetch(r.share_url + "/status", { credentials: "same-origin" });
-            if (res.status === 404) {
-              stopSharePoll();
-              setState("Ссылка погашена/истекла — выдайте новую.", false);
-              return;
-            }
-            const st = await res.json();
-            if (st.status === "waiting" && st.qr_link) {
-              if (st.qr_link !== sharePollLink) {
-                sharePollLink = st.qr_link;
-                qrbox.innerHTML = "";
-                new QRCode(qrbox, { text: st.qr_link, width: 180, height: 180 });
-              }
-              setState("Ожидание сканирования…");
-            } else if (st.status === "waiting") {
-              setState("Получаем QR-код…");
-            } else if (st.status === "password_required") {
-              setState("Ждём 2FA-пароль (вводится на странице ссылки)…");
-            } else if (st.status === "authorized") {
-              stopSharePoll();
-              qrbox.innerHTML = "";
-              setState("Подключено! Активация ~20 секунд.", true);
-              setTimeout(loadSupervisor, 2500);
-            } else if (st.status === "expired") {
-              stopSharePoll();
-              setState("QR истёк — выдайте ссылку заново.", false);
-            } else if (st.status === "error") {
-              stopSharePoll();
-              setState(st.error || "Ошибка входа", false);
-            }
-          } catch { /* сетевой блип — следующий тик поправит */ }
-        }, 2000);
-      } catch (e) {
-        panel.textContent = "ошибка: " + e.message;
-      }
-    }
-
-    for (const [id, channel] of [["add-line-tg", "tg"], ["add-line-max", "max"]]) {
-      document.getElementById(id).addEventListener("click", async () => {
+    // ---- делегирование: один слушатель на список, строки перерисовываются ----
+    document.getElementById("lines-list").addEventListener("click", async (e) => {
+      const add = e.target.closest("[data-add-line]");
+      if (add) {
+        const sel = document.querySelector('select[data-line="' + add.dataset.addLine + '"]');
+        if (!sel || !sel.value) return;
         try {
-          await api("/admin/api/lines", {
+          await api("/admin/api/lines/" + add.dataset.addLine + "/members", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ messenger: channel }),
+            body: JSON.stringify({ manager_id: Number(sel.value) }),
           });
-        } catch (e) { showToast("Не получилось: " + e.message); }
+        } catch (err) { showToast("Не получилось: " + err.message); }
+        refreshLineRow(Number(add.dataset.addLine));
+        return;
+      }
+      const roleBtn = e.target.closest(".chip-role[data-line]");
+      if (roleBtn) {
+        try {
+          await api("/admin/api/lines/" + roleBtn.dataset.line + "/members/" + roleBtn.dataset.manager, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ role: roleBtn.dataset.role }),
+          });
+        } catch (err) { showToast("Не получилось: " + err.message); }
+        refreshLineRow(Number(roleBtn.dataset.line));
+        return;
+      }
+      const rem = e.target.closest(".chip-x[data-line]");
+      if (rem) {
+        try {
+          await api("/admin/api/lines/" + rem.dataset.line + "/members/" + rem.dataset.manager,
+            { method: "DELETE" });
+        } catch (err) { showToast("Не получилось: " + err.message); }
+        refreshLineRow(Number(rem.dataset.line));
+        return;
+      }
+      const share = e.target.closest("[data-share]");
+      if (share) {
+        wzOpen(Number(share.dataset.share), share.dataset.channel);
+        return;
+      }
+      const del = e.target.closest("[data-del-line]");
+      if (del) {
+        // Inline-подтверждение вместо нативного confirm(): первый клик
+        // «взводит» кнопку, повторный в течение 4 с — удаляет.
+        if (!del.classList.contains("is-confirming")) {
+          del.classList.add("is-confirming");
+          del.dataset.label = del.innerHTML;
+          del.innerHTML = "Точно удалить?";
+          setTimeout(() => {
+            if (del.isConnected && del.classList.contains("is-confirming")) {
+              del.classList.remove("is-confirming");
+              del.innerHTML = del.dataset.label;
+            }
+          }, 4000);
+          return;
+        }
+        try {
+          await api("/admin/api/lines/" + del.dataset.delLine, { method: "DELETE" });
+        } catch (err) { showToast("Не получилось: " + err.message); }
         loadSupervisor();
-      });
-    }
+      }
+    });
+
+    document.getElementById("managers-list").addEventListener("click", async (e) => {
+      const unlink = e.target.closest("[data-unlink]");
+      if (unlink) {
+        unlink.disabled = true;
+        try { await api("/admin/api/accounts/" + unlink.dataset.unlink + "/unlink", { method: "POST" }); }
+        catch (err) { showToast("Не получилось отключить: " + err.message); }
+        loadSupervisor();
+        return;
+      }
+      const btn = e.target.closest("[data-patch]");
+      if (!btn) return;
+      const body = {};
+      body[btn.dataset.field] = btn.dataset.field === "role"
+        ? btn.dataset.value
+        : btn.dataset.value === "true";
+      try {
+        await api("/admin/api/managers/" + btn.dataset.patch, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+      } catch (err) { showToast("Не получилось: " + err.message); }
+      loadSupervisor(); // роли менеджеров влияют и на селекты участников
+    });
+
+    document.getElementById("connect-line").addEventListener("click", () => wzOpen());
 
     document.getElementById("sync-b24").addEventListener("click", async () => {
       const btn = document.getElementById("sync-b24");
@@ -618,7 +696,7 @@
         if (r.created) parts.push("новых: " + r.created);
         if (r.updated) parts.push("обновлено: " + r.updated);
         if (r.deactivated) parts.push("деактивировано: " + r.deactivated);
-        state.textContent = parts.length ? parts.join(", ") : "изменений нет";
+        state.textContent = parts.length ? "Готово — " + parts.join(", ") : "изменений нет";
         if (r.warnings && r.warnings.length) showToast(r.warnings.join("; "));
         loadSupervisor();
       } catch (e) {
@@ -627,6 +705,194 @@
       }
       btn.disabled = false;
     });
+
+    // ---- Визард подключения ----
+    const wzEl = document.getElementById("wz");
+    const wzBody = document.getElementById("wz-body");
+    const wzState = {
+      accountId: null, channel: null, isNew: false,
+      shareUrl: null, qrLink: null, poll: null, authorized: false,
+    };
+
+    function wzStopPoll() {
+      if (wzState.poll) { clearInterval(wzState.poll); wzState.poll = null; }
+    }
+
+    /** Закрытие визарда: гасим логин-команду; болванку, созданную визардом
+     *  и не подключённую, — удаляем (мусорных линий не остаётся). */
+    async function wzCleanup() {
+      wzStopPoll();
+      if (wzState.shareUrl && !wzState.authorized) {
+        try {
+          await api("/admin/api/lines/" + wzState.accountId + "/connect/" + wzState.channel + "/cancel",
+            { method: "POST" });
+        } catch { /* логин-команды уже нет — ок */ }
+      }
+      if (wzState.isNew && !wzState.authorized) {
+        try { await api("/admin/api/lines/" + wzState.accountId, { method: "DELETE" }); }
+        catch { /* болванка уже удалена — ок */ }
+      }
+      wzState.accountId = null; wzState.channel = null;
+      wzState.isNew = false; wzState.shareUrl = null;
+      wzState.qrLink = null; wzState.authorized = false;
+      loadSupervisor();
+    }
+
+    function wzClose() {
+      if (typeof wzEl.close === "function") wzEl.close(); else wzEl.open = false;
+    }
+    wzEl.addEventListener("close", wzCleanup);
+    wzEl.addEventListener("cancel", (e) => { e.preventDefault(); wzClose(); });
+
+    function wzStepChannel() {
+      wzBody.innerHTML =
+        "<h3>Подключить номер</h3>" +
+        '<p class="wz-sub">Выберите мессенджер — номер подключит владелец телефона' +
+        " по ссылке с QR-кодом, у него есть 30 минут.</p>" +
+        '<div class="wz-channels">' +
+          '<button class="wz-channel tg" data-channel="tg" type="button">' + ic("send") + "Telegram</button>" +
+          '<button class="wz-channel max" data-channel="max" type="button">' + ic("message") + "MAX</button>" +
+        "</div>";
+      wzBody.querySelectorAll(".wz-channel").forEach((b) => {
+        b.addEventListener("click", async () => {
+          b.disabled = true;
+          try {
+            const r = await api("/admin/api/lines", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ messenger: b.dataset.channel }),
+            });
+            wzState.accountId = r.id;
+            wzState.channel = b.dataset.channel;
+            wzState.isNew = true;
+            wzStepConnect();
+          } catch (e) {
+            b.disabled = false;
+            showToast("Не получилось: " + e.message);
+          }
+        });
+      });
+    }
+
+    async function wzStepConnect() {
+      const CHANNEL = { tg: "Telegram", max: "MAX" };
+      wzBody.innerHTML = "<h3>Подключение — " + CHANNEL[wzState.channel] + "</h3>" +
+        '<p class="wz-sub">Получаем ссылку подключения…</p>';
+      let r;
+      try {
+        r = await api("/admin/api/lines/" + wzState.accountId + "/connect/" + wzState.channel,
+          { method: "POST" });
+      } catch (e) {
+        showToast("Не получилось: " + e.message);
+        wzClose();
+        return;
+      }
+      wzState.shareUrl = location.origin + r.share_url;
+      const state = function (text, cls) {
+        const el = wzBody.querySelector(".wz-state");
+        if (el) { el.textContent = text || ""; el.className = "wz-state" + (cls ? " " + cls : ""); }
+      };
+      wzBody.innerHTML =
+        "<h3>" + ic("qr") + "Подключение — " + CHANNEL[wzState.channel] + "</h3>" +
+        '<p class="wz-sub">Перешлите ссылку владельцу телефона или покажите QR,' +
+        " когда он рядом. 2FA-пароль владелец введёт на странице ссылки.</p>" +
+        '<div class="wz-urlrow">' +
+          '<input class="wz-url" readonly value="' + wzState.shareUrl + '" aria-label="Ссылка подключения"' +
+          ' onclick="this.select()">' +
+          '<button class="btn btn--ghost btn--sm" data-copy type="button">' + ic("copy") + "Скопировать</button>" +
+        "</div>" +
+        '<div class="wz-qrwrap">' +
+          '<div class="wz-qrbox"></div>' +
+          '<div><div class="wz-state">Получаем QR-код…</div>' +
+          '<p class="wz-note">Наведите камеру телефона (Настройки → Устройства →' +
+          " Подключить по QR-коду).</p></div>" +
+        "</div>" +
+        '<div class="wz-foot">' +
+          '<button class="btn btn--danger btn--sm" data-wz-cancel type="button">Отменить подключение</button>' +
+        "</div>";
+      wzBody.querySelector("[data-copy]").addEventListener("click", async () => {
+        try { await navigator.clipboard.writeText(wzState.shareUrl); showToast("Ссылка скопирована"); }
+        catch { wzBody.querySelector(".wz-url").select(); }
+      });
+      wzBody.querySelector("[data-wz-cancel]").addEventListener("click", wzClose);
+      const qrbox = wzBody.querySelector(".wz-qrbox");
+      wzState.poll = setInterval(async () => {
+        if (!wzEl.open) { wzStopPoll(); return; }
+        try {
+          const res = await fetch(r.share_url + "/status", { credentials: "same-origin" });
+          if (res.status === 404) {
+            wzStopPoll();
+            state("Ссылка погашена или истекла — начните заново.", "err");
+            return;
+          }
+          const st = await res.json();
+          if (st.status === "waiting" && st.qr_link) {
+            if (st.qr_link !== wzState.qrLink) {
+              wzState.qrLink = st.qr_link;
+              qrbox.innerHTML = "";
+              new QRCode(qrbox, { text: st.qr_link, width: 180, height: 180 });
+            }
+            state("Ожидание сканирования…");
+          } else if (st.status === "waiting") {
+            state("Получаем QR-код…");
+          } else if (st.status === "password_required") {
+            state("Ждём 2FA-пароль (владелец вводит на странице ссылки)…");
+          } else if (st.status === "authorized") {
+            wzState.authorized = true;
+            wzStopPoll();
+            wzStepSuccess();
+          } else if (st.status === "expired") {
+            wzStopPoll();
+            state("QR истёк — выдайте ссылку заново.", "err");
+          } else if (st.status === "error") {
+            wzStopPoll();
+            state(st.error || "Ошибка входа", "err");
+          }
+        } catch { /* сетевой блип — следующий тик поправит */ }
+      }, 2000);
+    }
+
+    function wzStepSuccess() {
+      wzBody.innerHTML =
+        '<div class="wz-success">' +
+          ic("check") +
+          "<h3>Номер подключён</h3>" +
+          '<p class="wz-sub">Активация займёт ~20 секунд. Если номер общий —' +
+          " добавьте участников в списке линий.</p>" +
+        "</div>" +
+        '<div class="wz-foot">' +
+          '<button class="btn btn--ghost" data-wz-done type="button">Готово</button>' +
+          '<button class="btn" data-wz-members type="button">' + ic("plus") + "Добавить участников</button>" +
+        "</div>";
+      wzBody.querySelector("[data-wz-done]").addEventListener("click", wzClose);
+      wzBody.querySelector("[data-wz-members]").addEventListener("click", () => {
+        const id = wzState.accountId;
+        wzClose();
+        // Подсветим свежеподключённую строку — селект участников уже в ней.
+        setTimeout(() => {
+          const row = document.querySelector('[data-line-row="' + id + '"]');
+          if (row) {
+            row.scrollIntoView({ block: "center", behavior: "smooth" });
+            row.classList.add("flash");
+            setTimeout(() => row.classList.remove("flash"), 2500);
+          }
+        }, 400);
+      });
+    }
+
+    /** existingId задан — ре-подключение существующей линии (болванку не трогаем). */
+    function wzOpen(existingId, channel) {
+      if (wzEl.open) wzClose();
+      if (existingId) {
+        wzState.accountId = existingId;
+        wzState.channel = channel;
+        wzState.isNew = false;
+        wzStepConnect();
+      } else {
+        wzStepChannel();
+      }
+      if (typeof wzEl.showModal === "function") wzEl.showModal(); else wzEl.setAttribute("open", "");
+    }
 
     loadSupervisor();
     loadSettings();

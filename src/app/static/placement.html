@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ЧатМост — Чат</title>
   <link rel="icon" href="/static/brand/favicon.ico" sizes="48x48">
+  <!-- Токены — единый источник цвета/шкал для всех поверхностей. -->
+  <link rel="stylesheet" href="/static/tokens.css">
   <link rel="stylesheet" href="/static/style.css">
   <!-- Alpine.js (~44KB) для реактивности без сборщика.
        Vendored локально (alpinejs v3.14.9, официальный минифицированный dist):
@@ -14,14 +16,14 @@
 </head>
 <body>
   <div id="chat" x-data="chatApp()" x-init="init()">
-    <!-- Шапка: информация о клиенте/диалоге -->
+    <!-- Шапка: информация о клиенте/диалоге. Сырой external_chat_id наружу
+         не показываем — внутренняя кухня системы, менеджеру она ничего не даёт. -->
     <header class="chat-header">
       <div class="contact" x-show="dialog">
         <span class="contact-name">
           <span class="channel-badge" :class="dialog?.messenger" x-text="channelLabel(dialog?.messenger)"></span>
           <span x-text="dialog?.contact_name || 'Неизвестный'"></span>
         </span>
-        <span class="contact-meta" x-text="dialog?.external_chat_id"></span>
       </div>
       <div class="status" x-show="!dialog && !loading">
         <span>Нет активного диалога для этой сделки</span>
@@ -36,7 +38,9 @@
       @dragover.prevent @drop.prevent="onDrop($event)">
       <button class="load-older" type="button"
         x-show="messages.length > 0 && hasMore"
-        @click="loadOlder()">↑ Загрузить ещё</button>
+        @click="loadOlder()">
+        <svg class="i" aria-hidden="true"><use href="/static/icons.svg#arrow-up"/></svg>
+        Загрузить ещё</button>
       <template x-for="msg in messages" :key="msg.id">
         <div class="bubble" :class="msg.direction === 'out' ? 'bubble-out' : 'bubble-in'">
           <template x-for="att in (msg.attachments || [])" :key="att.id">
@@ -58,9 +62,10 @@
             </div>
           </template>
           <p class="bubble-text" x-show="msg.text" x-text="msg.text"></p>
-          <span class="bubble-meta">
+          <span class="bubble-meta tnum">
             <span x-text="formatTime(msg.created_at)"></span>
-            <span class="status-badge" x-text="statusLabel(msg.direction, msg.status)"></span>
+            <!-- Иконки статусов — наши строки (не юзер-данные), x-html безопасен -->
+            <span class="status-badge" x-html="statusLabel(msg.direction, msg.status)"></span>
           </span>
         </div>
       </template>
@@ -72,7 +77,9 @@
     <!-- Панель шаблонов (быстрые ответы) -->
     <div class="templates" x-show="canWrite && templates.length > 0" x-data="{ open: false }">
       <button class="templates-toggle" @click="open = !open" type="button">
-        <span x-text="open ? '▾' : '▸'"></span> Шаблоны (<span x-text="templates.length"></span>)
+        <svg class="i tgl" :class="{ 'tgl--open': open }" aria-hidden="true">
+          <use href="/static/icons.svg#chevron-down"/></svg>
+        Шаблоны (<span x-text="templates.length"></span>)
       </button>
       <ul class="templates-list" x-show="open">
         <template x-for="tpl in templates" :key="tpl.id">
@@ -89,7 +96,8 @@
     </div>
     <footer class="composer" x-show="canWrite">
       <button class="attach-btn" type="button" x-show="canAttach" @click="pickFile()"
-        :disabled="!dialog || sending" title="Прикрепить файл" aria-label="Прикрепить файл">📎</button>
+        :disabled="!dialog || sending" title="Прикрепить файл" aria-label="Прикрепить файл">
+        <svg class="i i--18" aria-hidden="true"><use href="/static/icons.svg#paperclip"/></svg></button>
       <input type="file" x-ref="fileInput" hidden @change="onFilePicked($event)"
         accept="image/*,video/*,audio/*,.pdf,.zip,.doc,.docx,.xls,.xlsx,.ppt,.pptx">
       <textarea
@@ -99,15 +107,18 @@
         placeholder="Напишите сообщение… (Enter — отправить, Shift+Enter — перенос строки)"
         rows="2"
         :disabled="!dialog || sending"></textarea>
-      <button class="send-btn" @click="send()"
-        :disabled="!dialog || (!draft.trim() && !pendingFile) || sending" type="button">
-        <span x-text="sending ? '…' : 'Отправить'"></span>
+      <button class="send-btn" @click="send()" :class="{busy: sending}"
+        :disabled="!dialog || (!draft.trim() && !pendingFile) || sending" type="button"
+        title="Отправить" aria-label="Отправить">
+        <svg class="i i--18" aria-hidden="true"><use href="/static/icons.svg#send"/></svg>
       </button>
       <div class="file-chip" x-show="pendingFile">
         <span class="file-chip-name" x-text="pendingFile ? pendingFile.name : ''"></span>
-        <span class="file-chip-size" x-text="pendingFile ? formatSize(pendingFile.size) : ''"></span>
+        <span class="file-chip-size tnum" x-text="pendingFile ? formatSize(pendingFile.size) : ''"></span>
         <button class="file-chip-x" type="button" @click="clearFile()" title="Убрать файл"
-          aria-label="Убрать файл">✕</button>
+          aria-label="Убрать файл">
+          <svg class="i" aria-hidden="true"><use href="/static/icons.svg#x"/></svg>
+        </button>
       </div>
     </footer>
 

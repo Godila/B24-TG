@@ -1,0 +1,58 @@
+/* ЧатМост — дизайн-токены: единый источник цвета, шкал и теней для всех
+   поверхностей (панель, чаты, виджет сделки, connect, оболочка меню).
+   Подключается ПЕРВОЙ строкой перед style.css / inbox.css и инлайн-стилями.
+   Правило: новое значение появляется здесь, а не hex-ом в правиле. */
+
+:root {
+  /* Акцент — единственный синий продукта (#2f6fed, WCAG AA на белом). */
+  --accent: #2f6fed;
+  --accent-hover: #1f57c7;
+  --accent-soft: #e8edf7;
+
+  /* Канвас, поверхности, линии. */
+  --bg: #f2f4f8;
+  --surface: #ffffff;
+  --border: #dfe3ea;
+
+  /* Чернила. */
+  --ink: #1c2733;
+  --muted: #66707d;
+
+  /* Каналы: пары фг/тинт для бейджей и иконок канала. */
+  --tg: #1c6fb3;  --tg-bg: #e5f1fb;
+  --max: #6a3db8; --max-bg: #ece4fb;
+
+  /* Статусы: пары фг/бг. */
+  --ok: #1d7a35;   --ok-bg: #e6f6e6;
+  --warn: #8a6d1a; --warn-bg: #fdf3d8;
+  --err: #b3352f;  --err-bg: #fde8e8;
+  --wait: #2a5fa8; --wait-bg: #eef4fd;
+
+  /* Шкала радиусов: поле / группа / карточка. */
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+
+  /* Шкала кеглей. */
+  --fs-2xs: 11px;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-md: 14px;
+  --fs-lg: 17px;
+  --fs-xl: 22px;
+
+  /* Единая тень «карточка над канвасом». */
+  --shadow-1: 0 1px 3px rgba(20, 30, 50, 0.07);
+}
+
+/* Иконки спрайта icons.svg (24×24, stroke=currentColor). */
+svg.i {
+  width: 16px; height: 16px; flex: none;
+  fill: none; stroke: currentColor;
+  stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round;
+}
+svg.i--18 { width: 18px; height: 18px; }
+svg.i--20 { width: 20px; height: 20px; }
+
+/* Табличные цифры: таймстампы и счётчики не «дышат» при поллинге. */
+.tnum { font-variant-numeric: tabular-nums; }
