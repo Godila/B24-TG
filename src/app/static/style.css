@@ -40,7 +40,6 @@ html, body {
 }
 .contact { display: flex; flex-direction: column; }
 .contact-name { font-weight: 600; }
-.contact-meta { font-size: var(--fs-xs); color: var(--meta); font-variant-numeric: tabular-nums; }
 
 /* Бейдж канала диалога (TG / MAX) в шапке виджета. */
 .channel-badge {

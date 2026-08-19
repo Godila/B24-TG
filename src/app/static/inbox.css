@@ -128,8 +128,6 @@
   font-variant-numeric: tabular-nums;
 }
 .wait-age.hot { color: var(--err); font-weight: 600; }
-.wait-age + .badge-unanswered,
-.wait-age + .badge-unread { margin-left: 0; }
 .owner-chip {
   font-size: var(--fs-2xs);
   color: var(--meta);

@@ -19,11 +19,11 @@
 
     /* A11y-пол: видимый фокус с клавиатуры (единый для всех интерактивных) */
     .btn:focus-visible, .segment button:focus-visible, .chip-x:focus-visible,
-    .chip-role:focus-visible, .line-add:focus-visible, .toolbar input:focus-visible,
-    .pwinput:focus-visible, dialog .btn:focus-visible, .wz-channel:focus-visible {
+    .chip-role:focus-visible, .line-add:focus-visible,
+    dialog .btn:focus-visible, .wz-channel:focus-visible {
       outline: 2px solid var(--accent); outline-offset: 2px;
     }
-    .line-add:focus, .pwinput:focus { border-color: var(--accent); outline: none; }
+    .line-add:focus { border-color: var(--accent); outline: none; }
 
     /* --- шапка бренда --- */
     .brand { display: flex; align-items: center; gap: 14px; margin-bottom: 26px; }
@@ -235,7 +235,6 @@
     .wz-qrwrap { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
     .wz-qrbox { background: #fff; border: 1px solid var(--border); border-radius: var(--r-md); padding: 8px; }
     .wz-state { font-size: var(--fs-sm); min-height: 1.4em; }
-    .wz-state.ok { color: var(--ok); font-weight: 600; }
     .wz-state.err { color: var(--err); font-weight: 600; }
     .wz-note { color: var(--muted); font-size: var(--fs-xs); margin-top: 6px; max-width: 300px; }
     .wz-foot { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
@@ -433,7 +432,7 @@
     function lineRow(ln) {
       const ico = ln.messenger === "tg" ? "send" : "message";
       const isBlank = /-line-/.test(ln.phone || "");
-      const meta = ln.messenger === "tg" ? "Telegram" : "MAX";
+      const meta = CHANNEL[ln.messenger] || ln.messenger.toUpperCase();
       const metaTail = isBlank ? "номер ещё не подключён" : esc(ln.phone);
       const memberIds = new Set(ln.members.map((m) => m.manager_id));
       const options = managersCache
@@ -526,6 +525,7 @@
 
     // Офлайн/заблокированные линии — первыми: это то, что требует внимания.
     const LINE_ORDER = { banned: 0, offline: 1, active: 2 };
+    const CHANNEL = { tg: "Telegram", max: "MAX" };
 
     async function loadManagers() {
       let rows;
@@ -580,15 +580,11 @@
       } catch { /* не supervisor */ }
     }
 
-    let supervisorsZoneShown = false;
     async function loadSupervisor() {
       let me;
       try { me = await api("/admin/api/me"); } catch { return; }
       if (me.role !== "supervisor") return;
-      if (!supervisorsZoneShown) {
-        document.getElementById("supervisor-zone").style.display = "";
-        supervisorsZoneShown = true;
-      }
+      document.getElementById("supervisor-zone").style.display = "";
       await loadManagers();
       await loadLines();
     }
@@ -732,17 +728,19 @@
         try { await api("/admin/api/lines/" + wzState.accountId, { method: "DELETE" }); }
         catch { /* болванка уже удалена — ок */ }
       }
+      const touched = wzState.accountId !== null;
       wzState.accountId = null; wzState.channel = null;
       wzState.isNew = false; wzState.shareUrl = null;
       wzState.qrLink = null; wzState.authorized = false;
-      loadSupervisor();
+      // Закрытие на шаге выбора канала ничего не меняло — списки не трогаем.
+      if (touched) loadSupervisor();
     }
 
     function wzClose() {
-      if (typeof wzEl.close === "function") wzEl.close(); else wzEl.open = false;
+      wzEl.close();
     }
+    // Esc: cancel → закрытие → close-событие → wzCleanup (спека <dialog>).
     wzEl.addEventListener("close", wzCleanup);
-    wzEl.addEventListener("cancel", (e) => { e.preventDefault(); wzClose(); });
 
     function wzStepChannel() {
       wzBody.innerHTML =
@@ -775,7 +773,6 @@
     }
 
     async function wzStepConnect() {
-      const CHANNEL = { tg: "Telegram", max: "MAX" };
       wzBody.innerHTML = "<h3>Подключение — " + CHANNEL[wzState.channel] + "</h3>" +
         '<p class="wz-sub">Получаем ссылку подключения…</p>';
       let r;
@@ -891,9 +888,8 @@
       } else {
         wzStepChannel();
       }
-      if (typeof wzEl.showModal === "function") wzEl.showModal(); else wzEl.setAttribute("open", "");
+      wzEl.showModal();
     }
-
     loadSupervisor();
     loadSettings();
   </script>
