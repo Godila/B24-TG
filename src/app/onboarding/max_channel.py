@@ -30,16 +30,6 @@ class _MaxLoginState:
     task: asyncio.Task | None = None
 
 
-def _profile_dto(account: TgAccount) -> dict:
-    return {
-        "id": account.id,
-        "status": account.status.value,
-        "name": account.display_name,
-        "phone": account.phone,
-        "messenger": Messenger.max.value,
-    }
-
-
 class MaxOnboardingChannel:
     messenger = Messenger.max
 
@@ -49,12 +39,8 @@ class MaxOnboardingChannel:
         self._logins: dict[int, _MaxLoginState] = {}
 
     async def start(self, account: TgAccount, *, force: bool = False) -> dict:
-        if (
-            account is not None
-            and account.status == TgAccountStatus.active
-            and not force
-        ):
-            return {"status": "already_active", "account": _profile_dto(account)}
+        if account.status == TgAccountStatus.active and not force:
+            return {"status": "already_active"}
 
         prev = self._logins.get(account.id)
         if prev is not None and prev.task is not None and not prev.task.done():

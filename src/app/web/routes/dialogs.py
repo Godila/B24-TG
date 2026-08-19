@@ -124,18 +124,18 @@ def _visible_dialogs_cond(manager: Manager):
     )
 
 
-async def _is_line_member(
+async def _line_role(
     session: AsyncSession, dialog: Dialog, manager: Manager
-) -> bool:
+) -> LineRole | None:
+    """Роль менеджера в линии диалога (None — не участник)."""
     if dialog.account_id is None:
-        return False
-    member_id = await session.scalar(
-        select(AccountMember.id).where(
+        return None
+    return await session.scalar(
+        select(AccountMember.role).where(
             AccountMember.account_id == dialog.account_id,
             AccountMember.manager_id == manager.id,
-        ).limit(1)
+        )
     )
-    return member_id is not None
 
 
 async def _load_dialog_accessible(
@@ -156,7 +156,7 @@ async def _load_dialog_accessible(
     if (
         dialog.assigned_user_id != manager.id
         and manager.role != ManagerRole.supervisor
-        and not await _is_line_member(session, dialog, manager)
+        and await _line_role(session, dialog, manager) is None
     ):
         raise HTTPException(status_code=404, detail="Диалог не найден")
     return dialog
@@ -248,21 +248,6 @@ async def list_messages(
     stmt = stmt.limit(limit)
     result = await session.execute(stmt)
     return [_message_dto(m) for m in result.scalars().all()]
-
-
-async def _line_role(
-    session: AsyncSession, dialog: Dialog, manager: Manager
-) -> LineRole | None:
-    """Роль менеджера в линии диалога (None — не участник)."""
-    if dialog.account_id is None:
-        return None
-    role = await session.scalar(
-        select(AccountMember.role).where(
-            AccountMember.account_id == dialog.account_id,
-            AccountMember.manager_id == manager.id,
-        )
-    )
-    return role
 
 
 async def _outbound_context(

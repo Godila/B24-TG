@@ -66,6 +66,23 @@ async def fetch_b24_users(client: Bitrix24Client, auth_token: str) -> list[B24Us
     return users
 
 
+async def managers_with_active_accounts(session: AsyncSession) -> set[int]:
+    """manager_id с активными аккаунтами (legacy-привязка владельца; состав
+    линий учитывается контракт-релизом — см. ponytail-маркер в tg_account)."""
+    return set(
+        (
+            await session.execute(
+                select(TgAccount.manager_id).where(
+                    TgAccount.manager_id.is_not(None),
+                    TgAccount.status == TgAccountStatus.active,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
 async def upsert_managers_from_b24(session_factory, users: list[B24User]) -> dict:
     """Сверка справочника менеджеров с сотрудниками B24.
 
@@ -82,21 +99,7 @@ async def upsert_managers_from_b24(session_factory, users: list[B24User]) -> dic
         )
         by_b24 = {m.b24_user_id: m for m in managers}
         b24_ids = {u.b24_user_id for u in users}
-
-        async def _has_active_account(manager: Manager) -> bool:
-            accs = (
-                (
-                    await session.execute(
-                        select(TgAccount.id).where(
-                            TgAccount.manager_id == manager.id,
-                            TgAccount.status == TgAccountStatus.active,
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            return bool(accs)
+        with_active_account = await managers_with_active_accounts(session)
 
         for u in users:
             m = by_b24.get(u.b24_user_id)
@@ -120,7 +123,7 @@ async def upsert_managers_from_b24(session_factory, users: list[B24User]) -> dic
                         f"{m.name} (#{m.b24_user_id}): деактивирован в Битрикс24, "
                         "но он последний активный администратор"
                     )
-                elif await _has_active_account(m):
+                elif m.id in with_active_account:
                     warnings.append(
                         f"{m.name} (#{m.b24_user_id}): деактивирован в Битрикс24, "
                         "но за ним активные аккаунты — сначала отключите их"
@@ -139,7 +142,7 @@ async def upsert_managers_from_b24(session_factory, users: list[B24User]) -> dic
                     "но он последний активный администратор"
                 )
                 continue
-            if await _has_active_account(m):
+            if m.id in with_active_account:
                 warnings.append(
                     f"{m.name} (#{m.b24_user_id}) исчез из Битрикс24, "
                     "но за ним активные аккаунты — сначала отключите их"

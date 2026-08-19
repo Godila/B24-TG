@@ -7,16 +7,11 @@
 """
 
 import enum
-from typing import TYPE_CHECKING
 
 from sqlalchemy import Enum, ForeignKey, Integer, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
-
-if TYPE_CHECKING:
-    from app.models.manager import Manager
-    from app.models.tg_account import TgAccount
 
 
 class LineRole(str, enum.Enum):
@@ -41,6 +36,3 @@ class AccountMember(Base, TimestampMixin):
     role: Mapped[LineRole] = mapped_column(
         Enum(LineRole), default=LineRole.participant, nullable=False
     )
-
-    account: Mapped["TgAccount"] = relationship(back_populates="members")
-    manager: Mapped["Manager"] = relationship()

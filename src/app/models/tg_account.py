@@ -8,17 +8,12 @@ MAX-строки — ``token``/``device_id`` (сессия web-клиента MA
 """
 
 import enum
-from typing import TYPE_CHECKING
 
 from sqlalchemy import BigInteger, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
 from app.models.dialog import Messenger
-
-if TYPE_CHECKING:
-    from app.models.account_member import AccountMember
-    from app.models.manager import Manager
 
 
 class TgAccountStatus(str, enum.Enum):
@@ -62,10 +57,3 @@ class TgAccount(Base, TimestampMixin):
         Integer, ForeignKey("managers.id"), nullable=True
     )
 
-    manager: Mapped["Manager"] = relationship(back_populates="tg_accounts")
-    # Состав линии (M:N): личный номер — один участник, общий — несколько.
-    # manager_id — legacy-владелец, дублирует единственного участника до
-    # уборки self-service онбординга (Этап 6 из плана линий).
-    members: Mapped[list["AccountMember"]] = relationship(
-        back_populates="account", cascade="all, delete-orphan"
-    )

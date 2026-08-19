@@ -1,15 +1,11 @@
 """Модель менеджера (пользователь Bitrix24, ведущий диалоги)."""
 
 import enum
-from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, Enum, Integer, String
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
-
-if TYPE_CHECKING:
-    from app.models.tg_account import TgAccount
 
 
 class ManagerRole(str, enum.Enum):
@@ -33,7 +29,3 @@ class Manager(Base, TimestampMixin):
     #: Политика на НОВЫЕ отправки; уже поставленные в outbox отправляются
     #: (жёсткий транспортный стоп — деактивация аккаунта).
     is_readonly: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-
-    tg_accounts: Mapped[list["TgAccount"]] = relationship(
-        back_populates="manager"
-    )

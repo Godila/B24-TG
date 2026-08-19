@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
 from app.models.dialog import Messenger
@@ -39,16 +39,9 @@ class ConnectToken(Base, TimestampMixin):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[int] = mapped_column(Integer, ForeignKey("managers.id"), nullable=False)
 
-    account: Mapped["TgAccount"] = relationship()
-
 
 def _hash_token(raw: str) -> str:
     return hashlib.sha256(raw.encode("ascii")).hexdigest()
-
-
-def _aware(dt: datetime) -> datetime:
-    """SQLite возвращает naive-DateTime даже для timezone=True-колонок."""
-    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
 async def issue_connect_token(
@@ -97,6 +90,7 @@ async def load_active_connect_token(
     ).scalar_one_or_none()
     if row is None or row.used_at or row.revoked_at:
         return None
-    if datetime.now(UTC) >= _aware(row.expires_at):
+    # tz-strip с обеих сторон: SQLite возвращает naive даже для tz-колонок.
+    if row.expires_at.replace(tzinfo=None) <= datetime.now(UTC).replace(tzinfo=None):
         return None
     return row

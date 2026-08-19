@@ -45,16 +45,6 @@ _STATUS_TO_VIEW: dict[LoginCommandStatus, OnboardingStatus] = {
 }
 
 
-def _profile_dto(account: TgAccount) -> dict:
-    return {
-        "id": account.id,
-        "status": account.status.value,
-        "name": account.display_name,
-        "phone": account.phone,
-        "messenger": Messenger.tg.value,
-    }
-
-
 class TgOnboardingChannel:
     messenger = Messenger.tg
 
@@ -62,12 +52,8 @@ class TgOnboardingChannel:
         self._session_factory = session_factory or async_session
 
     async def start(self, account: TgAccount, *, force: bool = False) -> dict:
-        if (
-            account is not None
-            and account.status == TgAccountStatus.active
-            and not force
-        ):
-            return {"status": "already_active", "account": _profile_dto(account)}
+        if account.status == TgAccountStatus.active and not force:
+            return {"status": "already_active"}
 
         deadline = datetime.now(UTC) + timedelta(
             seconds=get_settings().tg_onboarding_deadline_sec
