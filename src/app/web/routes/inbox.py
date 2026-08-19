@@ -17,10 +17,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.db import get_session
 from app.models import (
+    AccountMember,
     Contact,
     Dialog,
     DialogRead,
     DialogStatus,
+    LineRole,
     Manager,
     ManagerRole,
     Message,
@@ -76,6 +78,20 @@ async def list_inbox_dialogs(
     (group-by + CASE, без DISTINCT ON — прод PostgreSQL, тесты aiosqlite).
     """
     is_supervisor = manager.role == ManagerRole.supervisor
+
+    # Линии, где менеджер — участник с правом записи (для can_write).
+    participant_accounts = set(
+        (
+            await session.execute(
+                select(AccountMember.account_id).where(
+                    AccountMember.manager_id == manager.id,
+                    AccountMember.role == LineRole.participant,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
 
     # Скоуп видимости + фильтры — общие для всех запросов ниже.
     conds = [Dialog.status == DialogStatus.active]
@@ -258,6 +274,10 @@ async def list_inbox_dialogs(
                 assignee.name if is_supervisor and assignee is not None else None
             ),
             is_mine=dialog.assigned_user_id == manager.id,
+            can_write=(
+                dialog.assigned_user_id == manager.id
+                or dialog.account_id in participant_accounts
+            ),
         )
 
     return InboxDialogsPageOut(

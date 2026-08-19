@@ -120,12 +120,15 @@ async def test_handle_skips_duplicate_message():
     session = AsyncMock()
     session.__aenter__.return_value = session
     # execute вызовы по порядку:
-    # 1) Contact — None (нет → создаст), 2) Dialog — None (нет → создаст),
-    # 3) Message — найден (дубль → пропустим).
+    # 1) Contact — None (нет → создаст), 2) line_assignee — участники линии,
+    # 3) Dialog — None (нет → создаст), 4) Message — найден (дубль → скип).
     none_result = MagicMock(scalar_one_or_none=lambda: None)
+    members_result = MagicMock(
+        scalars=MagicMock(return_value=MagicMock(all=lambda: [3]))
+    )
     found_msg = MagicMock()
     found_result = MagicMock(scalar_one_or_none=lambda: found_msg)
-    session.execute.side_effect = [none_result, none_result, found_result]
+    session.execute.side_effect = [none_result, members_result, none_result, found_result]
 
     handler = IncomingHandler(
         crm_sync_enqueue=enqueue,

@@ -3,10 +3,9 @@
 Модуль держит ``run_bridge()`` чистым — вся работа со стартовым потоком
 аккаунтов вынесена сюда:
 
-* ``load_active_accounts`` — запрос активных аккаунтов (всех каналов) с
-  eager-load менеджера (критично: IncomingHandler читает
-  ``account.manager.b24_user_id`` уже после закрытия стартовой сессии, без
-  eager-load — DetachedInstanceError);
+* ``load_active_accounts`` — запрос активных аккаунтов (всех каналов);
+  маршрутизация больше не читает ``account.manager`` (линии: ответственным
+  управляет состав ``account_members``), eager-load не нужен;
 * ``register_accounts`` — подключение каждого аккаунта через SessionManager,
   устойчивое к одиночным сбоям (один упал — остальные регистрируются);
 * ``forward_incoming`` — бесконечный цикл чтения ``incoming_stream`` провайдера;
@@ -22,7 +21,6 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from sqlalchemy.orm import selectinload
 
 from app.models import TgAccount, TgAccountStatus
 
@@ -38,20 +36,14 @@ logger = logging.getLogger(__name__)
 async def load_active_accounts(
     session_factory: async_sessionmaker[AsyncSession] | Callable[[], AsyncSession],
 ) -> list[TgAccount]:
-    """Загрузить активные аккаунты (всех каналов) с eager-load менеджера.
+    """Загрузить активные аккаунты (всех каналов).
 
-    Возвращает список (возможно пустой). Менеджер загружается сразу
-    (``selectinload``), чтобы после закрытия стартовой сессии обращаться к
-    ``account.manager.b24_user_id`` без DetachedInstanceError.
+    Возвращает список (возможно пустой).
     """
     async with session_factory() as s:
-        stmt = (
-            select(TgAccount)
-            .where(TgAccount.status == TgAccountStatus.active)
-            .options(selectinload(TgAccount.manager))
-        )
+        stmt = select(TgAccount).where(TgAccount.status == TgAccountStatus.active)
         result = await s.execute(stmt)
-        # list() материализует выборку до выхода из сессии (eager-load в flight).
+        # list() материализует выборку до выхода из сессии.
         return list(result.scalars().all())
 
 

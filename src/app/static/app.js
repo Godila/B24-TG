@@ -66,6 +66,12 @@ function chatApp() {
       }
     },
 
+    /** Право записи в открытый диалог: владелец/участник линии и не read-only
+     *  (наблюдатель линии и supervisor-надзор пишут только прочитанное). */
+    get canWrite() {
+      return !!this.dialog && this.dialog.can_write !== false && !this.readonly;
+    },
+
     async loadDialogs() {
       const url = this.dealId
         ? `/api/dialogs?deal_id=${encodeURIComponent(this.dealId)}`
@@ -198,7 +204,7 @@ function chatApp() {
     async send() {
       if (this.pendingFile) return this.sendFile();
       const text = this.draft.trim();
-      if (!text || !this.dialog || this.sending || this.readonly) return;
+      if (!text || !this.dialog || this.sending || !this.canWrite) return;
       this.sending = true;
       this.error = "";
       // Оптимистичный рендер: показываем сообщение сразу как pending.
@@ -246,9 +252,9 @@ function chatApp() {
 
     // --- Медиа-вложения (синхронизированная копия в inbox.js) ---
 
-    /** Скрепка доступна: свой диалог, не read-only (TG и MAX умеют файлы). */
+    /** Скрепка доступна: право записи в диалог, не read-only (TG и MAX умеют файлы). */
     get canAttach() {
-      return !!this.dialog && !this.readonly;
+      return !!this.dialog && this.dialog.can_write !== false && !this.readonly;
     },
 
     pickFile() {

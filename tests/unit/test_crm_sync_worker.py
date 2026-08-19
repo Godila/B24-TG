@@ -37,6 +37,7 @@ def _make_data(**kw) -> CrmSyncData:
         "crm_deal_id": 100,
         "crm_entity_type": "deal",
         "assigned_b24_user_id": 15,
+        "notify_user_ids": [15],
         "messenger": Messenger.tg,
     }
     defaults.update(kw)
@@ -188,16 +189,22 @@ async def test_inbound_message_not_found_is_terminal():
 
 
 @pytest.mark.asyncio
-async def test_inbound_no_assigned_manager_is_terminal():
-    repo = _make_repo([_make_item()], _make_data(assigned_b24_user_id=None))
+async def test_inbound_no_assigned_manager_passes_none():
+    """Общий номер без ответственного: CRM без ASSIGNED_BY_ID, уведомления —
+    по списку участников (собирает collect); терминального фейла нет."""
+    repo = _make_repo(
+        [_make_item()],
+        _make_data(assigned_b24_user_id=None, notify_user_ids=[21, 22]),
+    )
     sync = AsyncMock()
 
     worker = CrmSyncWorker(repo=repo, b24sync=sync, max_attempts=5)
     await worker._process_once()
 
-    sync.process_inbound.assert_not_awaited()
-    repo.mark_failed.assert_awaited_once()
-    assert repo.mark_failed.call_args.args[1] == "no_assigned_manager"
+    call = sync.process_inbound.call_args.kwargs
+    assert call["assigned_b24_user_id"] is None
+    assert call["notify_user_ids"] == [21, 22]
+    repo.mark_done.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------- #

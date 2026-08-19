@@ -29,6 +29,7 @@ from app.models import (
     Attachment,
     Contact,
     Dialog,
+    LineRole,
     Manager,
     ManagerRole,
     Message,
@@ -58,7 +59,9 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 _MEDIA_TEXT_PLACEHOLDERS = frozenset(MEDIA_PLACEHOLDERS.values()) | {"[вложение]"}
 
 
-def _dialog_dto(dialog: Dialog, contact: Contact | None) -> DialogOut:
+def _dialog_dto(
+    dialog: Dialog, contact: Contact | None, *, can_write: bool = True
+) -> DialogOut:
     messenger = (
         dialog.messenger.value if hasattr(dialog.messenger, "value") else str(dialog.messenger)
     )
@@ -71,6 +74,7 @@ def _dialog_dto(dialog: Dialog, contact: Contact | None) -> DialogOut:
         crm_deal_id=dialog.crm_deal_id,
         title=dialog.title,
         last_msg_at=dialog.last_msg_at,
+        can_write=can_write,
     )
 
 
@@ -186,7 +190,28 @@ async def list_dialogs(
         stmt = stmt.where(Dialog.crm_deal_id == deal_id)
     stmt = stmt.order_by(Dialog.last_msg_at.desc().nullslast(), Dialog.id.desc())
     result = await session.execute(stmt)
-    return [_dialog_dto(d, c) for d, c in result.all()]
+    participant_accounts = set(
+        (
+            await session.execute(
+                select(AccountMember.account_id).where(
+                    AccountMember.manager_id == manager.id,
+                    AccountMember.role == LineRole.participant,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        _dialog_dto(
+            d,
+            c,
+            can_write=(
+                d.assigned_user_id == manager.id or d.account_id in participant_accounts
+            ),
+        )
+        for d, c in result.all()
+    ]
 
 
 @router.get("/dialogs/{dialog_id}/messages")
@@ -225,39 +250,67 @@ async def list_messages(
     return [_message_dto(m) for m in result.scalars().all()]
 
 
+async def _line_role(
+    session: AsyncSession, dialog: Dialog, manager: Manager
+) -> LineRole | None:
+    """Роль менеджера в линии диалога (None — не участник)."""
+    if dialog.account_id is None:
+        return None
+    role = await session.scalar(
+        select(AccountMember.role).where(
+            AccountMember.account_id == dialog.account_id,
+            AccountMember.manager_id == manager.id,
+        )
+    )
+    return role
+
+
 async def _outbound_context(
     session: AsyncSession, dialog_id: int, manager: Manager
 ) -> tuple[Dialog, TgAccount, bool]:
-    """Общие guard'ы отправки (текст и медиа): доступ → владелец →
-    read-only → аккаунт канала → is_initiation. Коды ошибок — контракт UI."""
+    """Общие guard'ы отправки (текст и медиа): доступ → право записи →
+    read-only → аккаунт линии → is_initiation. Коды ошибок — контракт UI."""
     dialog = await _load_dialog_accessible(session, dialog_id, manager)
 
-    # Supervisor видит чужой диалог, но писать может только ответственный.
-    # 403 (а не 404): supervisor знает о существовании диалога из списка
-    # «Чатов» — UI нужен явный сигнал прятать composer.
-    if dialog.assigned_user_id != manager.id:
-        raise HTTPException(status_code=403, detail="Писать можно только в свои диалоги")
+    # Пишет ответственный ИЛИ участник линии (общий номер). Наблюдатель и
+    # supervisor-надзор — 403: они знают о существовании диалога из списка,
+    # UI нужен явный сигнал прятать composer.
+    role = await _line_role(session, dialog, manager)
+    if (
+        dialog.assigned_user_id != manager.id
+        and role != LineRole.participant
+    ):
+        raise HTTPException(
+            status_code=403, detail="Писать можно только в свои диалоги или как участник линии"
+        )
 
     # Права: read-only менеджер читает историю, но не отправляет.
     if manager.is_readonly:
         raise HTTPException(status_code=403, detail="Режим только чтение: отправка запрещена")
 
-    # Аккаунт менеджера в канале ДИАЛОГА (для outbox): у менеджера может быть
-    # аккаунт в каждом канале — TG и MAX.
-    acc_result = await session.execute(
-        select(TgAccount).where(
-            TgAccount.manager_id == manager.id,
-            TgAccount.messenger == dialog.messenger,
-        )
+    # Аккаунт ЛИНИИ диалога (общий номер отвечает с того же номера, с
+    # которого писал клиент); фолбэк — личный аккаунт менеджера (легаси-
+    # диалоги без линии).
+    account = (
+        await session.get(TgAccount, dialog.account_id)
+        if dialog.account_id is not None
+        else None
     )
-    account = acc_result.scalar_one_or_none()
+    if account is None:
+        acc_result = await session.execute(
+            select(TgAccount).where(
+                TgAccount.manager_id == manager.id,
+                TgAccount.messenger == dialog.messenger,
+            )
+        )
+        account = acc_result.scalar_one_or_none()
     if account is None:
         channel_label = (
             dialog.messenger.value if hasattr(dialog.messenger, "value") else str(dialog.messenger)
         )
         raise HTTPException(
             status_code=409,
-            detail=f"У менеджера нет привязанного аккаунта канала {channel_label.upper()}",
+            detail=f"У линии диалога нет подключённого аккаунта {channel_label.upper()}",
         )
 
     # is_initiation: нет ни одного входящего сообщения в диалоге.

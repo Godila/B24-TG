@@ -114,7 +114,7 @@ class CrmService:
         auth_token: str,
         name: str,
         phone: str,
-        assigned_by_id: int,
+        assigned_by_id: int | None,
         source: str | None = "telegram",
         *,
         first_name: str | None = None,
@@ -128,11 +128,12 @@ class CrmService:
         из-за этого же не работал дедуп findbyComm по телефону. ``name`` —
         отображаемое имя целиком; при наличии раздельных first/last пишем их
         в NAME/LAST_NAME (каноника CRM), иначе всё в NAME.
+        ``assigned_by_id=None`` (общий номер без ответственного) — ключ не
+        передаём, ответственного назначит B24 по правилам портала.
         """
-        fields: dict[str, Any] = {
-            "NAME": first_name or name,
-            "ASSIGNED_BY_ID": assigned_by_id,
-        }
+        fields: dict[str, Any] = {"NAME": first_name or name}
+        if assigned_by_id is not None:
+            fields["ASSIGNED_BY_ID"] = assigned_by_id
         if last_name:
             fields["LAST_NAME"] = last_name
         if phone:
@@ -194,14 +195,15 @@ class CrmService:
         auth_token: str,
         title: str,
         contact_id: int,
-        assigned_by_id: int,
+        assigned_by_id: int | None,
     ) -> DealInfo:
-        fields = {
+        fields: dict[str, Any] = {
             "TITLE": title,
             "CONTACT_ID": contact_id,
-            "ASSIGNED_BY_ID": assigned_by_id,
             "OPENED": "Y",
         }
+        if assigned_by_id is not None:
+            fields["ASSIGNED_BY_ID"] = assigned_by_id
         result = await self._client.call(
             "crm.item.add",
             auth_token=auth_token,

@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.b24.sync import TIMELINE_MODE_DEFAULT, TIMELINE_MODES
 from app.bridge.crm_sync_worker import AttachmentMeta, CrmSyncData, CrmSyncRepository
 from app.models import (
+    AccountMember,
     AppSetting,
     Attachment,
     Contact,
@@ -172,6 +173,7 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
                 Dialog.crm_deal_id,
                 Dialog.crm_entity_type,
                 Dialog.messenger,
+                Dialog.account_id,
                 Manager.b24_user_id,
             )
             .join(Dialog, Message.dialog_id == Dialog.id)
@@ -182,6 +184,28 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
         row = (await self._session.execute(stmt)).one_or_none()
         if row is None:
             return None
+        # Адресаты уведомления «новый клиент»: ответственный, а у общего
+        # номера (ответственного нет) — все активные участники линии.
+        if row.b24_user_id is not None:
+            notify_ids = [row.b24_user_id]
+        elif row.account_id is not None:
+            notify_ids = list(
+                (
+                    await self._session.execute(
+                        select(Manager.b24_user_id)
+                        .join(AccountMember, AccountMember.manager_id == Manager.id)
+                        .where(
+                            AccountMember.account_id == row.account_id,
+                            Manager.is_active.is_(True),
+                        )
+                        .order_by(AccountMember.id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        else:
+            notify_ids = []
         # Вложения сообщения: файлы читает воркер из медиа-тома по file_path.
         att_rows = (
             await self._session.execute(
@@ -206,6 +230,7 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
             crm_deal_id=row.crm_deal_id,
             crm_entity_type=row.crm_entity_type,
             assigned_b24_user_id=row.b24_user_id,
+            notify_user_ids=notify_ids,
             messenger=row.messenger,
             attachments=[
                 AttachmentMeta(

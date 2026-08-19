@@ -73,7 +73,11 @@ function inboxApp() {
       return this.filter !== "all" || this.managerFilter !== 0;
     },
     get canWrite() {
-      return !!this.dialog && this.dialog.is_mine && !this.readonly;
+      return (
+        !!this.dialog &&
+        this.dialog.can_write !== false &&
+        !this.readonly
+      );
     },
 
     async init() {

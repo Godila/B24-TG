@@ -58,7 +58,11 @@ class CrmSyncData:
     crm_contact_id: int | None  # Contact.crm_contact_id (для исходящих)
     crm_deal_id: int | None  # Dialog.crm_deal_id
     crm_entity_type: str | None  # Dialog.crm_entity_type
-    assigned_b24_user_id: int | None  # Manager.b24_user_id диалога
+    # Ответственный диалога (None у общего номера) → ASSIGNED_BY_ID CRM.
+    assigned_b24_user_id: int | None
+    #: Кому в B24-чат падает уведомление о новом клиенте: ответственному,
+    #: а у общего номера — всем активным участникам линии.
+    notify_user_ids: list[int]
     messenger: Messenger  # канал диалога (тексты/источник CRM)
     sender_first_name: str | None = None  # Contact.first_name (split для CRM NAME)
     sender_last_name: str | None = None  # Contact.last_name (split для CRM LAST_NAME)
@@ -218,16 +222,6 @@ class CrmSyncWorker:
             )
             await self._repo.mark_failed(item, "message_not_found")
             return
-        if data.assigned_b24_user_id is None:
-            # Без ответственного менеджера process_inbound вызвать нельзя;
-            # менеджер не появится сам — терминально.
-            logger.warning(
-                "crm_sync item %s: message_id=%s has no assigned manager — terminal fail",
-                item.id,
-                item.message_id,
-            )
-            await self._repo.mark_failed(item, "no_assigned_manager")
-            return
 
         try:
             result = await self._b24sync.process_inbound(
@@ -235,6 +229,7 @@ class CrmSyncWorker:
                 sender_phone=data.sender_phone or "",
                 message_text=data.message_text or "",
                 assigned_b24_user_id=data.assigned_b24_user_id,
+                notify_user_ids=data.notify_user_ids,
                 messenger=data.messenger,
                 existing_contact_id=data.crm_contact_id,
                 existing_deal_id=data.crm_deal_id,

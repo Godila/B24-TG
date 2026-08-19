@@ -25,6 +25,7 @@ from sqlalchemy.pool import StaticPool
 from app.bridge.incoming_handler import IncomingHandler
 from app.messaging.types import ContentType, IncomingMessage
 from app.models import (
+    AccountMember,
     Base,
     Contact,
     Dialog,
@@ -135,6 +136,9 @@ async def _seed_two_managers(SessionLocal) -> None:
         s.add(Manager(id=2, name="Менеджер 2", b24_user_id=16))
         s.add(TgAccount(id=1, phone="+79990000001", session_path="/tmp/s1", manager_id=1))
         s.add(TgAccount(id=2, phone="+79990000002", session_path="/tmp/s2", manager_id=2))
+        # То, что на проде делает backfill миграции линий: владелец — участник.
+        s.add(AccountMember(account_id=1, manager_id=1))
+        s.add(AccountMember(account_id=2, manager_id=2))
         await s.commit()
 
 
@@ -189,6 +193,7 @@ async def test_concurrent_duplicate_insert_resolved(db):
                 contact_id=10,
                 messenger=Messenger.tg,
                 external_chat_id="111",
+                account_id=1,
                 assigned_user_id=1,
             )
         )
@@ -198,6 +203,7 @@ async def test_concurrent_duplicate_insert_resolved(db):
                 contact_id=10,
                 messenger=Messenger.tg,
                 external_chat_id="111",
+                account_id=1,
                 assigned_user_id=1,
             )
         )
@@ -263,6 +269,7 @@ async def test_integrity_error_race_reuses_existing_dialog(db):
                 contact_id=10,
                 messenger=Messenger.tg,
                 external_chat_id="111",
+                account_id=1,
                 assigned_user_id=1,
                 crm_deal_id=42,
             )
@@ -399,6 +406,7 @@ async def _seed_dialog_for_manager_1(db):
                 contact_id=10,
                 messenger=Messenger.tg,
                 external_chat_id="111",
+                account_id=1,
                 assigned_user_id=1,
             )
         )

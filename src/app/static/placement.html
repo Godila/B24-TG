@@ -70,7 +70,7 @@
     </main>
 
     <!-- Панель шаблонов (быстрые ответы) -->
-    <div class="templates" x-show="!readonly && templates.length > 0" x-data="{ open: false }">
+    <div class="templates" x-show="canWrite && templates.length > 0" x-data="{ open: false }">
       <button class="templates-toggle" @click="open = !open" type="button">
         <span x-text="open ? '▾' : '▸'"></span> Шаблоны (<span x-text="templates.length"></span>)
       </button>
@@ -83,11 +83,11 @@
       </ul>
     </div>
 
-    <!-- Поле ввода + отправка (скрыто в режиме только чтение) -->
-    <div class="status" x-show="readonly" style="padding:8px 14px">
-      <span>Режим только чтение — отправка сообщений отключена администратором</span>
+    <!-- Поле ввода + отправка (скрыто без права записи) -->
+    <div class="status" x-show="!canWrite" style="padding:8px 14px">
+      <span>Отправка недоступна: режим только чтение или нет прав на этот диалог</span>
     </div>
-    <footer class="composer" x-show="!readonly">
+    <footer class="composer" x-show="canWrite">
       <button class="attach-btn" type="button" x-show="canAttach" @click="pickFile()"
         :disabled="!dialog || sending" title="Прикрепить файл" aria-label="Прикрепить файл">📎</button>
       <input type="file" x-ref="fileInput" hidden @change="onFilePicked($event)"

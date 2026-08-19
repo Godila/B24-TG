@@ -48,6 +48,8 @@ class DialogOut(BaseModel):
     crm_deal_id: int | None = None
     title: str | None = None
     last_msg_at: datetime | None = None
+    #: Ответственный или участник линии может писать (наблюдатель/supervisor — нет).
+    can_write: bool = True
 
     @field_validator("last_msg_at", mode="after")
     @classmethod
@@ -124,9 +126,11 @@ class InboxDialogOut(BaseModel):
     #: Ответственный менеджер (имя — только в supervisor-виде списка).
     assigned_manager_id: int | None = None
     assigned_manager_name: str | None = None
-    #: Диалог назначен текущему менеджеру: только владелец пишет и гасит
-    #: непрочитанные; supervisor читает чужие, composer скрыт.
+    #: Диалог назначен текущему менеджеру.
     is_mine: bool = True
+    #: Право записи: ответственный ИЛИ участник линии (общий номер);
+    #: наблюдатель и supervisor-надзор читают, composer скрыт.
+    can_write: bool = False
 
 
 class InboxDialogsPageOut(BaseModel):

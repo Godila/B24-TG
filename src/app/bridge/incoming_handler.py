@@ -27,6 +27,7 @@ from app.messaging.types import IncomingMessage
 from app.models import (
     KIND_INBOUND,
     KIND_OUTBOUND,
+    AccountMember,
     Attachment,
     AttachmentType,
     Contact,
@@ -38,6 +39,29 @@ from app.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def line_assignee(session: AsyncSession, account) -> int | None:
+    """Интерим-маршрутизация линии: ровно один АКТИВНЫЙ участник — он и
+    ответственный (личный номер = прежнее поведение 1:1); 0 или ≥2 —
+    «общий номер», диалог без ответственного. Распределение входящих
+    (round-robin/клейм/лиды) — отдельная будущая фича, встанет сюда."""
+    member_ids = (
+        (
+            await session.execute(
+                select(AccountMember.manager_id)
+                .join(Manager, Manager.id == AccountMember.manager_id)
+                .where(
+                    AccountMember.account_id == account.id,
+                    Manager.is_active.is_(True),
+                )
+                .order_by(AccountMember.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return member_ids[0] if len(member_ids) == 1 else None
 
 
 class IncomingHandler:
@@ -53,9 +77,9 @@ class IncomingHandler:
 
     async def handle(self, msg: IncomingMessage, *, account) -> None:
         # 1. Сохранение в нашей БД — всегда, независимо от состояния CRM.
-        # ВАЖНО: диалог привязываем к Manager.id (ответственный менеджер), НЕ к
-        # account.id — API фильтрует диалоги по manager.id (Dialog.assigned_user_id).
-        # Линия (account_id) пишется сразу: состав линии — источник доступа.
+        # Диалог принадлежит ЛИНИИ (account.id); ответственный — интерим-
+        # правило line_assignee (единый активный участник личной линии или
+        # NULL у общего номера). Состав линии — источник видимости (API).
         message_id = await self._persist(msg, account=account)
         if message_id is None:
             return  # дубль доставки или device-outbound без диалога
@@ -73,31 +97,31 @@ class IncomingHandler:
 
     async def _persist(self, msg: IncomingMessage, *, account) -> int | None:
         """Сохранить сообщение; вернуть его id или None для дубля доставки."""
-        manager_id = account.manager_id
         if msg.direction == MessageDirection.outbound:
-            return await self._persist_outbound(msg, manager_id=manager_id)
+            return await self._persist_outbound(msg, account=account)
         async with self._db_factory() as session:
             contact = await self._upsert_contact(session, msg)
+            assignee = await line_assignee(session, account)
 
-            dialog = await self._find_dialog(session, msg, manager_id)
+            dialog = await self._find_dialog(session, msg, account)
             if dialog is None:
                 dialog = Dialog(
                     contact_id=contact.id,
                     messenger=msg.messenger,
                     external_chat_id=msg.external_chat_id,
                     account_id=account.id,
-                    assigned_user_id=manager_id,
+                    assigned_user_id=assignee,
                 )
                 session.add(dialog)
                 try:
                     await session.flush()
                 except IntegrityError:
-                    # Гонка: параллельная задача уже вставила диалог с этой
-                    # тройкой. Rollback откатывает и контактную часть txn —
+                    # Гонка: параллельная задача уже вставила диалог этой
+                    # линии. Rollback откатывает и контактную часть txn —
                     # получаем контакт заново, затем берём существующий диалог.
                     await session.rollback()
                     contact = await self._upsert_contact(session, msg)
-                    dialog = await self._find_dialog(session, msg, manager_id)
+                    dialog = await self._find_dialog(session, msg, account)
                     assert dialog is not None  # гонка вставки — диалог уже есть
 
             # Идемпотентность: канал может дублировать доставку (реботы,
@@ -131,8 +155,8 @@ class IncomingHandler:
             await session.commit()
             return message_id
 
-    async def _persist_outbound(self, msg: IncomingMessage, *, manager_id: int) -> int | None:
-        """Device-outbound: написано менеджером с устройства, уже доставлено.
+    async def _persist_outbound(self, msg: IncomingMessage, *, account) -> int | None:
+        """Device-outbound: написано с телефона номера, уже доставлено.
 
         Без outbox (отправка прошла мимо нас) → сразу status=sent и
         sent_at=время канала. Контакт не апсертим — он уже связан с
@@ -140,13 +164,13 @@ class IncomingHandler:
         не читаются.
         """
         async with self._db_factory() as session:
-            dialog = await self._find_dialog(session, msg, manager_id)
+            dialog = await self._find_dialog(session, msg, account)
             if dialog is None:
                 logger.info(
-                    "device-outbound скип: диалог не найден (messenger=%s chat=%s manager=%s)",
+                    "device-outbound скип: диалог не найден (messenger=%s chat=%s account=%s)",
                     msg.messenger.value,
                     msg.external_chat_id,
-                    manager_id,
+                    account.id,
                 )
                 return None
             if msg.external_message_id is not None and await self._message_exists(
@@ -156,10 +180,15 @@ class IncomingHandler:
                 # записал этот external_message_id в outbound-строку, а дедуп
                 # direction-агностичен.
                 return None
-            # Автор — владелец аккаунта; явный select вместо account.manager:
-            # eager-load менеджера зависит от пути поставки аккаунта.
-            author_b24_user_id = await session.scalar(
-                select(Manager.b24_user_id).where(Manager.id == manager_id)
+            # Автор — единственный участник личной линии; у общего номера
+            # с телефона писал неизвестный нам человек (author=None).
+            assignee = await line_assignee(session, account)
+            author_b24_user_id = (
+                await session.scalar(
+                    select(Manager.b24_user_id).where(Manager.id == assignee)
+                )
+                if assignee is not None
+                else None
             )
             message = Message(
                 dialog_id=dialog.id,
@@ -197,14 +226,15 @@ class IncomingHandler:
         )
 
     async def _find_dialog(
-        self, session: AsyncSession, msg: IncomingMessage, manager_id: int
+        self, session: AsyncSession, msg: IncomingMessage, account
     ) -> Dialog | None:
-        """Диалог по (messenger, external_chat_id, assigned_user_id).
+        """Диалог линии аккаунта по (messenger, external_chat_id, account_id).
 
-        Мультиаккаунт (в приватных TG-чатах chat_id == id клиента и совпадает
-        у всех менеджеров) и мультиканал (id-пространства каналов независимы).
-        Legacy-дубли (chat_id, manager) могли остаться до миграции: берём
-        старейший, чтобы не упасть MultipleResultsFound.
+        Линия — источник идентичности диалога (один клиент на линии = один
+        диалог и его история, независимо от смены/сброса ответственного).
+        Мультиканал: id-пространства TG и MAX независимы. Legacy-дубли
+        (chat, manager) до миграции линий засеяны уникальным account_id —
+        берём старейший, чтобы не упасть MultipleResultsFound.
         """
         return (
             await session.execute(
@@ -212,7 +242,7 @@ class IncomingHandler:
                 .where(
                     Dialog.messenger == msg.messenger,
                     Dialog.external_chat_id == msg.external_chat_id,
-                    Dialog.assigned_user_id == manager_id,
+                    Dialog.account_id == account.id,
                 )
                 .order_by(Dialog.id)
                 .limit(1)

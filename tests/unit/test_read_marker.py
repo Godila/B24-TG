@@ -49,14 +49,15 @@ async def db():
 
 def _account(manager_id: int) -> MagicMock:
     account = MagicMock()
+    account.id = manager_id  # id аккаунта-линии (см. _seed: диалог на линии 1)
     account.manager_id = manager_id
     return account
 
 
 async def _seed(db, *, messenger=Messenger.tg) -> None:
-    """Менеджеры 1/2, диалог чата 111 у менеджера 1, «чужой» диалог того же
-    чата у менеджера 2 (messenger параметризован — квитанция матчится по
-    паре messenger+chat)."""
+    """Менеджеры 1/2, диалог чата 111 на линии 1 (менеджер 1), «чужой»
+    диалог того же чата на линии 2 (messenger параметризован — квитанция
+    матчится по паре messenger+chat своей линии)."""
     async with db() as s:
         s.add(Manager(id=1, name="Менеджер 1", b24_user_id=15))
         s.add(Manager(id=2, name="Менеджер 2", b24_user_id=16))
@@ -67,6 +68,7 @@ async def _seed(db, *, messenger=Messenger.tg) -> None:
                 contact_id=10,
                 messenger=messenger,
                 external_chat_id="111",
+                account_id=1,
                 assigned_user_id=1,
             )
         )
@@ -76,6 +78,7 @@ async def _seed(db, *, messenger=Messenger.tg) -> None:
                 contact_id=10,
                 messenger=messenger,
                 external_chat_id="111",
+                account_id=2,
                 assigned_user_id=2,
             )
         )

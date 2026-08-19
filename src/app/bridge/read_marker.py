@@ -34,8 +34,10 @@ class ReadMarker:
     async def apply(self, receipt: ReadReceipt, *, account) -> int:
         """Применить квитанцию; вернуть число переведённых строк.
 
-        Диалог не найден (группа/чужой менеджер) — 0, штатно: группы не
-        инжестятся, квитанция до чужого провайдера не доходит.
+        Диалог ищется по линии аккаунта (✓✓ — свойство номера: чей личный
+        номер или общий — клиент прочёл наши исходящие). Не найден
+        (группа/чужая линия) — 0, штатно: группы не инжестятся, квитанция
+        до чужого провайдера не доходит.
         """
         async with self._db_factory() as session:
             dialog = (
@@ -44,7 +46,7 @@ class ReadMarker:
                     .where(
                         Dialog.messenger == receipt.messenger,
                         Dialog.external_chat_id == receipt.external_chat_id,
-                        Dialog.assigned_user_id == account.manager_id,
+                        Dialog.account_id == account.id,
                     )
                     .order_by(Dialog.id)
                     .limit(1)

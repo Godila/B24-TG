@@ -182,14 +182,15 @@ def test_read_cursors_are_per_manager(lines_app):
     assert _inbox_ids(client)[90]["unread_count"] == 2
 
 
-def test_observer_cannot_write_yet(lines_app):
-    """До Этапа 4 (запись из линии) письмо остаётся прерогативой владельца:
-    наблюдатель/участник чужого диалога получают 403 от _outbound_context."""
+def test_write_matrix_after_stage4(lines_app):
+    """Этап 4: участник линии ПИШЕТ из общего номера (201), наблюдатель и
+    supervisor-надзор — 403; посторонний — 404 (не существует для него)."""
     client, state = lines_app
-    for mid in (PARTICIPANT, OBSERVER):
+    state["manager_id"] = PARTICIPANT
+    r = client.post("/api/dialogs/90/messages", json={"text": "привет"})
+    assert r.status_code == 201
+
+    for mid, code in ((OBSERVER, 403), (SUPERVISOR, 403), (STRANGER, 404)):
         state["manager_id"] = mid
-        r = client.post(
-            "/api/dialogs/90/messages",
-            json={"text": "привет"},
-        )
-        assert r.status_code == 403, f"manager {mid}"
+        r = client.post("/api/dialogs/90/messages", json={"text": "привет"})
+        assert r.status_code == code, f"manager {mid}"

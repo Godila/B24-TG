@@ -57,10 +57,7 @@ async def test_load_active_accounts_returns_only_active(session_factory):
     assert len(accounts) == 1
     only = accounts[0]
     assert only.status == TgAccountStatus.active
-    # Eager-load критичен: после закрытия стартовой сессии обращение к
-    # .manager не должно бросать DetachedInstanceError.
-    assert only.manager is not None
-    assert only.manager.b24_user_id == 11
+    assert only.id == 1  # линии: маршрутизация больше не читает account.manager
 
 
 @pytest.mark.asyncio

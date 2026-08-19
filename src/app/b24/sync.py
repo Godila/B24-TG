@@ -55,9 +55,10 @@ class Bitrix24Sync:
         sender_name: str,
         sender_phone: str,
         message_text: str,
-        assigned_b24_user_id: int,
+        assigned_b24_user_id: int | None,
         *,
         messenger: Messenger = Messenger.tg,
+        notify_user_ids: list[int] | None = None,
         existing_contact_id: int | None = None,
         existing_deal_id: int | None = None,
         # Дефолт — TIMELINE_MODE_DEFAULT (дефолт приложения), а не "all":
@@ -71,7 +72,12 @@ class Bitrix24Sync:
         """Входящее сообщение → CRM.
 
         ``messenger`` параметризует тексты (префикс сделки, уведомление,
-        источник) по каналу. ``existing_contact_id``/``existing_deal_id`` —
+        источник) по каналу. ``assigned_b24_user_id`` — ответственный CRM
+        (None у общего номера: контакт/сделка создаются без ответственного,
+        B24 применит свои правила очереди). ``notify_user_ids`` — адресаты
+        уведомления о новом клиенте (дефолт: ответственный, у общих линий —
+        все активные участники, собирает crm_sync_repo.collect).
+        ``existing_contact_id``/``existing_deal_id`` —
         уже известные CRM-связи диалога/контакта: если контакт связан,
         пропускаем поиск по телефону (findbyComm по пустому телефону у
         MAX-клиентов плодил бы дубли), если сделка связана — не ищем открытую.
@@ -156,18 +162,23 @@ class Bitrix24Sync:
                     files=files,
                 )
 
-        # 4. Уведомление ответственному — ТОЛЬКО первому сообщению нового
-        #    клиента (is_new): раньше слалось на каждое входящее (спам
-        #    менеджеру + расход REST-квоты).
+        # 4. Уведомление — ТОЛЬКО первому сообщению нового клиента (is_new):
+        #    раньше слалось на каждое входящее (спам + расход REST-квоты).
+        #    Адресаты — ответственный, а у общего номера все активные
+        #    участники линии (список от collect).
         if is_new:
-            await self._im.notify_manager(
-                auth,
-                user_id=assigned_b24_user_id,
-                message=(
-                    f"💬 Новое сообщение в {profile.notify_label} от "
-                    f"{sender_name or sender_phone}:\n{message_text}"
-                ),
+            recipients = notify_user_ids if notify_user_ids is not None else (
+                [assigned_b24_user_id] if assigned_b24_user_id is not None else []
             )
+            for user_id in recipients:
+                await self._im.notify_manager(
+                    auth,
+                    user_id=user_id,
+                    message=(
+                        f"💬 Новое сообщение в {profile.notify_label} от "
+                        f"{sender_name or sender_phone}:\n{message_text}"
+                    ),
+                )
 
         return SyncResult(
             contact_id=contact.id,
