@@ -104,7 +104,9 @@ async def test_min_interval_enforced_between_fast_calls():
     # Первый вызов sleep не делает (last_call=0.0 << monotonic), второй ждёт
     # остаток интервала: (0, 0.6].
     assert len(waits) == 1
-    assert 0 < waits[0] <= 0.6
+    # +eps: monotonic между вызовами дрейфует на наносекунды — жёсткое
+    # «<= 0.6» флакует (0.60000000009…).
+    assert 0 < waits[0] <= 0.6 + 1e-6
     assert mock_http.request.await_count == 2
 
 
