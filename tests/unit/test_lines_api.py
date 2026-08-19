@@ -195,3 +195,95 @@ async def test_create_line_placeholder(db):
     async with db() as s:
         acc = await s.get(TgAccount, line["id"])
     assert acc.manager_id is None  # админская линия без призрачного владельца
+
+
+# ---------------------------------------------------------------------- #
+# Регрессия бага-репорта 08-19: «+ Telegram/MAX» → 500
+# ---------------------------------------------------------------------- #
+async def test_create_line_placeholder_phone_unique(db):
+    """Вторая линия того же канала не бьётся в uq(messenger, phone):
+    плейсхолдеры уникальны (раньше константный «TG-line» ронял INSERT)."""
+    sup = await _sup(db)
+    first = await admin_api.create_line(admin_api.LineCreateIn(messenger="tg"), sup)
+    second = await admin_api.create_line(admin_api.LineCreateIn(messenger="tg"), sup)
+    third = await admin_api.create_line(admin_api.LineCreateIn(messenger="max"), sup)
+    phones = {first["phone"], second["phone"], third["phone"]}
+    assert len(phones) == 3
+    assert all(p.startswith(("TG-line-", "MAX-line-")) for p in phones)
+
+
+# ---------------------------------------------------------------------- #
+# DELETE /lines/{id}: мягкое удаление
+# ---------------------------------------------------------------------- #
+async def test_delete_line_guards(db):
+    sup = await _sup(db)
+    # Активная линия — 409 (сначала отключить).
+    with pytest.raises(HTTPException) as ei:
+        await admin_api.delete_line(7, sup)
+    assert ei.value.status_code == 409
+
+    with pytest.raises(HTTPException) as ei:
+        await admin_api.delete_line(999, sup)
+    assert ei.value.status_code == 404
+
+
+async def test_delete_line_removes_and_hides(db):
+    sup = await _sup(db)
+    line = await admin_api.create_line(admin_api.LineCreateIn(messenger="max"), sup)
+    await admin_api.add_line_member(
+        line["id"], admin_api.LineMemberIn(manager_id=1), sup
+    )
+    async with db() as s:
+        from app.models import AccountMember
+
+        assert (
+            await s.execute(
+                select(AccountMember).where(AccountMember.account_id == line["id"])
+            )
+        ).scalar_one() is not None
+
+    resp = await admin_api.delete_line(line["id"], sup)
+    assert resp == {"status": "removed"}
+
+    async with db() as s:
+        acc = await s.get(TgAccount, line["id"])
+        members = (
+            (
+                await s.execute(
+                    select(AccountMember).where(AccountMember.account_id == line["id"])
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert acc.is_removed is True
+    assert acc.token is None and acc.device_id is None  # MAX-креды вычищены
+    assert members == []
+
+    # Скрыта из списка и повторное удаление/подключение — 404.
+    assert all(ln["id"] != line["id"] for ln in await admin_api.list_lines(sup))
+    with pytest.raises(HTTPException) as ei:
+        await admin_api.delete_line(line["id"], sup)
+    assert ei.value.status_code == 404
+    with pytest.raises(HTTPException) as ei:
+        await admin_api.line_connect(line["id"], Messenger.max, sup)
+    assert ei.value.status_code == 404
+
+
+async def test_delete_line_tg_schedules_logout(db):
+    sup = await _sup(db)
+    async with db() as s:
+        acc = await s.get(TgAccount, 7)
+        acc.status = TgAccountStatus.offline  # удаление требует offline
+        await s.commit()
+    resp = await admin_api.delete_line(7, sup)
+    assert resp == {"status": "removed"}
+    async with db() as s:
+        from app.models import LoginCommand, LoginCommandKind
+
+        cmd = (
+            await s.execute(
+                select(LoginCommand).where(LoginCommand.account_id == 7)
+            )
+        ).scalar_one()
+    assert cmd.kind is LoginCommandKind.log_out

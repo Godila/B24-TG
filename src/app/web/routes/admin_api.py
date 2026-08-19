@@ -7,10 +7,11 @@
 """
 
 import logging
+import secrets
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.b24.client import Bitrix24Client, Bitrix24Error
@@ -161,7 +162,13 @@ async def list_managers(supervisor: SupervisorDep) -> list[dict]:
     async with async_session() as s:
         managers = (await s.execute(select(Manager).order_by(Manager.id))).scalars().all()
         accounts = (
-            (await s.execute(select(TgAccount).order_by(TgAccount.manager_id, TgAccount.id)))
+            (
+                await s.execute(
+                    select(TgAccount)
+                    .where(TgAccount.is_removed.is_(False))
+                    .order_by(TgAccount.manager_id, TgAccount.id)
+                )
+            )
             .scalars()
             .all()
         )
@@ -235,7 +242,15 @@ def _member_dto(am: AccountMember, m: Manager) -> dict:
 async def list_lines(supervisor: SupervisorDep) -> list[dict]:
     async with async_session() as s:
         accounts = (
-            (await s.execute(select(TgAccount).order_by(TgAccount.id))).scalars().all()
+            (
+                await s.execute(
+                    select(TgAccount)
+                    .where(TgAccount.is_removed.is_(False))
+                    .order_by(TgAccount.id)
+                )
+            )
+            .scalars()
+            .all()
         )
         rows = (
             await s.execute(
@@ -352,13 +367,21 @@ async def create_line(body: LineCreateIn, supervisor: SupervisorDep) -> dict:
     """Заготовка линии: офлайн-аккаунт без участников. Номер «оживает»
     подключением по share-ссылке (connect), состав назначается после."""
     async with async_session() as s:
+        # Плейсхолдер уникален: uq(messenger, phone) — второй «TG-line»
+        # того же канала ронял INSERT (500 из баг-репорта).
+        phone = f"{body.messenger.value.upper()}-line-{secrets.token_hex(3)}"
         account = TgAccount(
             messenger=body.messenger,
-            phone=f"{body.messenger.value.upper()}-line",
+            phone=phone,
             status=TgAccountStatus.offline,
         )
         s.add(account)
-        await s.commit()
+        try:
+            await s.commit()
+        except IntegrityError:
+            raise HTTPException(
+                status_code=409, detail="коллизия плейсхолдера — попробуйте ещё раз"
+            ) from None
         logger.info(
             "Линия создана: account_id=%s messenger=%s (by supervisor %s)",
             account.id, body.messenger.value, supervisor.id,
@@ -373,6 +396,57 @@ async def create_line(body: LineCreateIn, supervisor: SupervisorDep) -> dict:
         }
 
 
+@router.delete("/lines/{account_id}", response_model=None)
+async def delete_line(account_id: int, supervisor: SupervisorDep) -> dict:
+    """Удалить линию из панели. Требует offline (сначала отключить);
+    гасим живые логины/share-ссылки, вычищаем участников и креды. Строка
+    аккаунта и история диалогов остаются (FK сообщений/outbox): диалоги
+    видны своим ответственным и supervisor'у."""
+    async with async_session() as s:
+        account = await s.get(TgAccount, account_id)
+        if account is None or account.is_removed:
+            raise HTTPException(status_code=404, detail="линия не найдена")
+        if account.status == TgAccountStatus.active:
+            raise HTTPException(
+                status_code=409,
+                detail="сначала отключите линию (Отменить подключение или отключите аккаунт)",
+            )
+        await terminate_active_commands(s, account_id=account.id)
+        await s.execute(
+            update(ConnectToken)
+            .where(
+                ConnectToken.account_id == account_id,
+                ConnectToken.revoked_at.is_(None),
+            )
+            .values(revoked_at=func.now())
+        )
+        if account.messenger == Messenger.tg:
+            # Снесёт .session-файл, если есть (без сессии — тихий no-op).
+            s.add(
+                LoginCommand(
+                    manager_id=account.manager_id,
+                    account_id=account.id,
+                    messenger=Messenger.tg,
+                    kind=LoginCommandKind.log_out,
+                    status=LoginCommandStatus.pending,
+                )
+            )
+        else:
+            account.token = None
+            account.device_id = None
+        await s.execute(
+            delete(AccountMember).where(AccountMember.account_id == account_id)
+        )
+        account.status = TgAccountStatus.offline
+        account.is_removed = True
+        await s.commit()
+        logger.info(
+            "Линия удалена: account_id=%s messenger=%s (by supervisor %s)",
+            account_id, account.messenger.value, supervisor.id,
+        )
+        return {"status": "removed"}
+
+
 @router.post("/lines/{account_id}/connect/{channel}", response_model=None)
 async def line_connect(
     account_id: int, channel: Messenger, supervisor: SupervisorDep, *, force: bool = False
@@ -380,7 +454,7 @@ async def line_connect(
     """Запустить QR-логин линии и выдать share-ссылку владельцу номера."""
     async with async_session() as s:
         account = await s.get(TgAccount, account_id)
-        if account is None:
+        if account is None or account.is_removed:
             raise HTTPException(status_code=404, detail="линия не найдена")
         if account.messenger != channel:
             raise HTTPException(

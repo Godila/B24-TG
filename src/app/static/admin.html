@@ -2,6 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8">
+  <script src="/static/vendor/qrcode.min.js"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ЧатМост — панель управления</title>
   <link rel="icon" href="/static/brand/favicon.ico" sizes="48x48">
@@ -445,6 +446,8 @@
           <div class="m-actions">
             <button class="btn btn--ghost btn--sm" data-share="${ln.id}" data-channel="${ln.messenger}" type="button"
               title="Подключение номера: выдать ссылку владельцу телефона">🔗 Поделиться</button>
+            <button class="btn btn--danger btn--sm" data-del-line="${ln.id}" type="button"
+              title="Удалить линию из панели (после отключения)">🗑</button>
             ${options ? `<select class="line-add" data-line="${ln.id}" aria-label="Кого добавить в линию">${options}</select>
             <button class="btn btn--ghost btn--sm" data-add-line="${ln.id}" type="button">+ участник</button>` : ""}
           </div>`;
@@ -452,6 +455,15 @@
       }
       box.querySelectorAll("[data-share]").forEach((btn) => {
         btn.addEventListener("click", () => shareLine(btn.dataset.share, btn.dataset.channel));
+      });
+      box.querySelectorAll("[data-del-line]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          if (!confirm("Удалить линию из панели? Диалоги и история останутся у своих ответственных.")) return;
+          try {
+            await api(`/admin/api/lines/${btn.dataset.delLine}`, { method: "DELETE" });
+          } catch (e) { showToast("Не получилось: " + e.message); }
+          loadSupervisor();
+        });
       });
       box.querySelectorAll("[data-add-line]").forEach((btn) => {
         btn.addEventListener("click", async () => {
@@ -490,7 +502,17 @@
       });
     }
 
+    let sharePoll = null;
+    let sharePollLink = null;
+    function stopSharePoll() {
+      if (sharePoll) { clearInterval(sharePoll); sharePoll = null; }
+      sharePollLink = null;
+    }
+
+    /** Панель «Поделиться»: ссылка + QR + живой статус подключения —
+     *  админ может подключить номер сам, не открывая ссылку в новой вкладке. */
     async function shareLine(lineId, channel) {
+      stopSharePoll();
       const panel = document.querySelector(`[data-share-panel="${lineId}"]`);
       panel.hidden = false;
       panel.textContent = "получаем ссылку…";
@@ -504,20 +526,69 @@
             <button class="btn btn--ghost btn--sm" data-copy type="button">Скопировать</button>
             <button class="btn btn--danger btn--sm" data-cancel type="button">Отменить подключение</button>
           </div>
-          <div class="hint" style="margin-top:4px">
-            Ссылка живёт 30 минут. Перешлите её владельцу телефона: он откроет,
-            отсканирует QR (и введёт 2FA-пароль, если он установлен).
+          <div class="share-qr-wrap" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:10px">
+            <div class="share-qrbox" style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:8px"></div>
+            <div>
+              <div class="share-state hint" style="font-size:.9rem">Получаем QR-код…</div>
+              <div class="hint" style="margin-top:6px;max-width:340px">
+                Наведите камеру (Настройки → Устройства → Подключить), или перешлите
+                ссылку владельцу телефона — у него 30 минут; 2FA-пароль он введёт у себя.
+              </div>
+            </div>
           </div>`;
         panel.querySelector("[data-copy]").addEventListener("click", async () => {
           try { await navigator.clipboard.writeText(url); showToast("Ссылка скопирована"); }
           catch { panel.querySelector(".share-url").select(); }
         });
         panel.querySelector("[data-cancel]").addEventListener("click", async () => {
+          stopSharePoll();
           try {
             await api(`/admin/api/lines/${lineId}/connect/${channel}/cancel`, { method: "POST" });
           } catch (e) { showToast("Не получилось: " + e.message); }
           panel.hidden = true;
         });
+        const qrbox = panel.querySelector(".share-qrbox");
+        const state = panel.querySelector(".share-state");
+        const setState = (text, ok) => {
+          state.textContent = text;
+          state.style.color = ok === true ? "var(--ok-fg, #1a7f37)"
+            : ok === false ? "var(--err-fg, #b42318)" : "";
+        };
+        sharePoll = setInterval(async () => {
+          if (!panel.isConnected) { stopSharePoll(); return; }
+          try {
+            const res = await fetch(r.share_url + "/status", { credentials: "same-origin" });
+            if (res.status === 404) {
+              stopSharePoll();
+              setState("Ссылка погашена/истекла — выдайте новую.", false);
+              return;
+            }
+            const st = await res.json();
+            if (st.status === "waiting" && st.qr_link) {
+              if (st.qr_link !== sharePollLink) {
+                sharePollLink = st.qr_link;
+                qrbox.innerHTML = "";
+                new QRCode(qrbox, { text: st.qr_link, width: 180, height: 180 });
+              }
+              setState("Ожидание сканирования…");
+            } else if (st.status === "waiting") {
+              setState("Получаем QR-код…");
+            } else if (st.status === "password_required") {
+              setState("Ждём 2FA-пароль (вводится на странице ссылки)…");
+            } else if (st.status === "authorized") {
+              stopSharePoll();
+              qrbox.innerHTML = "";
+              setState("Подключено! Активация ~20 секунд.", true);
+              setTimeout(loadSupervisor, 2500);
+            } else if (st.status === "expired") {
+              stopSharePoll();
+              setState("QR истёк — выдайте ссылку заново.", false);
+            } else if (st.status === "error") {
+              stopSharePoll();
+              setState(st.error || "Ошибка входа", false);
+            }
+          } catch { /* сетевой блип — следующий тик поправит */ }
+        }, 2000);
       } catch (e) {
         panel.textContent = "ошибка: " + e.message;
       }

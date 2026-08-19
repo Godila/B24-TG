@@ -9,7 +9,16 @@ MAX-строки — ``token``/``device_id`` (сессия web-клиента MA
 
 import enum
 
-from sqlalchemy import BigInteger, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Enum,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -51,6 +60,8 @@ class TgAccount(Base, TimestampMixin):
     status: Mapped[TgAccountStatus] = mapped_column(
         Enum(TgAccountStatus), default=TgAccountStatus.offline
     )
+    #: Удалена из панели (история диалогов/FK остаются; см. DELETE /lines).
+    is_removed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # ponytail: legacy-колонка владельца (nullable, кодом не читается);
     # drop отдельным контракт-релизом, если появится 3-й читатель схемы.
     manager_id: Mapped[int | None] = mapped_column(
