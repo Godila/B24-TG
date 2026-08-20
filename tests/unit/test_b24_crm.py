@@ -135,13 +135,137 @@ async def test_create_deal():
     svc = CrmService(client)
     result = await svc.create_deal(
         auth_token="t",
-        title="TG: Иван Петров",
+        title="Иван Петров",
         contact_id=77,
         assigned_by_id=1,
+        source="telegram",
     )
     assert result.id == 100
     call_kwargs = client.call.call_args
     assert call_kwargs.kwargs["params"]["entityTypeId"] == 2  # DEAL
+    # Канал — в поле «Источник», а не в название.
+    assert call_kwargs.kwargs["params"]["fields"]["SOURCE_ID"] == "TELEGRAM"
+    assert call_kwargs.kwargs["params"]["fields"]["TITLE"] == "Иван Петров"
+
+
+# --- Лиды (crm_mode=lead) ------------------------------------------------ #
+
+
+@pytest.mark.asyncio
+async def test_create_lead():
+    client = AsyncMock()
+    client.call = AsyncMock(return_value=55)
+    svc = CrmService(client)
+    result = await svc.create_lead(
+        auth_token="t",
+        title="Иван Петров",
+        phone="+79991234567",
+        assigned_by_id=1,
+        source="telegram",
+        first_name="Иван",
+        last_name="Петров",
+        username="ivan_p",
+    )
+    assert result.id == 55
+    call_kwargs = client.call.call_args
+    # Классический crm.lead.add (crm.item.add молча теряет PHONE/IM).
+    assert call_kwargs.args[0] == "crm.lead.add"
+    fields = call_kwargs.kwargs["params"]["fields"]
+    assert fields["TITLE"] == "Иван Петров"
+    assert fields["NAME"] == "Иван"
+    assert fields["LAST_NAME"] == "Петров"
+    assert fields["PHONE"] == [{"VALUE": "+79991234567", "VALUE_TYPE": "MOBILE"}]
+    assert fields["IM"] == [{"VALUE": "ivan_p", "VALUE_TYPE": "TELEGRAM"}]
+    assert fields["SOURCE_ID"] == "TELEGRAM"
+    assert fields["OPENED"] == "Y"
+
+
+@pytest.mark.asyncio
+async def test_create_lead_bad_source_retries_without_source():
+    client = AsyncMock()
+
+    async def call(method, auth_token, params=None, **kw):
+        if "SOURCE_ID" in params["fields"]:
+            raise Bitrix24Error(
+                code="ERROR_SOURCE_ID",
+                description="SOURCE_ID is not found in dictionary",
+            )
+        return 56
+
+    client.call = AsyncMock(side_effect=call)
+    svc = CrmService(client)
+    result = await svc.create_lead(
+        auth_token="t",
+        title="Тимур",
+        phone="",
+        assigned_by_id=1,
+        source="MAX",
+    )
+    assert result.id == 56
+    assert client.call.await_count == 2
+    assert "SOURCE_ID" not in client.call.call_args.kwargs["params"]["fields"]
+
+
+@pytest.mark.asyncio
+async def test_find_reusable_lead_by_phone():
+    """findbyComm отдаёт LEAD-иды; статусы дочитывает crm.lead.list — берём
+    новейший не-CONVERTED/JUNK."""
+    client = AsyncMock()
+    client.call = AsyncMock(
+        side_effect=[
+            {"CONTACT": [9], "LEAD": [4, 7]},
+            [{"ID": "7", "TITLE": "Лид 7"}, {"ID": "4", "TITLE": "Лид 4"}],
+        ]
+    )
+    svc = CrmService(client)
+    lead = await svc.find_reusable_lead_by_phone(auth_token="t", phone="+7999")
+    assert lead is not None
+    assert lead.id == 7
+    assert client.call.await_count == 2
+    params = client.call.call_args.kwargs["params"]
+    assert client.call.call_args.args[0] == "crm.lead.list"
+    assert params["filter"]["ID"] == [4, 7]
+    assert params["filter"]["!@STATUS_ID"] == ["CONVERTED", "JUNK"]
+    assert params["order"] == {"ID": "desc"}
+
+
+@pytest.mark.asyncio
+async def test_find_reusable_lead_by_phone_no_leads():
+    """findbyComm нашёл только контакт — лида нет, второй вызов не нужен."""
+    client = AsyncMock()
+    client.call = AsyncMock(return_value={"CONTACT": [9]})
+    svc = CrmService(client)
+    assert await svc.find_reusable_lead_by_phone(auth_token="t", phone="+7999") is None
+    assert client.call.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_find_reusable_lead_by_phone_empty_phone_no_calls():
+    """Пустой телефон (MAX) — матчинг неаводёжнее дублей, вызовов нет."""
+    client = AsyncMock()
+    svc = CrmService(client)
+    assert await svc.find_reusable_lead_by_phone(auth_token="t", phone="") is None
+    client.call.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_lead_parses_status_and_contact():
+    client = AsyncMock()
+    client.call = AsyncMock(
+        return_value={"ID": "55", "TITLE": "Л", "STATUS_ID": "converted", "CONTACT_ID": "42"}
+    )
+    svc = CrmService(client)
+    lead = await svc.get_lead(auth_token="t", lead_id=55)
+    assert lead is not None
+    assert lead.status_id == "CONVERTED"
+    assert lead.contact_id == 42
+
+    client.call = AsyncMock(return_value={"ID": "55", "STATUS_ID": "NEW", "CONTACT_ID": ""})
+    lead = await svc.get_lead(auth_token="t", lead_id=55)
+    assert lead.contact_id is None
+
+    client.call = AsyncMock(side_effect=RuntimeError("deleted"))
+    assert await svc.get_lead(auth_token="t", lead_id=55) is None
 
 
 @pytest.mark.asyncio

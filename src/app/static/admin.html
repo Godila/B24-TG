@@ -298,9 +298,21 @@
 
     <section id="sec-settings">
       <div class="section-head"><span class="section-title">Настройки</span></div>
-      <p class="section-hint">Как переписка с клиентами попадает в карточки сделок.</p>
+      <p class="section-hint">Как переписка с клиентами попадает в CRM.</p>
       <div class="card settings-card">
         <div class="set-row">
+          <strong>Создавать для новых клиентов:</strong>
+          <div class="segment" id="crm-mode-segment">
+            <button data-mode="deal" type="button">Сделки</button>
+            <button data-mode="lead" type="button">Лиды</button>
+          </div>
+        </div>
+        <p class="hint" style="margin:8px 0 0">
+          «Сделки» — контакт + сделка; «Лиды» — только лид, контакт и сделку создаст
+          конвертация. Режим касается новых клиентов: существующие диалоги остаются
+          на своих карточках. Канал связи (Telegram/MAX) пишется в поле «Источник».
+        </p>
+        <div class="set-row" style="margin-top:12px">
           <strong>Дублировать переписку в таймлайн CRM:</strong>
           <div class="segment" id="timeline-segment">
             <button data-mode="first" type="button">Только первое сообщение</button>
@@ -366,16 +378,30 @@
     }
 
     // ---- Настройки ----
-    const TIMELINE_LABELS = {
-      first: "только первое сообщение",
-      all: "все сообщения",
-      none: "выключено",
-    };
-    function renderTimelineMode(mode) {
-      document.querySelectorAll("#timeline-segment button").forEach((b) => {
+    function renderSegment(sel, mode) {
+      document.querySelectorAll(sel + " button").forEach((b) => {
         b.classList.toggle("active", b.dataset.mode === mode);
       });
     }
+    function bindSegmentSetting(sel, key) {
+      document.querySelectorAll(sel + " button").forEach((b) => {
+        b.addEventListener("click", async () => {
+          renderSegment(sel, b.dataset.mode);
+          try {
+            await api("/admin/api/settings", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ [key]: b.dataset.mode }),
+            });
+          } catch (e) {
+            showToast("Не получилось сохранить: " + e.message);
+            loadSettings();
+          }
+        });
+      });
+    }
+    bindSegmentSetting("#timeline-segment", "timeline_mode");
+    bindSegmentSetting("#crm-mode-segment", "crm_mode");
     const mediaToggle = document.getElementById("media-to-timeline");
     mediaToggle.addEventListener("change", async () => {
       try {
@@ -389,25 +415,11 @@
         showToast("Не получилось сохранить: " + e.message);
       }
     });
-    document.querySelectorAll("#timeline-segment button").forEach((b) => {
-      b.addEventListener("click", async () => {
-        renderTimelineMode(b.dataset.mode);
-        try {
-          await api("/admin/api/settings", {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ timeline_mode: b.dataset.mode }),
-          });
-        } catch (e) {
-          showToast("Не получилось сохранить: " + e.message);
-          loadSettings();
-        }
-      });
-    });
     async function loadSettings() {
       try {
         const s = await api("/admin/api/settings");
-        renderTimelineMode(s.timeline_mode);
+        renderSegment("#timeline-segment", s.timeline_mode);
+        renderSegment("#crm-mode-segment", s.crm_mode);
         mediaToggle.checked = !!s.media_to_timeline;
       }
       catch { /* не supervisor — секция скрыта целиком */ }

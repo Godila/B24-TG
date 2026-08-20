@@ -134,6 +134,33 @@ def test_list_dialogs_filter_by_deal_id(app_with_data):
     assert r2.json() == []
 
 
+async def test_list_dialogs_filter_by_entity_type(app_with_data):
+    """id-пространства сделок и лидов независимы: ?deal_id= обязан
+    дискриминироваться типом сущности (виджет лида не видит сделки и
+    наоборот; legacy-строка без crm_entity_type считается сделкой)."""
+    from app.models import Dialog, Messenger
+
+    client, ids, SessionLocal = app_with_data
+    async with SessionLocal() as s:
+        s.add(
+            Dialog(
+                id=30,
+                contact_id=ids["contact"],
+                messenger=Messenger.tg,
+                external_chat_id="100300",
+                assigned_user_id=1,
+                crm_deal_id=42,
+                crm_entity_type="lead",
+            )
+        )
+        await s.commit()
+
+    deals = client.get("/api/dialogs", params={"deal_id": 42}).json()
+    leads = client.get("/api/dialogs", params={"deal_id": 42, "entity_type": "lead"}).json()
+    assert [d["id"] for d in deals] == [20]
+    assert [d["id"] for d in leads] == [30]
+
+
 async def _seed_extra_messages(session_local, dialog_id: int) -> list[int]:
     """Досеивает сообщения с id 3..5 в диалог (fixture уже создала 1 и 2)."""
     from app.models import Message, MessageDirection, MessageStatus

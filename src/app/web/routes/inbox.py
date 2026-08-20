@@ -41,12 +41,13 @@ ManagerDep = Annotated[Manager, Depends(get_current_manager)]
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
-def _deal_url(crm_deal_id: int | None) -> str | None:
-    """Ссылка на карточку сделки B24 — фронт не знает адрес портала."""
-    if crm_deal_id is None:
+def _crm_url(crm_entity_id: int | None, entity_type: str | None) -> str | None:
+    """Ссылка на карточку CRM B24 (сделка/лид) — фронт не знает адрес портала."""
+    if crm_entity_id is None:
         return None
     portal = get_settings().b24_portal.rstrip("/")
-    return f"{portal}/crm/deal/{crm_deal_id}/view/"
+    kind = "lead" if entity_type == "lead" else "deal"
+    return f"{portal}/crm/{kind}/{crm_entity_id}/view/"
 
 
 def _enum_value(value) -> str:
@@ -263,7 +264,8 @@ async def list_inbox_dialogs(
             messenger=_enum_value(dialog.messenger),
             title=dialog.title,
             crm_deal_id=dialog.crm_deal_id,
-            deal_url=_deal_url(dialog.crm_deal_id),
+            crm_entity_type=dialog.crm_entity_type,
+            deal_url=_crm_url(dialog.crm_deal_id, dialog.crm_entity_type),
             last_msg_at=dialog.last_msg_at,
             last_message_direction=(_enum_value(last_msg.direction) if last_msg else None),
             last_message_text=last_msg.text if last_msg else None,

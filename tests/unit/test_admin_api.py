@@ -219,7 +219,11 @@ async def test_unlink_max_wipes_credentials(db):
 async def test_settings_default_is_first(db):
     supervisor = await _manager(db, 1)
     result = await admin_api.get_settings(supervisor)
-    assert result == {"timeline_mode": "first", "media_to_timeline": False}
+    assert result == {
+        "timeline_mode": "first",
+        "media_to_timeline": False,
+        "crm_mode": "deal",
+    }
 
 
 @pytest.mark.asyncio
@@ -237,6 +241,20 @@ def test_settings_put_rejects_bad_mode():
 
     with pytest.raises(pydantic.ValidationError):
         admin_api.SettingsIn(timeline_mode="sometimes")
+    with pytest.raises(pydantic.ValidationError):
+        admin_api.SettingsIn(crm_mode="client")
+
+
+@pytest.mark.asyncio
+async def test_settings_crm_mode_roundtrip(db):
+    """Режим карточек (deal|lead) переключается независимо от timeline_mode."""
+    supervisor = await _manager(db, 1)
+    await admin_api.put_settings(admin_api.SettingsIn(crm_mode="lead"), supervisor)
+    result = await admin_api.get_settings(supervisor)
+    assert result["crm_mode"] == "lead"
+    assert result["timeline_mode"] == "first"  # другой режим не тронут
+    await admin_api.put_settings(admin_api.SettingsIn(crm_mode="deal"), supervisor)
+    assert (await admin_api.get_settings(supervisor))["crm_mode"] == "deal"
 
 
 @pytest.mark.asyncio

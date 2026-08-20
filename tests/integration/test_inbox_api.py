@@ -304,6 +304,23 @@ def test_inbox_last_message_preview_and_deal_url(inbox_app):
     assert by_id[22]["deal_url"] is None
 
 
+async def test_inbox_lead_dialog_gets_lead_url(inbox_app):
+    """Диалог, перепривязанный к лиду: ссылка ведёт в карточку лида, тип —
+    в DTO (фронт рисует метку «Лид» вместо «Сделка»)."""
+    from app.models import Dialog
+
+    client, state, SessionLocal = inbox_app
+    state["manager_id"] = 1
+    async with SessionLocal() as s:
+        dlg = await s.get(Dialog, 20)
+        dlg.crm_entity_type = "lead"
+        await s.commit()
+
+    by_id = _all(client.get("/api/inbox/dialogs").json())
+    assert by_id[20]["crm_entity_type"] == "lead"
+    assert by_id[20]["deal_url"] == "https://test-portal.bitrix24.ru/crm/lead/42/view/"
+
+
 def test_supervisor_inbox_lists_all_with_owner_names(inbox_app):
     client, state, _ = inbox_app
     state["manager_id"] = 3

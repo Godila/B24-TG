@@ -63,6 +63,9 @@ class Dialog(Base, TimestampMixin):
     account_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("tg_accounts.id"), nullable=True, index=True
     )
+    # id CRM-сущности диалога; тип — в crm_entity_type ('deal'|'lead').
+    # Колонка исторически называется crm_deal_id — переименование не
+    # окупается (дискриминирующая пара и так контракт с первых ревизий).
     crm_deal_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     crm_entity_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     assigned_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)

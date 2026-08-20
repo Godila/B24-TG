@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.b24.sync import TIMELINE_MODE_DEFAULT, TIMELINE_MODES
+from app.b24.sync import CRM_MODE_DEFAULT, CRM_MODES, TIMELINE_MODE_DEFAULT, TIMELINE_MODES
 from app.bridge.crm_sync_worker import AttachmentMeta, CrmSyncData, CrmSyncRepository
 from app.models import (
     AccountMember,
@@ -31,15 +31,36 @@ TIMELINE_MODE_KEY = "timeline_mode"
 #: crm.timeline.comment.add): "on" | "off". По умолчанию выключено —
 #: диск/квота портала B24 дороже текст-метки «[фото]».
 MEDIA_TO_TIMELINE_KEY = "media_to_timeline"
+#: Какие CRM-карточки заводить новым клиентам: "deal" (контакт+сделка)
+#: или "lead" (только лид). По умолчанию "deal" — прежнее поведение.
+CRM_MODE_KEY = "crm_mode"
+
+
+async def _read_setting(session_factory, key: str) -> str | None:
+    """Прочитать ключ app_settings (нет строки — None)."""
+    async with session_factory() as s:
+        row = (
+            await s.execute(select(AppSetting).where(AppSetting.key == key))
+        ).scalar_one_or_none()
+    return row.value if row is not None else None
+
+
+async def _upsert_setting(session_factory, key: str, value: str) -> None:
+    """Upsert ключа app_settings."""
+    async with session_factory() as s:
+        row = (
+            await s.execute(select(AppSetting).where(AppSetting.key == key))
+        ).scalar_one_or_none()
+        if row is None:
+            s.add(AppSetting(key=key, value=value))
+        else:
+            row.value = value
+        await s.commit()
 
 
 async def get_timeline_mode(session_factory) -> str:
     """Прочитать app_settings.timeline_mode (нет строки/мусор — дефолт)."""
-    async with session_factory() as s:
-        row = (
-            await s.execute(select(AppSetting).where(AppSetting.key == TIMELINE_MODE_KEY))
-        ).scalar_one_or_none()
-    value = row.value if row is not None else None
+    value = await _read_setting(session_factory, TIMELINE_MODE_KEY)
     return value if value in TIMELINE_MODES else TIMELINE_MODE_DEFAULT
 
 
@@ -47,38 +68,30 @@ async def set_timeline_mode(session_factory, mode: str) -> None:
     """Upsert app_settings.timeline_mode (режим обязан быть из TIMELINE_MODES)."""
     if mode not in TIMELINE_MODES:
         raise ValueError(f"bad timeline_mode: {mode!r}")
-    async with session_factory() as s:
-        row = (
-            await s.execute(select(AppSetting).where(AppSetting.key == TIMELINE_MODE_KEY))
-        ).scalar_one_or_none()
-        if row is None:
-            s.add(AppSetting(key=TIMELINE_MODE_KEY, value=mode))
-        else:
-            row.value = mode
-        await s.commit()
+    await _upsert_setting(session_factory, TIMELINE_MODE_KEY, mode)
 
 
 async def get_media_to_timeline(session_factory) -> bool:
     """Прочитать app_settings.media_to_timeline (нет строки/мусор — выкл)."""
-    async with session_factory() as s:
-        row = (
-            await s.execute(select(AppSetting).where(AppSetting.key == MEDIA_TO_TIMELINE_KEY))
-        ).scalar_one_or_none()
-    return row is not None and row.value == "on"
+    return await _read_setting(session_factory, MEDIA_TO_TIMELINE_KEY) == "on"
 
 
 async def set_media_to_timeline(session_factory, enabled: bool) -> None:
     """Upsert app_settings.media_to_timeline."""
-    value = "on" if enabled else "off"
-    async with session_factory() as s:
-        row = (
-            await s.execute(select(AppSetting).where(AppSetting.key == MEDIA_TO_TIMELINE_KEY))
-        ).scalar_one_or_none()
-        if row is None:
-            s.add(AppSetting(key=MEDIA_TO_TIMELINE_KEY, value=value))
-        else:
-            row.value = value
-        await s.commit()
+    await _upsert_setting(session_factory, MEDIA_TO_TIMELINE_KEY, "on" if enabled else "off")
+
+
+async def get_crm_mode(session_factory) -> str:
+    """Прочитать app_settings.crm_mode (нет строки/мусор — дефолт 'deal')."""
+    value = await _read_setting(session_factory, CRM_MODE_KEY)
+    return value if value in CRM_MODES else CRM_MODE_DEFAULT
+
+
+async def set_crm_mode(session_factory, mode: str) -> None:
+    """Upsert app_settings.crm_mode (режим обязан быть из CRM_MODES)."""
+    if mode not in CRM_MODES:
+        raise ValueError(f"bad crm_mode: {mode!r}")
+    await _upsert_setting(session_factory, CRM_MODE_KEY, mode)
 
 
 class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
@@ -227,7 +240,7 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
             sender_last_name=row.last_name,
             sender_username=row.username,
             crm_contact_id=row.crm_contact_id,
-            crm_deal_id=row.crm_deal_id,
+            crm_entity_id=row.crm_deal_id,
             crm_entity_type=row.crm_entity_type,
             assigned_b24_user_id=row.b24_user_id,
             notify_user_ids=notify_ids,
@@ -248,14 +261,15 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
         message_id: int,
         *,
         contact_id: int | None,
-        deal_id: int | None,
+        crm_entity_type: str | None,
+        crm_entity_id: int | None,
         timeline_comment_id: int | None,
     ) -> None:
         """Применить SyncResult к нашей БД.
 
         Обновляем только переданные поля (None — не трогаем), по цепочке
-        Message -> Dialog -> Contact. crm_entity_type='deal' — так же, как
-        это делал inbound-persist до выноса CRM из пути сообщения.
+        Message -> Dialog -> Contact. crm_entity_type ('deal'|'lead')
+        дискриминирует id в колонке dialogs.crm_deal_id.
         """
         dialog_id = await self._session.scalar(
             select(Message.dialog_id).where(Message.id == message_id)
@@ -272,11 +286,14 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
                 .where(Message.id == message_id)
                 .values(timeline_comment_id=timeline_comment_id)
             )
-        if dialog_id is not None and deal_id is not None:
+        if dialog_id is not None and crm_entity_id is not None:
             await self._session.execute(
                 update(Dialog)
                 .where(Dialog.id == dialog_id)
-                .values(crm_deal_id=deal_id, crm_entity_type="deal")
+                .values(
+                    crm_deal_id=crm_entity_id,
+                    crm_entity_type=crm_entity_type or "deal",
+                )
             )
         if contact_pk is not None and contact_id is not None:
             await self._session.execute(
@@ -314,6 +331,9 @@ class WorkerCrmSyncRepository(CrmSyncRepository):
     async def get_media_to_timeline(self) -> bool:
         return await get_media_to_timeline(self._session_factory)
 
+    async def get_crm_mode(self) -> str:
+        return await get_crm_mode(self._session_factory)
+
     async def mark_done(self, item: CrmSyncItem) -> None:
         async with self._session_factory() as s:
             await SqlAlchemyCrmSyncRepository(s).mark_done(item)
@@ -348,14 +368,16 @@ class WorkerCrmSyncRepository(CrmSyncRepository):
         message_id: int,
         *,
         contact_id: int | None,
-        deal_id: int | None,
+        crm_entity_type: str | None,
+        crm_entity_id: int | None,
         timeline_comment_id: int | None,
     ) -> None:
         async with self._session_factory() as s:
             await SqlAlchemyCrmSyncRepository(s).apply_inbound_result(
                 message_id,
                 contact_id=contact_id,
-                deal_id=deal_id,
+                crm_entity_type=crm_entity_type,
+                crm_entity_id=crm_entity_id,
                 timeline_comment_id=timeline_comment_id,
             )
 

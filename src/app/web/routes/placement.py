@@ -1,4 +1,4 @@
-"""Placement-обработчик Bitrix24: вкладка чата в карточке сделки (CRM_DEAL_DETAIL_TAB).
+"""Placement-обработчик Bitrix24: вкладка чата в карточках CRM (сделка/лид).
 
 B24 открывает этот URL в iFrame и POST'ит form-data (плоские поля, см.
 apidocs.bitrix24.ru «Что получает обработчик встройки»):
@@ -37,7 +37,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/placement", tags=["placement"])
 
-_PLACEMENT_CODE = "CRM_DEAL_DETAIL_TAB"
+# Точки встройки чат-виджета: тип сущности берём из кода placement —
+# B24 сам говорит, в карточке чего открыт фрейм.
+_PLACEMENT_CODES = {"CRM_DEAL_DETAIL_TAB": "deal", "CRM_LEAD_DETAIL_TAB": "lead"}
 _ADMIN_PLACEMENT_CODE = "LEFT_MENU"
 
 # Кэш «AUTH_ID → b24_user_id» с TTL: B24 переиспользует access-токен между
@@ -180,20 +182,26 @@ def _chat_html() -> str:
 
 
 def _set_session_and_respond(
-    b24_user_id: int, deal_id: int | None, html: str | None = None
+    b24_user_id: int, deal_id: int | None, html: str | None = None, entity_type: str = "deal"
 ) -> HTMLResponse | JSONResponse:
     """Поставить сессионную куку и вернуть HTML-страницу одним ответом.
 
     Кука в том же ответе, что и HTML — важно для iFrame (редирект на
     /static/ внутри iFrame мог бы потерять SameSite-контекст).
-    html=None — чат-виджет сделки: deal_id инжектится как data-deal-id на
-    <body> (URL внутри iframe фиксирован, фронт читает атрибут; dev-вход
-    идёт через ?deal_id= в URL).
+    html=None — чат-виджет карточки CRM: deal_id и тип сущности
+    инжектятся как data-deal-id/data-entity-type на <body> (URL внутри
+    iframe фиксирован, фронт читает атрибуты; dev-вход идёт через
+    ?deal_id= в URL). Ключ deal_id в payload куки сервером не читается —
+    не трогаем ради косметики подписанную куку.
     """
     if html is None:
         html = _chat_html()
         if deal_id is not None:
-            html = html.replace("<body>", f'<body data-deal-id="{deal_id}">', 1)
+            html = html.replace(
+                "<body>",
+                f'<body data-deal-id="{deal_id}" data-entity-type="{entity_type}">',
+                1,
+            )
     settings = get_settings()
     resp = HTMLResponse(content=html)
     resp.set_cookie(
@@ -352,8 +360,11 @@ async def placement_deal_post(
 
     Прод: личность — user.current по AUTH_ID (живая кука — без B24-вызова).
     Dev: user_id из legacy AUTH-JSON (локальные тесты виджета без реального B24).
+    Тип сущности — из кода placement (сделка или лид), значение из карты
+    _PLACEMENT_CODES, в HTML-атрибут попадает только оно.
     """
-    if placement != _PLACEMENT_CODE:
+    entity_type = _PLACEMENT_CODES.get(placement)
+    if entity_type is None:
         return JSONResponse(
             {"error": f"unexpected placement: {placement!r}"},
             status_code=400,
@@ -376,13 +387,16 @@ async def placement_deal_post(
         deal_id,
         b24_user_id,
     )
-    return _set_session_and_respond(b24_user_id=b24_user_id, deal_id=deal_id)
+    return _set_session_and_respond(
+        b24_user_id=b24_user_id, deal_id=deal_id, entity_type=entity_type
+    )
 
 
 @router.get("/deal", response_model=None)
 async def placement_deal_dev(
     deal_id: int | None = Query(default=None),
     b24_user_id: int | None = Query(default=None),
+    entity_type: str = Query(default="deal", pattern="^(deal|lead)$"),
 ) -> HTMLResponse | JSONResponse:
     """Dev-режим: открыть placement локально без B24 POST.
 
@@ -393,4 +407,6 @@ async def placement_deal_dev(
         return JSONResponse({"error": "dev mode disabled"}, status_code=404)
     if b24_user_id is None:
         return JSONResponse({"error": "b24_user_id required"}, status_code=400)
-    return _set_session_and_respond(b24_user_id=b24_user_id, deal_id=deal_id)
+    return _set_session_and_respond(
+        b24_user_id=b24_user_id, deal_id=deal_id, entity_type=entity_type
+    )

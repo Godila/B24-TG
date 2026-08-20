@@ -180,6 +180,7 @@ async def list_dialogs(
     manager: ManagerDep,
     session: SessionDep,
     deal_id: int | None = Query(default=None),
+    entity_type: str = Query(default="deal", pattern="^(deal|lead)$"),
 ) -> list[DialogOut]:
     stmt = (
         select(Dialog, Contact)
@@ -187,7 +188,15 @@ async def list_dialogs(
         .where(_visible_dialogs_cond(manager))
     )
     if deal_id is not None:
-        stmt = stmt.where(Dialog.crm_deal_id == deal_id)
+        # id-пространства сделок и лидов независимы — фильтруем и типом;
+        # legacy-строки без crm_entity_type считаются сделками.
+        if entity_type == "lead":
+            stmt = stmt.where(Dialog.crm_deal_id == deal_id, Dialog.crm_entity_type == "lead")
+        else:
+            stmt = stmt.where(
+                Dialog.crm_deal_id == deal_id,
+                or_(Dialog.crm_entity_type == "deal", Dialog.crm_entity_type.is_(None)),
+            )
     stmt = stmt.order_by(Dialog.last_msg_at.desc().nullslast(), Dialog.id.desc())
     result = await session.execute(stmt)
     participant_accounts = set(

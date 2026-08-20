@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from app.b24.sync import Bitrix24Sync
+from app.b24.sync import CRM_MODE_DEFAULT, Bitrix24Sync
 from app.models import KIND_INBOUND, CrmSyncItem, Messenger
 
 if TYPE_CHECKING:  # pragma: no cover - только для type-checker
@@ -56,8 +56,8 @@ class CrmSyncData:
     sender_name: str | None  # Contact.name (для входящих)
     sender_phone: str | None  # Contact.phone (для входящих)
     crm_contact_id: int | None  # Contact.crm_contact_id (для исходящих)
-    crm_deal_id: int | None  # Dialog.crm_deal_id
-    crm_entity_type: str | None  # Dialog.crm_entity_type
+    crm_entity_id: int | None  # Dialog.crm_deal_id (id сущности из crm_entity_type)
+    crm_entity_type: str | None  # Dialog.crm_entity_type ('deal'|'lead')
     # Ответственный диалога (None у общего номера) → ASSIGNED_BY_ID CRM.
     assigned_b24_user_id: int | None
     #: Кому в B24-чат падает уведомление о новом клиенте: ответственному,
@@ -93,7 +93,8 @@ class CrmSyncRepository:
         message_id: int,
         *,
         contact_id: int | None,
-        deal_id: int | None,
+        crm_entity_type: str | None,
+        crm_entity_id: int | None,
         timeline_comment_id: int | None,
     ) -> None:
         """Записать SyncResult в нашу БД (Message/Contact/Dialog)."""
@@ -113,6 +114,12 @@ class CrmSyncRepository:
         """Грузить ли файлы вложений в timeline-комментарии (default: нет —
         фейки в тестах наследуют прежнее текст-меточное поведение)."""
         return False
+
+    async def get_crm_mode(self) -> str:
+        """Какие карточки заводить новым клиентам (app_settings.crm_mode).
+
+        Дефолт CRM_MODE_DEFAULT — фейки в тестах наследуют режим 'deal'."""
+        return CRM_MODE_DEFAULT
 
 
 class CrmSyncWorker:
@@ -165,10 +172,11 @@ class CrmSyncWorker:
         # Режимы читаем раз на батч (настройки меняются редко).
         timeline_mode = await self._repo.get_timeline_mode()
         media_to_timeline = await self._repo.get_media_to_timeline()
+        crm_mode = await self._repo.get_crm_mode()
         items = await self._repo.fetch_due(self._batch_size)
         for item in items:
             if item.kind == KIND_INBOUND:
-                await self._handle_inbound(item, timeline_mode, media_to_timeline)
+                await self._handle_inbound(item, timeline_mode, media_to_timeline, crm_mode)
             else:
                 await self._handle_outbound(item, timeline_mode, media_to_timeline)
 
@@ -210,7 +218,7 @@ class CrmSyncWorker:
         return files
 
     async def _handle_inbound(
-        self, item: CrmSyncItem, timeline_mode: str, media_to_timeline: bool
+        self, item: CrmSyncItem, timeline_mode: str, media_to_timeline: bool, crm_mode: str
     ) -> None:
         data = await self._repo.collect(item.message_id)
         if data is None:
@@ -232,7 +240,9 @@ class CrmSyncWorker:
                 notify_user_ids=data.notify_user_ids,
                 messenger=data.messenger,
                 existing_contact_id=data.crm_contact_id,
-                existing_deal_id=data.crm_deal_id,
+                existing_entity_id=data.crm_entity_id,
+                existing_entity_type=data.crm_entity_type,
+                crm_mode=crm_mode,
                 timeline_mode=timeline_mode,
                 sender_first_name=data.sender_first_name,
                 sender_last_name=data.sender_last_name,
@@ -247,7 +257,8 @@ class CrmSyncWorker:
             await self._repo.apply_inbound_result(
                 item.message_id,
                 contact_id=result.contact_id,
-                deal_id=result.deal_id,
+                crm_entity_type=result.crm_entity_type,
+                crm_entity_id=result.crm_entity_id,
                 timeline_comment_id=result.timeline_comment_id,
             )
         except Exception as exc:  # noqa: BLE001 — очередь обязана пережить любой сбой B24
@@ -271,7 +282,7 @@ class CrmSyncWorker:
 
         try:
             comment_id = await self._b24sync.process_outbound(
-                dialog_deal_id=data.crm_deal_id,
+                dialog_entity_id=data.crm_entity_id,
                 dialog_entity_type=data.crm_entity_type,
                 contact_id=data.crm_contact_id,
                 text=data.message_text or "",

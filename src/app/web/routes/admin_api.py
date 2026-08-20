@@ -15,7 +15,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.b24.client import Bitrix24Client, Bitrix24Error
-from app.b24.sync import TIMELINE_MODES
+from app.b24.sync import CRM_MODES, TIMELINE_MODES
 from app.b24.token_manager import TokenManager
 from app.b24.users import fetch_b24_users, is_last_active_supervisor, upsert_managers_from_b24
 from app.db import async_session
@@ -101,38 +101,47 @@ async def me(manager: ManagerDep) -> dict:
 # Панель администратора (SupervisorDep)
 # ---------------------------------------------------------------------- #
 class SettingsIn(BaseModel):
-    # Список режимов — единственный источник истины TIMELINE_MODES в
-    # b24/sync.py; regex собираем из него, чтобы не дублировать руками.
-    # Оба поля опциональны: PUT применяет только переданные (панель шлёт
-    # тот контрол, который меняли).
+    # Списки режимов — единственный источник истины (TIMELINE_MODES /
+    # CRM_MODES в b24/sync.py); regex собираем из них, чтобы не
+    # дублировать руками. Все поля опциональны: PUT применяет только
+    # переданные (панель шлёт тот контрол, который меняли).
     timeline_mode: str | None = Field(default=None, pattern="^(" + "|".join(TIMELINE_MODES) + ")$")
     media_to_timeline: bool | None = None
+    crm_mode: str | None = Field(default=None, pattern="^(" + "|".join(CRM_MODES) + ")$")
 
 
 @router.get("/settings", response_model=None)
 async def get_settings(supervisor: SupervisorDep) -> dict:
     """Глобальные настройки приложения (для supervisor-панели)."""
-    from app.bridge.crm_sync_repo import get_media_to_timeline, get_timeline_mode
+    from app.bridge.crm_sync_repo import get_crm_mode, get_media_to_timeline, get_timeline_mode
 
     return {
         "timeline_mode": await get_timeline_mode(async_session),
         "media_to_timeline": await get_media_to_timeline(async_session),
+        "crm_mode": await get_crm_mode(async_session),
     }
 
 
 @router.put("/settings", response_model=None)
 async def put_settings(body: SettingsIn, supervisor: SupervisorDep) -> dict:
-    from app.bridge.crm_sync_repo import set_media_to_timeline, set_timeline_mode
+    from app.bridge.crm_sync_repo import set_crm_mode, set_media_to_timeline, set_timeline_mode
 
-    if body.timeline_mode is None and body.media_to_timeline is None:
+    if (
+        body.timeline_mode is None
+        and body.media_to_timeline is None
+        and body.crm_mode is None
+    ):
         raise HTTPException(status_code=422, detail="Нечего обновлять")
     if body.timeline_mode is not None:
         await set_timeline_mode(async_session, body.timeline_mode)
     if body.media_to_timeline is not None:
         await set_media_to_timeline(async_session, body.media_to_timeline)
+    if body.crm_mode is not None:
+        await set_crm_mode(async_session, body.crm_mode)
     return {
         "timeline_mode": body.timeline_mode,
         "media_to_timeline": body.media_to_timeline,
+        "crm_mode": body.crm_mode,
     }
 
 

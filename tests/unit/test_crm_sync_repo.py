@@ -215,7 +215,7 @@ async def test_collect_joins_message_dialog_contact_manager(session):
     assert data.assigned_b24_user_id == 15
     assert data.messenger is Messenger.tg
     assert data.crm_contact_id is None
-    assert data.crm_deal_id is None
+    assert data.crm_entity_id is None
 
 
 @pytest.mark.asyncio
@@ -232,7 +232,8 @@ async def test_apply_inbound_result_updates_all_three_rows(session):
     await repo.apply_inbound_result(
         100,
         contact_id=42,
-        deal_id=500,
+        crm_entity_type="deal",
+        crm_entity_id=500,
         timeline_comment_id=999,
     )
 
@@ -247,8 +248,30 @@ async def test_apply_inbound_result_updates_all_three_rows(session):
 
 
 @pytest.mark.asyncio
+async def test_apply_inbound_result_lead_entity(session):
+    """Lead-режим: id лида живёт в той же колонке crm_deal_id, тип — 'lead'."""
+    await _seed_message(session)
+    repo = SqlAlchemyCrmSyncRepository(session)
+
+    await repo.apply_inbound_result(
+        100,
+        contact_id=None,
+        crm_entity_type="lead",
+        crm_entity_id=55,
+        timeline_comment_id=None,
+    )
+
+    await session.reset()
+    dialog = await session.get(Dialog, 50)
+    contact = await session.get(Contact, 10)
+    assert dialog.crm_deal_id == 55
+    assert dialog.crm_entity_type == "lead"
+    assert contact.crm_contact_id is None  # контакт не тронут
+
+
+@pytest.mark.asyncio
 async def test_apply_inbound_result_none_fields_untouched(session):
-    """deal_id=None не затирает существующую привязку диалога к сделке."""
+    """crm_entity_id=None не затирает существующую привязку диалога."""
     await _seed_message(session)
     dialog = await session.get(Dialog, 50)
     dialog.crm_deal_id = 77
@@ -259,7 +282,8 @@ async def test_apply_inbound_result_none_fields_untouched(session):
     await repo.apply_inbound_result(
         100,
         contact_id=42,
-        deal_id=None,
+        crm_entity_type=None,
+        crm_entity_id=None,
         timeline_comment_id=None,
     )
 
@@ -321,7 +345,7 @@ async def test_collect_without_attachments_empty_list(session):
 
 @pytest.mark.asyncio
 async def test_media_to_timeline_setting_roundtrip(session):
-    """app_settings.media_to_timeline: off по умолчанию, upertится."""
+    """app_settings.media_to_timeline: off по умолчанию, upsertится."""
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
     from app.bridge.crm_sync_repo import (
@@ -336,3 +360,30 @@ async def test_media_to_timeline_setting_roundtrip(session):
     assert await get_media_to_timeline(factory) is True
     await set_media_to_timeline(factory, False)
     assert await get_media_to_timeline(factory) is False
+
+
+@pytest.mark.asyncio
+async def test_crm_mode_setting_roundtrip(session):
+    """app_settings.crm_mode: 'deal' по умолчанию, мусор — дефолт, upsert."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.bridge.crm_sync_repo import get_crm_mode, set_crm_mode
+
+    factory = async_sessionmaker(bind=session.bind, expire_on_commit=False)
+
+    assert await get_crm_mode(factory) == "deal"
+    await set_crm_mode(factory, "lead")
+    assert await get_crm_mode(factory) == "lead"
+    # Мусор в таблице — fail-closed дефолт.
+    from sqlalchemy import update
+
+    from app.models import AppSetting
+
+    async with factory() as s:
+        await s.execute(
+            update(AppSetting).where(AppSetting.key == "crm_mode").values(value="junk")
+        )
+        await s.commit()
+    assert await get_crm_mode(factory) == "deal"
+    with pytest.raises(ValueError):
+        await set_crm_mode(factory, "client")

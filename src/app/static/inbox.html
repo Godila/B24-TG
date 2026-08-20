@@ -110,7 +110,8 @@
                   x-text="'отвечает: ' + (dialog?.assigned_manager_name || '—')"></span>
           </span>
         <a class="deal-link" x-show="dialog?.deal_url" :href="dialog?.deal_url"
-           target="_blank" rel="noopener">Сделка
+           target="_blank" rel="noopener"><span
+           x-text="dialog?.crm_entity_type === 'lead' ? 'Лид' : 'Сделка'">Сделка</span>
           <svg class="i" aria-hidden="true"><use href="/static/icons.svg#external"/></svg></a>
         </div>
         <div class="status" x-show="!dialog && !loading">

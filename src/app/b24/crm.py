@@ -1,14 +1,14 @@
-"""CRM-операции Bitrix24: поиск/создание контакта, создание сделки, timeline."""
+"""CRM-операции Bitrix24: контакты, сделки, лиды, timeline."""
 
 from typing import Any
 
 from app.b24.client import Bitrix24Client, Bitrix24Error
 
-# entityTypeId для универсального метода crm.item.add
-ENTITY_LEAD = 1
+# entityTypeId для универсального метода crm.item.add. Лид (1) сюда НЕ
+# входит: item.add молча теряет PHONE/IM — лиды ходят классическим
+# crm.lead.* (см. create_lead).
 ENTITY_DEAL = 2
 ENTITY_CONTACT = 3
-ENTITY_COMPANY = 4
 
 
 class ContactInfo:
@@ -29,6 +29,26 @@ class DealInfo:
     def __init__(self, id: int, title: str | None = None):
         self.id = id
         self.title = title
+
+
+class LeadInfo:
+    """Результат поиска/чтения лида (режим crm_mode=lead).
+
+    status_id/contact_id заполняются только из crm.lead.get — по ним
+    оркестрация понимает, что лид сконвертирован и где его контакт.
+    """
+
+    __slots__ = ("contact_id", "id", "status_id")
+
+    def __init__(
+        self,
+        id: int,
+        status_id: str | None = None,
+        contact_id: int | None = None,
+    ):
+        self.id = id
+        self.status_id = status_id
+        self.contact_id = contact_id
 
 
 def _contact_display_name(detail: dict) -> str | None:
@@ -62,9 +82,10 @@ class CrmService:
         if not result:
             return None
 
-        contact_id = self._extract_contact_id(result)
-        if not contact_id:
+        ids = self._extract_entity_ids(result, "CONTACT")
+        if not ids:
             return None
+        contact_id = ids[0]
 
         # Достаём имя контакта через crm.contact.get.
         detail = await self._client.call(
@@ -77,20 +98,26 @@ class CrmService:
         return ContactInfo(id=contact_id, name=_contact_display_name(detail))
 
     @staticmethod
-    def _extract_contact_id(result: Any) -> int | None:
-        """Извлечь ID контакта из ответа findbyComm произвольной формы."""
+    def _extract_entity_ids(result: Any, key: str) -> list[int]:
+        """ID-шники сущности из ответа findbyComm (fail-closed: мусор мимо)."""
         # Реальная форма: {"CONTACT": [275, 2297], "LEAD": [...]}
         if isinstance(result, dict):
-            ids = result.get("CONTACT") or result.get("contact") or []
-            return int(ids[0]) if ids else None
+            raw = result.get(key.upper()) or result.get(key.lower()) or []
+            ids: list[int] = []
+            for v in raw:
+                try:
+                    ids.append(int(v))
+                except (TypeError, ValueError):
+                    continue
+            return ids
         # Тестовая/legacy форма: список контактов с полями ID/NAME.
         if isinstance(result, list) and result:
             first = result[0]
             if isinstance(first, dict):
                 raw = first.get("ID") or first.get("id") or 0
-                return int(raw) if raw else None
-            return int(first)  # список ID
-        return None
+                return [int(raw)] if raw else []
+            return [int(first)]  # список ID
+        return []
 
     async def get_contact(self, auth_token: str, contact_id: int) -> ContactInfo | None:
         """Контакт по id (для проверки существующей CRM-связки).
@@ -108,6 +135,34 @@ class CrmService:
         if not isinstance(detail, dict):
             return None
         return ContactInfo(id=contact_id, name=_contact_display_name(detail))
+
+    async def _add_with_source_fallback(
+        self,
+        auth_token: str,
+        method: str,
+        fields: dict[str, Any],
+        source: str | None,
+        *,
+        extra_params: dict[str, Any] | None = None,
+    ) -> Any:
+        """crm.*.add с SOURCE_ID и одним тихим ретраем без него.
+
+        Источника может не быть в справочнике портала (например, MAX до
+        запуска scripts/add_max_source.py) — косметика не должна ронять
+        создание карточки.
+        """
+        if source:
+            fields = {**fields, "SOURCE_ID": source.upper()}
+        params: dict[str, Any] = {"fields": fields}
+        if extra_params:
+            params.update(extra_params)
+        try:
+            return await self._client.call(method, auth_token=auth_token, params=params)
+        except Bitrix24Error as exc:
+            if not source or "SOURCE" not in str(exc).upper():
+                raise
+            params["fields"] = {k: v for k, v in fields.items() if k != "SOURCE_ID"}
+            return await self._client.call(method, auth_token=auth_token, params=params)
 
     async def create_contact(
         self,
@@ -142,25 +197,7 @@ class CrmService:
             fields["IM"] = [{"VALUE": username, "VALUE_TYPE": "TELEGRAM"}]
         # SOURCE_ID обязан существовать в справочнике портала; для каналов без
         # своего источника просто не передаём — B24 возьмёт дефолт.
-        if source:
-            fields["SOURCE_ID"] = source.upper()
-        try:
-            result = await self._client.call(
-                "crm.contact.add",
-                auth_token=auth_token,
-                params={"fields": fields},
-            )
-        except Bitrix24Error as exc:
-            # Источника может не быть в справочнике (например, MAX до запуска
-            # scripts/add_max_source.py) — косметика не должна ронять создание
-            # карточки: ретраим один раз без SOURCE_ID.
-            if not source or "SOURCE" not in str(exc).upper():
-                raise
-            result = await self._client.call(
-                "crm.contact.add",
-                auth_token=auth_token,
-                params={"fields": {k: v for k, v in fields.items() if k != "SOURCE_ID"}},
-            )
+        result = await self._add_with_source_fallback(auth_token, "crm.contact.add", fields, source)
         # crm.contact.add возвращает id напрямую (не {"item": {...}}).
         return ContactInfo(
             id=int(result),
@@ -196,6 +233,7 @@ class CrmService:
         title: str,
         contact_id: int,
         assigned_by_id: int | None,
+        source: str | None = None,
     ) -> DealInfo:
         fields: dict[str, Any] = {
             "TITLE": title,
@@ -204,13 +242,106 @@ class CrmService:
         }
         if assigned_by_id is not None:
             fields["ASSIGNED_BY_ID"] = assigned_by_id
-        result = await self._client.call(
+        result = await self._add_with_source_fallback(
+            auth_token,
             "crm.item.add",
-            auth_token=auth_token,
-            params={"entityTypeId": ENTITY_DEAL, "fields": fields},
+            fields,
+            source,
+            extra_params={"entityTypeId": ENTITY_DEAL},
         )
         item = result.get("item", result) if isinstance(result, dict) else {}
         return DealInfo(id=int(item.get("id", 0)), title=item.get("title"))
+
+    async def find_reusable_lead_by_phone(self, auth_token: str, phone: str) -> LeadInfo | None:
+        """Пригодный для продолжения лид по телефону (crm_mode=lead).
+
+        findbyComm отдаёт LEAD-иды без статусов — вторым запросом crm.lead.list
+        берём новейший не-конвертированный/не-мусорный. Пустой телефон (MAX) —
+        None без вызовов: матчинг ненадёжнее дублей.
+        """
+        if not phone:
+            return None
+        result = await self._client.call(
+            "crm.duplicate.findbyComm",
+            auth_token=auth_token,
+            params={"type": "PHONE", "values": [phone]},
+        )
+        ids = self._extract_entity_ids(result, "LEAD")
+        if not ids:
+            return None
+        items = await self._client.call(
+            "crm.lead.list",
+            auth_token=auth_token,
+            params={
+                # CONVERTED/JUNK — системные литералы, не зависят от локали портала.
+                "filter": {"ID": ids, "!@STATUS_ID": ["CONVERTED", "JUNK"]},
+                "order": {"ID": "desc"},
+                "select": ["ID"],
+            },
+        )
+        items = items if isinstance(items, list) else []
+        if not items:
+            return None
+        try:
+            return LeadInfo(id=int(items[0]["ID"]))
+        except (KeyError, TypeError, ValueError):
+            return None  # мусорный ответ — считаем «лида нет»
+
+    async def get_lead(self, auth_token: str, lead_id: int) -> LeadInfo | None:
+        """Лид по id (проверка живой привязки диалога). None — удалён/недоступен."""
+        try:
+            detail = await self._client.call(
+                "crm.lead.get",
+                auth_token=auth_token,
+                params={"id": lead_id},
+            )
+        except Exception:  # noqa: BLE001 - лид мог быть удалён в B24
+            return None
+        if not isinstance(detail, dict):
+            return None
+        contact_raw = detail.get("CONTACT_ID")  # бывает "", "42", int или null
+        try:
+            contact_id = int(contact_raw) if contact_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            contact_id = None
+        status = detail.get("STATUS_ID")
+        return LeadInfo(
+            id=lead_id,
+            status_id=str(status).upper() if status else None,
+            contact_id=contact_id,
+        )
+
+    async def create_lead(
+        self,
+        auth_token: str,
+        *,
+        title: str,
+        phone: str,
+        assigned_by_id: int | None,
+        source: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        username: str | None = None,
+    ) -> LeadInfo:
+        """Создать лид (классический crm.lead.add, режим «Лиды»).
+
+        НЕ crm.item.add: универсальный метод молча выбрасывает мульти-поля
+        PHONE/IM (та же прод-грабля, что у контактов). ``title`` — имя
+        клиента: канал уходит в SOURCE_ID, не в название; при наличии
+        раздельных first/last пишем их в NAME/LAST_NAME лида.
+        """
+        fields: dict[str, Any] = {"TITLE": title, "OPENED": "Y", "NAME": first_name or title}
+        if last_name:
+            fields["LAST_NAME"] = last_name
+        if assigned_by_id is not None:
+            fields["ASSIGNED_BY_ID"] = assigned_by_id
+        if phone:
+            fields["PHONE"] = [{"VALUE": phone, "VALUE_TYPE": "MOBILE"}]
+        if username:
+            fields["IM"] = [{"VALUE": username, "VALUE_TYPE": "TELEGRAM"}]
+        result = await self._add_with_source_fallback(auth_token, "crm.lead.add", fields, source)
+        # crm.lead.add возвращает id напрямую (не {"item": {...}}).
+        return LeadInfo(id=int(result))
 
     async def add_timeline_comment(
         self,

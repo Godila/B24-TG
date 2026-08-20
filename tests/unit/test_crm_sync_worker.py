@@ -34,7 +34,7 @@ def _make_data(**kw) -> CrmSyncData:
         "sender_name": "Иван",
         "sender_phone": "+79991234567",
         "crm_contact_id": 42,
-        "crm_deal_id": 100,
+        "crm_entity_id": 100,
         "crm_entity_type": "deal",
         "assigned_b24_user_id": 15,
         "notify_user_ids": [15],
@@ -55,6 +55,7 @@ def _make_repo(items, data) -> AsyncMock:
     repo.set_timeline_comment = AsyncMock()
     repo.get_timeline_mode = AsyncMock(return_value="all")
     repo.get_media_to_timeline = AsyncMock(return_value=False)
+    repo.get_crm_mode = AsyncMock(return_value="deal")
     return repo
 
 
@@ -67,8 +68,9 @@ async def test_inbound_success_applies_result_and_marks_done():
     sync = AsyncMock()
     sync.process_inbound = AsyncMock(
         return_value=SyncResult(
+            crm_entity_type="deal",
+            crm_entity_id=100,
             contact_id=42,
-            deal_id=100,
             is_new=True,
             timeline_comment_id=999,
         )
@@ -85,7 +87,8 @@ async def test_inbound_success_applies_result_and_marks_done():
     repo.apply_inbound_result.assert_awaited_once_with(
         11,
         contact_id=42,
-        deal_id=100,
+        crm_entity_type="deal",
+        crm_entity_id=100,
         timeline_comment_id=999,
     )
     repo.mark_done.assert_awaited_once()
@@ -220,7 +223,7 @@ async def test_outbound_success_sets_comment_and_marks_done():
     await worker._process_once()
 
     sync.process_outbound.assert_awaited_once_with(
-        dialog_deal_id=100,
+        dialog_entity_id=100,
         dialog_entity_type="deal",
         contact_id=42,
         text="Ответ менеджера",
@@ -237,7 +240,7 @@ async def test_outbound_without_entity_done_without_comment():
     (для исходящих это не ошибка)."""
     repo = _make_repo(
         [_make_item(kind=KIND_OUTBOUND)],
-        _make_data(crm_deal_id=None, crm_entity_type=None, crm_contact_id=None),
+        _make_data(crm_entity_id=None, crm_entity_type=None, crm_contact_id=None),
     )
     sync = AsyncMock()
     sync.process_outbound = AsyncMock(return_value=None)
@@ -286,7 +289,7 @@ async def test_worker_passes_timeline_mode_to_sync():
     repo.get_timeline_mode = AsyncMock(return_value="first")
     sync = AsyncMock()
     sync.process_inbound = AsyncMock(
-        return_value=SyncResult(contact_id=42, deal_id=100, is_new=True)
+        return_value=SyncResult(crm_entity_type="deal", crm_entity_id=100, contact_id=42, is_new=True)
     )
 
     worker = CrmSyncWorker(repo=repo, b24sync=sync, max_attempts=5)
@@ -306,7 +309,7 @@ async def test_inbound_passes_channel_profile_fields():
     repo = _make_repo([_make_item()], data)
     sync = AsyncMock()
     sync.process_inbound = AsyncMock(
-        return_value=SyncResult(contact_id=42, deal_id=100, is_new=True)
+        return_value=SyncResult(crm_entity_type="deal", crm_entity_id=100, contact_id=42, is_new=True)
     )
     worker = CrmSyncWorker(repo=repo, b24sync=sync, max_attempts=5)
     await worker._process_once()
@@ -315,6 +318,35 @@ async def test_inbound_passes_channel_profile_fields():
     assert call["sender_first_name"] == "Иван"
     assert call["sender_last_name"] == "Петров"
     assert call["sender_username"] == "ivan_p"
+
+
+@pytest.mark.asyncio
+async def test_worker_passes_crm_mode_and_entity_binding():
+    """crm_mode из repo.get_crm_mode() + тип/id сущности из collect доезжают
+    до process_inbound; тип результата — до apply_inbound_result."""
+    data = _make_data(crm_entity_id=55, crm_entity_type="lead")
+    repo = _make_repo([_make_item()], data)
+    repo.get_crm_mode = AsyncMock(return_value="lead")
+    sync = AsyncMock()
+    sync.process_inbound = AsyncMock(
+        return_value=SyncResult(
+            crm_entity_type="lead", crm_entity_id=55, contact_id=None, is_new=True
+        )
+    )
+    worker = CrmSyncWorker(repo=repo, b24sync=sync, max_attempts=5)
+    await worker._process_once()
+
+    call = sync.process_inbound.call_args.kwargs
+    assert call["crm_mode"] == "lead"
+    assert call["existing_entity_id"] == 55
+    assert call["existing_entity_type"] == "lead"
+    repo.apply_inbound_result.assert_awaited_once_with(
+        11,
+        contact_id=None,
+        crm_entity_type="lead",
+        crm_entity_id=55,
+        timeline_comment_id=None,
+    )
 
 
 # ---------------------------------------------------------------------- #

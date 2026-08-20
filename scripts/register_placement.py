@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Регистрация placement-виджетов «ЧатМост» в Bitrix24 (один раз при установке).
 
-Биндит обе точки:
-- CRM_DEAL_DETAIL_TAB → /placement/deal — вкладка «ЧатМост» в карточке сделки;
+Биндит точки:
+- CRM_DEAL_DETAIL_TAB и CRM_LEAD_DETAIL_TAB → /placement/deal — вкладка
+  «ЧатМост» в карточках сделки и лида (тип сущности хендлер узнаёт из
+  кода placement);
 - LEFT_MENU → /placement/admin — пункт «ЧатМост» в главном меню портала
   (панель управления внутри интерфейса B24).
 
@@ -25,6 +27,15 @@ BASE_URL = "https://b24-tg.haragy.top"
 BINDINGS = [
     {
         "PLACEMENT": "CRM_DEAL_DETAIL_TAB",
+        "HANDLER": f"{BASE_URL}/placement/deal",
+        "TITLE": "ЧатМост",
+        "LANG_ALL": {
+            "ru": {"TITLE": "ЧатМост"},
+            "en": {"TITLE": "ChatMost"},
+        },
+    },
+    {
+        "PLACEMENT": "CRM_LEAD_DETAIL_TAB",
         "HANDLER": f"{BASE_URL}/placement/deal",
         "TITLE": "ЧатМост",
         "LANG_ALL": {

@@ -40,6 +40,11 @@ function chatApp() {
       return document.body.dataset.dealId || null;
     },
 
+    /** Тип карточки CRM виджета: data-entity-type (placement) либо 'deal'. */
+    get dealKind() {
+      return document.body.dataset.entityType || "deal";
+    },
+
     async init() {
       try {
         await Promise.all([this.loadMe(), this.loadDialogs(), this.loadTemplates()]);
@@ -74,7 +79,8 @@ function chatApp() {
 
     async loadDialogs() {
       const url = this.dealId
-        ? `/api/dialogs?deal_id=${encodeURIComponent(this.dealId)}`
+        ? `/api/dialogs?deal_id=${encodeURIComponent(this.dealId)}` +
+          `&entity_type=${encodeURIComponent(this.dealKind)}`
         : "/api/dialogs";
       const res = await fetch(url, { credentials: "same-origin" });
       if (!res.ok) throw new Error(`Не удалось загрузить диалоги (${res.status})`);

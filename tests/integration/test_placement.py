@@ -75,6 +75,31 @@ def test_placement_deal_dev_mode_works_without_auth(monkeypatch):
     assert "Secure" not in cookie_header
 
 
+def test_placement_lead_tab_injects_entity_type(monkeypatch):
+    """CRM_LEAD_DETAIL_TAB — тот же хендлер; тип сущности из кода placement
+    инжектится в data-entity-type (фронт фильтрует /api/dialogs по типу)."""
+    monkeypatch.setenv("DEV_MODE", "true")
+    from app.config import get_settings
+    get_settings.cache_clear()
+
+    app = create_app()
+    client = TestClient(app)
+
+    for placement, entity in (
+        ("CRM_LEAD_DETAIL_TAB", "lead"),
+        ("CRM_DEAL_DETAIL_TAB", "deal"),
+    ):
+        form_data = {
+            "PLACEMENT": placement,
+            "PLACEMENT_OPTIONS": json.dumps({"ID": "42"}),
+            "AUTH": json.dumps({"user_id": "15"}),
+        }
+        r = client.post("/placement/deal", data=form_data)
+        assert r.status_code == 200
+        assert 'data-deal-id="42"' in r.text
+        assert f'data-entity-type="{entity}"' in r.text
+
+
 def test_placement_deal_prod_rejects_invalid_token(monkeypatch):
     """В prod-режиме POST с невалидным AUTH_ID → 403, кука не выставляется.
 

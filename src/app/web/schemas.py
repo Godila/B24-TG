@@ -107,7 +107,9 @@ class InboxDialogOut(BaseModel):
     messenger: str
     title: str | None = None
     crm_deal_id: int | None = None
-    #: Готовая ссылка на карточку сделки B24 (None, если сделки нет).
+    #: Тип CRM-сущности диалога ('deal'|'lead') — задаёт текст ссылки.
+    crm_entity_type: str | None = None
+    #: Готовая ссылка на карточку CRM B24 (None, если сущности нет).
     deal_url: str | None = None
     last_msg_at: datetime | None = None
 

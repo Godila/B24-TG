@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.b24.crm import ContactInfo, DealInfo
+from app.b24.crm import ContactInfo, DealInfo, LeadInfo
 from app.b24.sync import OUTBOUND_COMMENT_PREFIX, Bitrix24Sync
 
 
@@ -20,7 +20,7 @@ async def test_new_contact_channel_data_passed_to_create():
     crm = AsyncMock()
     crm.find_contact_by_phone = AsyncMock(return_value=None)
     crm.create_contact = AsyncMock(return_value=ContactInfo(id=77, name="Иван"))
-    crm.create_deal = AsyncMock(return_value=DealInfo(id=100, title="TG: Иван"))
+    crm.create_deal = AsyncMock(return_value=DealInfo(id=100, title="Иван"))
     crm.add_timeline_comment = AsyncMock(return_value=999)
     im = AsyncMock()
 
@@ -45,7 +45,7 @@ async def test_new_contact_creates_contact_and_deal_and_timeline():
     crm = AsyncMock()
     crm.find_contact_by_phone = AsyncMock(return_value=None)  # новый клиент
     crm.create_contact = AsyncMock(return_value=ContactInfo(id=77, name="Иван"))
-    crm.create_deal = AsyncMock(return_value=DealInfo(id=100, title="TG: Иван"))
+    crm.create_deal = AsyncMock(return_value=DealInfo(id=100, title="Иван"))
     crm.add_timeline_comment = AsyncMock(return_value=999)
 
     im = AsyncMock()
@@ -62,9 +62,14 @@ async def test_new_contact_creates_contact_and_deal_and_timeline():
     crm.create_contact.assert_awaited_once()
     crm.create_deal.assert_awaited_once()
     crm.add_timeline_comment.assert_awaited_once()
+    # Название сделки — имя клиента (канал уходит в SOURCE_ID, не в TITLE).
+    deal_kwargs = crm.create_deal.call_args.kwargs
+    assert deal_kwargs["title"] == "Иван"
+    assert deal_kwargs["source"] == "telegram"
     # Уведомление — только новому клиенту.
     im.notify_manager.assert_awaited_once()
-    assert result.deal_id == 100
+    assert result.crm_entity_type == "deal"
+    assert result.crm_entity_id == 100
     assert result.contact_id == 77
     assert result.is_new is True
     assert result.timeline_comment_id == 999
@@ -100,7 +105,7 @@ async def test_existing_contact_reuses_open_deal():
     # Уже знакомый клиент — менеджера не дёргаем.
     im.notify_manager.assert_not_awaited()
     assert result.contact_id == 42
-    assert result.deal_id == 100
+    assert result.crm_entity_id == 100
     assert result.is_new is False
 
 
@@ -128,7 +133,7 @@ async def test_existing_contact_without_open_deal_comments_into_contact():
     crm.add_timeline_comment.assert_awaited_once()
     assert crm.add_timeline_comment.call_args.kwargs["entity_type"] == "contact"
     im.notify_manager.assert_not_awaited()
-    assert result.deal_id is None
+    assert result.crm_entity_id is None
     assert result.is_new is False
 
 
@@ -139,7 +144,7 @@ async def test_process_outbound_comments_into_deal():
     sync = _make_sync(crm, AsyncMock())
 
     comment_id = await sync.process_outbound(
-        dialog_deal_id=100,
+        dialog_entity_id=100,
         dialog_entity_type="deal",
         contact_id=42,
         text="Ответ менеджера",
@@ -162,7 +167,7 @@ async def test_process_outbound_falls_back_to_contact_card():
     sync = _make_sync(crm, AsyncMock())
 
     comment_id = await sync.process_outbound(
-        dialog_deal_id=None,
+        dialog_entity_id=None,
         dialog_entity_type=None,
         contact_id=42,
         text="Ответ",
@@ -182,7 +187,7 @@ async def test_process_outbound_without_entities_returns_none():
     sync = _make_sync(crm, AsyncMock())
 
     comment_id = await sync.process_outbound(
-        dialog_deal_id=None,
+        dialog_entity_id=None,
         dialog_entity_type=None,
         contact_id=None,
         text="Ответ",
@@ -200,7 +205,7 @@ async def test_process_outbound_without_token_returns_none():
     sync = Bitrix24Sync(token_mgr=token_mgr, crm=crm, im=AsyncMock())
 
     comment_id = await sync.process_outbound(
-        dialog_deal_id=1,
+        dialog_entity_id=1,
         dialog_entity_type="deal",
         contact_id=2,
         text="x",
@@ -217,7 +222,7 @@ def _crm_new_contact():
     crm = AsyncMock()
     crm.find_contact_by_phone = AsyncMock(return_value=None)
     crm.create_contact = AsyncMock(return_value=ContactInfo(id=77, name="Иван"))
-    crm.create_deal = AsyncMock(return_value=DealInfo(id=100, title="TG: Иван"))
+    crm.create_deal = AsyncMock(return_value=DealInfo(id=100, title="Иван"))
     crm.add_timeline_comment = AsyncMock(return_value=999)
     return crm
 
@@ -302,7 +307,7 @@ async def test_outbound_timeline_mode_first_and_none_skip_comment():
         crm = AsyncMock()
         sync = Bitrix24Sync(token_mgr=token_mgr, crm=crm, im=AsyncMock())
         result = await sync.process_outbound(
-            dialog_deal_id=100,
+            dialog_entity_id=100,
             dialog_entity_type="deal",
             contact_id=42,
             text="ответ",
@@ -310,3 +315,232 @@ async def test_outbound_timeline_mode_first_and_none_skip_comment():
         )
         assert result is None
         crm.add_timeline_comment.assert_not_awaited()
+
+
+# --- Режим «Лиды» (app_settings.crm_mode) -------------------------------- #
+
+
+def _crm_new_lead():
+    crm = AsyncMock()
+    crm.find_reusable_lead_by_phone = AsyncMock(return_value=None)
+    crm.create_lead = AsyncMock(return_value=LeadInfo(id=55))
+    crm.add_timeline_comment = AsyncMock(return_value=777)
+    return crm
+
+
+@pytest.mark.asyncio
+async def test_lead_mode_new_client_creates_only_lead():
+    """Новый клиент в lead-режиме = только лид: без контакта и сделки,
+    комментарий в карточку лида, уведомление — как при is_new."""
+    crm = _crm_new_lead()
+    im = AsyncMock()
+    sync = _make_sync(crm, im)
+    result = await sync.process_inbound(
+        sender_name="Иван",
+        sender_phone="+79991234567",
+        message_text="Здравствуйте",
+        assigned_b24_user_id=1,
+        crm_mode="lead",
+    )
+
+    crm.create_lead.assert_awaited_once()
+    lead_kwargs = crm.create_lead.call_args.kwargs
+    assert lead_kwargs["title"] == "Иван"  # канал — в SOURCE_ID, не в название
+    assert lead_kwargs["source"] == "telegram"
+    assert lead_kwargs["phone"] == "+79991234567"
+    crm.create_contact.assert_not_awaited()
+    crm.create_deal.assert_not_awaited()
+    crm.add_timeline_comment.assert_awaited_once()
+    comment_kwargs = crm.add_timeline_comment.call_args.kwargs
+    assert comment_kwargs["entity_type"] == "lead"
+    assert comment_kwargs["entity_id"] == 55
+    im.notify_manager.assert_awaited_once()
+    assert result.crm_entity_type == "lead"
+    assert result.crm_entity_id == 55
+    assert result.contact_id is None
+    assert result.is_new is True
+
+
+@pytest.mark.asyncio
+async def test_lead_mode_reusable_lead_no_create_no_notify():
+    """Телефон матчится на живой лид — переиспользуем, ничего не создаём."""
+    crm = AsyncMock()
+    crm.find_reusable_lead_by_phone = AsyncMock(return_value=LeadInfo(id=7))
+    crm.add_timeline_comment = AsyncMock(return_value=778)
+    im = AsyncMock()
+    sync = _make_sync(crm, im)
+    result = await sync.process_inbound(
+        sender_name="Иван",
+        sender_phone="+7999",
+        message_text="Ещё вопрос",
+        assigned_b24_user_id=1,
+        crm_mode="lead",
+        timeline_mode="all",
+    )
+
+    crm.create_lead.assert_not_awaited()
+    im.notify_manager.assert_not_awaited()
+    assert crm.add_timeline_comment.call_args.kwargs["entity_id"] == 7
+    assert result.crm_entity_id == 7
+    assert result.is_new is False
+
+
+@pytest.mark.asyncio
+async def test_lead_mode_bound_live_lead_reused():
+    """Живая привязка диалога к лиду авторитетнее поиска по телефону."""
+    crm = AsyncMock()
+    crm.get_lead = AsyncMock(return_value=LeadInfo(id=5, status_id="IN_PROCESS"))
+    crm.add_timeline_comment = AsyncMock(return_value=779)
+    im = AsyncMock()
+    sync = _make_sync(crm, im)
+    result = await sync.process_inbound(
+        sender_name="Иван",
+        sender_phone="+7999",
+        message_text="Привет снова",
+        assigned_b24_user_id=1,
+        existing_entity_id=5,
+        existing_entity_type="lead",
+        timeline_mode="all",
+    )
+
+    crm.get_lead.assert_awaited_once()
+    crm.find_reusable_lead_by_phone.assert_not_awaited()
+    assert crm.add_timeline_comment.call_args.kwargs["entity_type"] == "lead"
+    assert result.crm_entity_id == 5
+    assert result.is_new is False
+
+
+@pytest.mark.asyncio
+async def test_lead_mode_converted_lead_rebinds_to_deal():
+    """Сконвертированный лид → ребинд: контакт конвертации → его открытая
+    сделка; комментарий уходит в сделку, диалог перепривяжется."""
+    crm = AsyncMock()
+    crm.get_lead = AsyncMock(
+        return_value=LeadInfo(id=55, status_id="CONVERTED", contact_id=42)
+    )
+    crm.find_open_deal_for_contact = AsyncMock(return_value=DealInfo(id=300))
+    crm.add_timeline_comment = AsyncMock(return_value=780)
+    im = AsyncMock()
+    sync = _make_sync(crm, im)
+    result = await sync.process_inbound(
+        sender_name="Иван",
+        sender_phone="+7999",
+        message_text="После конвертации",
+        assigned_b24_user_id=1,
+        existing_entity_id=55,
+        existing_entity_type="lead",
+        timeline_mode="all",
+    )
+
+    crm.find_open_deal_for_contact.assert_awaited_once()
+    assert crm.find_open_deal_for_contact.call_args.args[1] == 42
+    comment_kwargs = crm.add_timeline_comment.call_args.kwargs
+    assert comment_kwargs["entity_type"] == "deal"
+    assert comment_kwargs["entity_id"] == 300
+    assert result.crm_entity_type == "deal"
+    assert result.crm_entity_id == 300
+    assert result.contact_id == 42  # контакт конвертации — тоже в связку
+    assert result.is_new is False
+    im.notify_manager.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_lead_mode_converted_without_open_deal_stays_on_lead():
+    """Конвертация без открытой сделки — остаёмся на лиде, найденный
+    контакт всё равно сохраняется в связку."""
+    crm = AsyncMock()
+    crm.get_lead = AsyncMock(
+        return_value=LeadInfo(id=55, status_id="CONVERTED", contact_id=42)
+    )
+    crm.find_open_deal_for_contact = AsyncMock(return_value=None)
+    crm.add_timeline_comment = AsyncMock(return_value=781)
+    sync = _make_sync(crm, AsyncMock())
+    result = await sync.process_inbound(
+        sender_name="Иван",
+        sender_phone="+7999",
+        message_text="Вопрос",
+        assigned_b24_user_id=1,
+        existing_entity_id=55,
+        existing_entity_type="lead",
+        timeline_mode="all",
+    )
+
+    assert crm.add_timeline_comment.call_args.kwargs["entity_type"] == "lead"
+    assert result.crm_entity_type == "lead"
+    assert result.crm_entity_id == 55
+    assert result.contact_id == 42
+
+
+@pytest.mark.asyncio
+async def test_lead_mode_converted_contact_fallback_findbycomm():
+    """У сконвертированного лида CONTACT_ID пуст — контакт ищем по телефону."""
+    crm = AsyncMock()
+    crm.get_lead = AsyncMock(
+        return_value=LeadInfo(id=55, status_id="CONVERTED", contact_id=None)
+    )
+    crm.find_contact_by_phone = AsyncMock(return_value=ContactInfo(id=42))
+    crm.find_open_deal_for_contact = AsyncMock(return_value=DealInfo(id=300))
+    crm.add_timeline_comment = AsyncMock(return_value=782)
+    sync = _make_sync(crm, AsyncMock())
+    result = await sync.process_inbound(
+        sender_name="Иван",
+        sender_phone="+7999",
+        message_text="После конвертации",
+        assigned_b24_user_id=1,
+        existing_entity_id=55,
+        existing_entity_type="lead",
+        timeline_mode="all",
+    )
+
+    crm.find_contact_by_phone.assert_awaited_once()
+    assert result.crm_entity_type == "deal"
+    assert result.crm_entity_id == 300
+
+
+@pytest.mark.asyncio
+async def test_lead_mode_deleted_lead_searches_by_phone():
+    """Привязанный лид удалён в B24 — связка протухла, ищем заново."""
+    crm = AsyncMock()
+    crm.get_lead = AsyncMock(return_value=None)
+    crm.find_reusable_lead_by_phone = AsyncMock(return_value=LeadInfo(id=8))
+    crm.add_timeline_comment = AsyncMock(return_value=783)
+    sync = _make_sync(crm, AsyncMock())
+    result = await sync.process_inbound(
+        sender_name="Иван",
+        sender_phone="+7999",
+        message_text="Вопрос",
+        assigned_b24_user_id=1,
+        existing_entity_id=55,
+        existing_entity_type="lead",
+        timeline_mode="all",
+    )
+
+    crm.find_reusable_lead_by_phone.assert_awaited_once()
+    assert result.crm_entity_id == 8
+
+
+@pytest.mark.asyncio
+async def test_deal_bound_dialog_wins_over_lead_mode():
+    """Диалог, привязанный к сделке (deal-эра), и при режиме «Лиды»
+    продолжает писать в сделку — режим не перекладывает существующие диалоги."""
+    crm = AsyncMock()
+    crm.get_contact = AsyncMock(return_value=ContactInfo(id=42))
+    crm.add_timeline_comment = AsyncMock(return_value=784)
+    im = AsyncMock()
+    sync = _make_sync(crm, im)
+    result = await sync.process_inbound(
+        sender_name="Иван",
+        sender_phone="+7999",
+        message_text="Вопрос",
+        assigned_b24_user_id=1,
+        existing_contact_id=42,
+        existing_entity_id=100,
+        existing_entity_type="deal",
+        crm_mode="lead",
+        timeline_mode="all",
+    )
+
+    crm.get_lead.assert_not_awaited()
+    crm.find_reusable_lead_by_phone.assert_not_awaited()
+    assert crm.add_timeline_comment.call_args.kwargs["entity_type"] == "deal"
+    assert result.crm_entity_id == 100
