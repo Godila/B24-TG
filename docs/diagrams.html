@@ -1,0 +1,537 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ЧатМост — архитектура и потоки</title>
+<script>
+  (function () {
+    const saved = localStorage.getItem('chatmost-theme');
+    const dark = saved ? saved === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+    document.documentElement.classList.toggle('dark', dark);
+  })();
+</script>
+<style>
+  :root {
+    --bg: #FAF9F5; --surface: #FFFFFF; --surface2: #F0EEE6;
+    --ink: #141413; --body: #3D3D3A; --muted: #87867F;
+    --line: #D1CFC5; --line-soft: #E6E3DA;
+    --clay: #D97757; --clay-soft: rgba(217,119,87,0.10);
+    --olive: #788C5D; --olive-soft: rgba(120,140,93,0.12);
+    --blue: #5B7E96; --blue-soft: rgba(91,126,150,0.10);
+    --zone: rgba(20,20,19,0.025); --zone-line: #D1CFC5;
+    --serif: ui-serif, Georgia, "Times New Roman", serif;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  html.dark {
+    --bg: #141413; --surface: #1F1F1D; --surface2: #2A2A28;
+    --ink: #FAF9F5; --body: #D1CFC5; --muted: #87867F;
+    --line: #3D3D3A; --line-soft: #2A2A28;
+    --clay: #E48A6E; --clay-soft: rgba(228,138,110,0.14);
+    --olive: #9DB07C; --olive-soft: rgba(157,176,124,0.16);
+    --blue: #7FA3BC; --blue-soft: rgba(127,163,188,0.14);
+    --zone: rgba(250,249,245,0.03); --zone-line: #3D3D3A;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--body); font-family: var(--sans);
+    -webkit-font-smoothing: antialiased; display: flex; flex-direction: column; overflow: hidden;
+  }
+
+  /* ── верхняя панель ─────────────────────────── */
+  .bar {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 12px 20px; border-bottom: 1px solid var(--line-soft); flex: none;
+  }
+  .bar h1 { font-family: var(--serif); font-weight: 500; font-size: 19px; color: var(--ink); letter-spacing: -0.01em; }
+  .bar .sub { font-family: var(--mono); font-size: 10.5px; color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; }
+  .spacer { flex: 1; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.04em;
+    padding: 5px 11px; border: 1px solid var(--line); border-radius: 999px;
+    background: transparent; color: var(--muted); cursor: pointer; transition: all .15s ease;
+  }
+  .chip:hover { color: var(--ink); border-color: var(--muted); }
+  .chip.on { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+  #themeToggle, #zoomReset {
+    font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em;
+    padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px;
+    background: transparent; color: var(--muted); cursor: pointer;
+  }
+  #themeToggle:hover, #zoomReset:hover { color: var(--ink); border-color: var(--muted); }
+  #zoomLevel { font-family: var(--mono); font-size: 10.5px; color: var(--muted); min-width: 44px; text-align: center; }
+
+  /* ── сцена ──────────────────────────────────── */
+  .stage { flex: 1; position: relative; min-height: 0; cursor: grab; }
+  .stage.panning { cursor: grabbing; }
+  .stage svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+  .zone rect { fill: var(--zone); stroke: var(--zone-line); stroke-width: 1; stroke-dasharray: 5 5; rx: 16; }
+  .zone .ztitle { font-family: var(--mono); font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; fill: var(--muted); }
+  .zone .zsub { font-family: var(--mono); font-size: 10.5px; fill: var(--muted); opacity: 0.75; }
+
+  .node { cursor: pointer; }
+  .node rect { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; rx: 10; transition: stroke .15s ease, filter .15s ease; }
+  .node:hover rect { stroke: var(--muted); }
+  .node.sel rect { stroke: var(--clay) !important; stroke-width: 2; }
+  .node .t  { font-family: var(--sans); font-size: 14.5px; font-weight: 600; fill: var(--ink); pointer-events: none; }
+  .node .m  { font-family: var(--mono); font-size: 11px; fill: var(--muted); pointer-events: none; }
+  .node .k  { font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; fill: var(--clay); pointer-events: none; }
+  .node.gate rect { fill: var(--clay-soft); stroke: var(--clay); }
+  .node.store rect { fill: var(--surface2); }
+  .node.do rect { fill: var(--olive-soft); stroke: var(--olive); }
+  .node.ext rect { stroke-dasharray: 6 3; }
+  .node.blue rect { fill: var(--blue-soft); stroke: var(--blue); }
+
+  .edge { stroke: var(--muted); stroke-width: 1.6; fill: none; marker-end: url(#a-mut); transition: opacity .2s ease, stroke .2s ease; }
+  .edge.dash { stroke-dasharray: 5 4; }
+  .elbl { font-family: var(--mono); font-size: 10.5px; fill: var(--muted); transition: opacity .2s ease; }
+
+  .stage.flowing .edge { opacity: 0.13; }
+  .stage.flowing .elbl { opacity: 0.13; }
+  .stage.flowing .node { opacity: 0.30; }
+  .stage.flowing .zone { opacity: 0.45; }
+  .stage.flowing .edge.lit {
+    opacity: 1; stroke: var(--clay); marker-end: url(#a-clay);
+    stroke-dasharray: 7 5; animation: march 0.9s linear infinite;
+  }
+  .stage.flowing .elbl.lit { opacity: 1; fill: var(--clay); }
+  .stage.flowing .node.lit { opacity: 1; }
+  .stage.flowing .node.lit rect { stroke: var(--clay); }
+  @keyframes march { to { stroke-dashoffset: -12; } }
+  @media (prefers-reduced-motion: reduce) { .stage.flowing .edge.lit { animation: none; } }
+
+  /* ── всплывающие карточки ───────────────────── */
+  .card {
+    position: absolute; max-width: 380px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px 16px; box-shadow: 0 6px 24px rgba(0,0,0,0.10);
+  }
+  .card .close {
+    position: absolute; top: 8px; right: 10px; border: none; background: transparent;
+    color: var(--muted); font-size: 15px; line-height: 1; cursor: pointer; padding: 3px 5px;
+  }
+  .card .close:hover { color: var(--ink); }
+  .card.hidden { display: none; }
+  #detail { right: 16px; bottom: 16px; width: 350px; }
+  #detail h3 { font-family: var(--serif); font-weight: 500; font-size: 17px; color: var(--ink); margin-bottom: 2px; padding-right: 20px; }
+  #detail .meta { font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-bottom: 8px; }
+  #detail p { font-size: 12.5px; line-height: 1.55; }
+  #detail p code, #flowcap code { font-family: var(--mono); font-size: 11px; color: var(--clay); }
+  #flowcap { left: 16px; bottom: 16px; max-width: 480px; }
+  #flowcap .fname { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--clay); margin-bottom: 6px; }
+  #flowcap ol { margin-left: 18px; }
+  #flowcap li { font-size: 12.5px; line-height: 1.55; }
+  .src { position: absolute; top: 10px; right: 16px; font-family: var(--mono); font-size: 10px; color: var(--muted); opacity: 0.8; }
+  @media (max-width: 880px) {
+    body { overflow: auto; }
+    .stage { min-height: 70vh; }
+    #detail, #flowcap { position: static; width: auto; margin: 10px 16px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <div>
+    <h1>ЧатМост — архитектура</h1>
+    <div class="sub">два процесса · два канала · одна PostgreSQL · Bitrix24 cloud</div>
+  </div>
+  <div class="spacer"></div>
+  <div class="chips" id="chips">
+    <button class="chip on" data-flow="all">Всё</button>
+    <button class="chip" data-flow="inbound">Входящее</button>
+    <button class="chip" data-flow="outbound">Ответ менеджера</button>
+    <button class="chip" data-flow="bizproc">Из бизнес-процесса</button>
+    <button class="chip" data-flow="media">Вложения</button>
+  </div>
+  <span id="zoomLevel">100%</span>
+  <button id="zoomReset">Сброс</button>
+  <button id="themeToggle">Тема</button>
+</div>
+
+<div class="stage" id="stage">
+<svg id="svg" viewBox="0 0 1560 980" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Архитектура ЧатМост">
+  <defs>
+    <marker id="a-mut" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" style="fill: var(--muted)"/>
+    </marker>
+    <marker id="a-clay" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" style="fill: var(--clay)"/>
+    </marker>
+  </defs>
+
+  <g id="svg-content">
+  <!-- ── зоны ─────────────────────────────────── -->
+  <g class="zone">
+    <rect x="40" y="120" width="250" height="300"/>
+    <text class="ztitle" x="60" y="150">Участники</text>
+  </g>
+  <g class="zone">
+    <rect x="340" y="120" width="700" height="680"/>
+    <text class="ztitle" x="360" y="150">Сервер ЧатМост</text>
+    <text class="zsub" x="360" y="168">docker compose · два процесса, общаются через PostgreSQL</text>
+  </g>
+  <g class="zone">
+    <rect x="360" y="545" width="650" height="200"/>
+    <text class="ztitle" x="378" y="572">bridge · фоновые воркеры</text>
+  </g>
+  <g class="zone">
+    <rect x="340" y="830" width="660" height="130"/>
+    <text class="ztitle" x="360" y="856">Мессенджеры</text>
+  </g>
+  <g class="zone">
+    <rect x="1150" y="120" width="370" height="680"/>
+    <text class="ztitle" x="1170" y="150">Bitrix24</text>
+    <text class="zsub" x="1170" y="168">облачный портал клиента</text>
+  </g>
+
+  <!-- ── рёбра ────────────────────────────────── -->
+  <path class="edge dash" id="e-mgr-b24"  d="M265,190 C500,90 950,95 1175,200"/>
+  <path class="edge"      id="e-mgr-web"  d="M265,218 C310,210 325,200 365,197"/>
+  <path class="edge"      id="e-ngx-web"  d="M505,225 L505,255"/>
+  <path class="edge"      id="e-ngx-bp"   d="M645,195 C672,195 672,285 685,297"/>
+  <path class="edge dash" id="e-bp-call"  d="M1175,460 C1090,430 1060,340 1015,305"/>
+  <path class="edge"      id="e-web-pg"   d="M505,351 L505,395"/>
+  <path class="edge"      id="e-web-media" d="M630,351 C670,368 690,378 760,395"/>
+  <path class="edge"      id="e-bp-pg"    d="M790,351 C740,372 700,382 660,395"/>
+  <path class="edge"      id="e-in-pg"    d="M482,590 L482,505"/>
+  <path class="edge"      id="e-out-pg"   d="M697,590 L697,505"/>
+  <path class="edge"      id="e-crm-pg"   d="M830,590 C780,560 720,540 660,505"/>
+  <path class="edge"      id="e-in-crm"   d="M540,590 C560,562 780,562 850,590"/>
+  <path class="edge"      id="e-out-crm"  d="M795,640 L815,640"/>
+  <path class="edge"      id="e-crm-b24"  d="M995,625 C1090,600 1100,360 1175,330"/>
+  <path class="edge"      id="e-crm-notify" d="M995,655 C1080,660 1100,600 1175,590"/>
+  <path class="edge"      id="e-tg-in"    d="M505,865 C495,800 488,740 482,686"/>
+  <path class="edge"      id="e-max-in"   d="M700,865 C560,800 520,760 500,686"/>
+  <path class="edge"      id="e-out-tg"   d="M660,686 C640,760 570,820 540,865"/>
+  <path class="edge"      id="e-out-max"  d="M730,686 C760,760 780,820 790,865"/>
+  <path class="edge dash" id="e-cli-msg"  d="M265,340 C310,450 305,700 380,862"/>
+  <path class="edge"      id="e-in-media" d="M560,590 C640,560 690,540 740,505"/>
+  <path class="edge"      id="e-out-media" d="M860,505 C830,540 780,565 740,590"/>
+
+  <!-- подписи рёбер -->
+  <text class="elbl" data-e="e-mgr-b24"   x="640" y="102">интерфейс Битрикс24</text>
+  <text class="elbl" data-e="e-mgr-web"   x="268" y="192">iframe «Чаты» / панель</text>
+  <text class="elbl" data-e="e-bp-call"   x="1043" y="404" text-anchor="end">шаг БП · POST</text>
+  <text class="elbl" data-e="e-bp-pg"     x="786" y="384" text-anchor="end">диалог + enqueue</text>
+  <text class="elbl" data-e="e-in-pg"     x="492" y="552">persist</text>
+  <text class="elbl" data-e="e-out-pg"    x="707" y="552">fetch_due · mark_sent</text>
+  <text class="elbl" data-e="e-in-crm"    x="700" y="556" text-anchor="middle">crm_sync-очередь</text>
+  <text class="elbl" data-e="e-out-crm"   x="805" y="632" text-anchor="end">on_sent → timeline</text>
+  <text class="elbl" data-e="e-crm-b24"   x="1103" y="452">REST: карточка · timeline</text>
+  <text class="elbl" data-e="e-crm-notify" x="1093" y="648" text-anchor="end">уведомление</text>
+  <text class="elbl" data-e="e-tg-in"     x="452" y="790" text-anchor="end">входящие</text>
+  <text class="elbl" data-e="e-max-in"    x="560" y="762">входящие</text>
+  <text class="elbl" data-e="e-out-tg"    x="608" y="790">отправка</text>
+  <text class="elbl" data-e="e-cli-msg"   x="286" y="640">переписка</text>
+  <text class="elbl" data-e="e-in-media"  x="700" y="538">вложения ↓</text>
+  <text class="elbl" data-e="e-out-media" x="868" y="552">send_media</text>
+
+  <!-- ── узлы: участники ──────────────────────── -->
+  <g class="node" data-k="manager">
+    <rect x="65" y="170" width="200" height="96"/>
+    <text class="t" x="85" y="200">Менеджер</text>
+    <text class="m" x="85" y="222">Битрикс24 в браузере</text>
+    <text class="m" x="85" y="240">«Чаты» · виджет · панель</text>
+  </g>
+  <g class="node" data-k="client">
+    <rect x="65" y="290" width="200" height="96"/>
+    <text class="t" x="85" y="320">Клиент</text>
+    <text class="m" x="85" y="342">Telegram или MAX</text>
+    <text class="m" x="85" y="360">пишет первым или отвечает</text>
+  </g>
+
+  <!-- ── узлы: сервер ─────────────────────────── -->
+  <g class="node gate" data-k="nginx">
+    <rect x="365" y="165" width="280" height="60"/>
+    <text class="t" x="385" y="190">nginx</text>
+    <text class="k" x="585" y="190" text-anchor="end">публичная граница</text>
+    <text class="m" x="385" y="210">TLS · reverse-proxy · единственный порт</text>
+  </g>
+  <g class="node" data-k="web">
+    <rect x="365" y="255" width="280" height="96"/>
+    <text class="t" x="385" y="285">web · FastAPI</text>
+    <text class="m" x="385" y="307">placement-iframe: Чаты / Панель /</text>
+    <text class="m" x="385" y="325">виджет карточки CRM · REST API · статика</text>
+    <text class="m" x="385" y="343">сессии (HMAC-кука) · CSRF Origin</text>
+  </g>
+  <g class="node blue" data-k="bph">
+    <rect x="685" y="255" width="330" height="96"/>
+    <text class="t" x="705" y="285">Хендлер активити БП</text>
+    <text class="m" x="705" y="307">POST /webhook/b24/bizproc · fire-and-forget</text>
+    <text class="m" x="705" y="325">последний диалог сущности · [ссылка] → файл</text>
+    <text class="m" x="705" y="343">авторизация · SSRF-фильтр · MIME-allowlist</text>
+  </g>
+  <g class="node store" data-k="pg">
+    <rect x="365" y="395" width="310" height="110"/>
+    <text class="t" x="385" y="425">PostgreSQL</text>
+    <text class="m" x="385" y="447">контакты · диалоги · сообщения · вложения</text>
+    <text class="m" x="385" y="465">очереди outbox + crm_sync (ретраи, backoff)</text>
+    <text class="m" x="385" y="483">токены B24 · менеджеры · настройки панели</text>
+  </g>
+  <g class="node store" data-k="media">
+    <rect x="695" y="395" width="320" height="110"/>
+    <text class="t" x="715" y="425">Медиа-том</text>
+    <text class="m" x="715" y="447">общий том web + bridge · uuid-имена</text>
+    <text class="m" x="715" y="465">≤ 25 МБ · allowlist MIME · раздача по API</text>
+    <text class="m" x="715" y="483">в БД — только метаданные</text>
+  </g>
+  <g class="node do" data-k="incoming">
+    <rect x="385" y="590" width="195" height="96"/>
+    <text class="t" x="405" y="620">Incoming</text>
+    <text class="m" x="405" y="642">дедуп по message-id</text>
+    <text class="m" x="405" y="660">Contact / Dialog /</text>
+    <text class="m" x="405" y="678">Message → БД</text>
+  </g>
+  <g class="node do" data-k="outbox">
+    <rect x="600" y="590" width="195" height="96"/>
+    <text class="t" x="620" y="620">Outbox</text>
+    <text class="m" x="620" y="642">throttle · retry+backoff</text>
+    <text class="m" x="620" y="660">FloodWait-режим</text>
+    <text class="m" x="620" y="678">read-квитанции ✓✓</text>
+  </g>
+  <g class="node do" data-k="crmsync">
+    <rect x="815" y="590" width="180" height="96"/>
+    <text class="t" x="835" y="620">CrmSync</text>
+    <text class="m" x="835" y="642">findbyComm-матчинг</text>
+    <text class="m" x="835" y="660">карточка: лид | сделка</text>
+    <text class="m" x="835" y="678">timeline · notify</text>
+  </g>
+
+  <!-- ── узлы: мессенджеры ────────────────────── -->
+  <g class="node ext" data-k="tg">
+    <rect x="365" y="865" width="280" height="80"/>
+    <text class="t" x="385" y="893">Telegram</text>
+    <text class="m" x="385" y="915">MTProto (Telethon) · личные аккаунты · QR</text>
+    <text class="m" x="385" y="933">медиа · read-квитанции · можно писать первым</text>
+  </g>
+  <g class="node ext" data-k="max">
+    <rect x="695" y="865" width="280" height="80"/>
+    <text class="t" x="715" y="893">MAX</text>
+    <text class="m" x="715" y="915">эмуляция web-клиента · WebSocket · QR-вход</text>
+    <text class="m" x="715" y="933">медиа · read-квитанции</text>
+  </g>
+
+  <!-- ── узлы: Bitrix24 ───────────────────────── -->
+  <g class="node ext" data-k="placement">
+    <rect x="1175" y="165" width="320" height="88"/>
+    <text class="t" x="1195" y="195">Встройки (placement)</text>
+    <text class="m" x="1195" y="217">«ЧатМост» в левом меню портала</text>
+    <text class="m" x="1195" y="235">вкладка чата в карточках сделки и лида</text>
+  </g>
+  <g class="node ext" data-k="b24crm">
+    <rect x="1175" y="280" width="320" height="100"/>
+    <text class="t" x="1195" y="310">CRM</text>
+    <text class="m" x="1195" y="332">Контакт + Сделка или только Лид (режим)</text>
+    <text class="m" x="1195" y="350">Источник = канал (справочник, маппинг)</text>
+    <text class="m" x="1195" y="368">timeline — вся история переписки</text>
+  </g>
+  <g class="node ext" data-k="bp">
+    <rect x="1175" y="415" width="320" height="100"/>
+    <text class="t" x="1195" y="445">Бизнес-процессы · роботы</text>
+    <text class="m" x="1195" y="467">шаг «ЧатМост: отправить сообщение»</text>
+    <text class="m" x="1195" y="485">переменные документа в тексте</text>
+    <text class="m" x="1195" y="503">файл — [https-ссылка] в скобках</text>
+  </g>
+  <g class="node ext" data-k="notify">
+    <rect x="1175" y="550" width="320" height="76"/>
+    <text class="t" x="1195" y="580">Уведомления</text>
+    <text class="m" x="1195" y="602">новое сообщение → ответственному</text>
+  </g>
+  </g>
+</svg>
+
+  <div class="src">docs/diagrams.html · самодостаточная схема</div>
+
+  <div class="card hidden" id="flowcap">
+    <button class="close" data-close="flowcap" aria-label="Закрыть">×</button>
+    <div class="fname" id="f-name"></div>
+    <ol id="f-steps"></ol>
+  </div>
+
+  <div class="card hidden" id="detail">
+    <button class="close" data-close="detail" aria-label="Закрыть">×</button>
+    <h3 id="d-title">Кликните узел</h3>
+    <div class="meta" id="d-meta">детали компонента</div>
+    <p id="d-body">Каждый блок кликабелен. Чипы сверху подсвечивают потоки: входящее сообщение, ответ менеджера, отправка из бизнес-процесса, путь вложений.</p>
+  </div>
+</div>
+
+<script>
+const DETAIL = {
+  manager: { t:"Менеджер", m:"участник · браузер", b:"Работает в привычном интерфейсе Битрикс24: общий мессенджер «Чаты» из левого меню, вкладка чата в карточке сделки/лида, панель администратора. За пределы CRM выходить не нужно." },
+  client:  { t:"Клиент", m:"участник · свой мессенджер", b:"Общается в Telegram или MAX с <b>личным аккаунтом менеджера</b>, как с обычным человеком. Никаких ботов и внешних сервисов — переписка выглядит естественно." },
+  tg:      { t:"Telegram", m:"канал · MTProto (Telethon)", b:"Личные аккаунты по QR. User-API даёт медиа, read-квитанции (✓✓) и возможность писать первым. FloodWait ловится и переводится в отложенный ретрай." },
+  max:     { t:"MAX", m:"канал · web-клиент по WebSocket", b:"Эмуляция web-клиента мессенджера MAX: QR-вход, события, загрузка/скачивание медиа, отметки о прочтении. Канал подключается из той же панели." },
+  nginx:   { t:"nginx", m:"публичная граница", b:"Единственный открытый порт (80/443): TLS, gzip, кэш статики, лимит тела запроса. Всё остальное — внутри docker-сети." },
+  web:     { t:"web · FastAPI", m:"процесс · HTTP-поверхность", b:"Placement-обработчики (оболочка «Чаты/Панель», виджет карточки CRM), REST API диалогов и сообщений, вебхуки B24, раздача статики. Аутентификация — через user.current по AUTH_ID встройки + HMAC-сессионная кука." },
+  bph:     { t:"Хендлер активити БП", m:"web · /webhook/b24/bizproc", b:"Вызов шага «отправить сообщение» из бизнес-процесса или робота. B24 присылает уже подставленные значения; хендлер находит <b>последний диалог</b> CRM-сущности в своей БД и ставит сообщение в outbox (fire-and-forget). [https-ссылка] в тексте скачивается и уходит вложением — с SSRF-фильтром и MIME-allowlist." },
+  pg:      { t:"PostgreSQL", m:"хранилище · источник истины", b:"Вся история переписки (чего не делает SaaS-аналог): контакты, диалоги, сообщения, вложения, менеджеры, настройки. Очереди <code>outbox</code> и <code>crm_sync</code> живут здесь же — компоненты заменяемы независимо, ничего не теряется между процессами." },
+  media:   { t:"Медиа-том", m:"хранилище · общий docker-том", b:"Файлы вложений обоих направлений: uuid-имена (path-traversal невозможен), лимит 25 МБ, MIME-allowlist (SVG/HTML исключены). В БД — только метаданные; раздача через авторизованный API." },
+  incoming:{ t:"IncomingHandler", m:"bridge · входящие", b:"Дедупликация по (диалог, external_message_id) — redelivery канала не создаёт дублей. Пишет Contact/Dialog/Message и ставит задачу crm_sync." },
+  outbox:  { t:"OutboxWorker", m:"bridge · исходящие", b:"Тянет due-элементы: per-account throttle (разные лимиты для ответов и инициаций), отправка через провайдер канала, ретраи с экспоненциальным backoff, терминальный failed после исчерпания попыток. После успеха ставит timeline-задачу." },
+  crmsync: { t:"CrmSyncWorker", m:"bridge · CRM-синк", b:"Матчинг findbyComm (телефон/IM) → карточка по режиму панели: Контакт+Сделка или только Лид; источник = канал; конвертированный лид сам перепривязывает диалог к сделке. Пишет timeline-комментарии (с FILES) и шлёт уведомления." },
+  placement:{ t:"Встройки", m:"B24 · placement", b:"Пункт «ЧатМост» в левом меню (оболочка с вкладками «Чаты»/«Панель») и вкладка чата в карточках сделки и лида — iFrame на наш web-процесс." },
+  b24crm:  { t:"CRM", m:"B24 · данные", b:"Карточки создаются/матчатся автоматически. Поле «Источник» проставляется по справочнику (маппинг канал → запись настраивается в панели). Вся переписка дублируется в timeline карточки." },
+  bp:      { t:"Бизнес-процессы · роботы", m:"B24 · автоматизация", b:"Активити «ЧатМост: отправить сообщение» доступно в конструкторах БП и роботов на CRM-сущностях: рассылки и автоответы с переменными документа; файл — ссылкой в квадратных скобках. Нет диалога — шаг честно падает в журнал." },
+  notify:  { t:"Уведомления", m:"B24 · im", b:"Первое сообщение нового клиента прилетает ответственному (или участникам общей линии) в чат Битрикс24 — со спам-фильтром «только первое»." },
+};
+
+const FLOWS = {
+  inbound: {
+    name: "Входящее сообщение",
+    edges: ["e-tg-in","e-max-in","e-in-pg","e-in-crm","e-crm-b24","e-crm-notify"],
+    nodes: ["client","tg","max","incoming","pg","crmsync","b24crm","notify"],
+    steps: [
+      "Клиент пишет в Telegram или MAX → событие приходит в bridge",
+      "<b>IncomingHandler</b>: дедуп по message-id → Contact/Dialog/Message в PostgreSQL",
+      "Задача в <code>crm_sync</code>-очередь → <b>CrmSyncWorker</b>: findbyComm-матчинг",
+      "Карточка по режиму (Контакт+Сделка | Лид), источник = канал, FILES в timeline, уведомление ответственному",
+      "Менеджер видит сообщение в «Чатах»/виджете (poll)"
+    ]
+  },
+  outbound: {
+    name: "Ответ менеджера",
+    edges: ["e-mgr-web","e-ngx-web","e-web-pg","e-out-pg","e-out-tg","e-out-max","e-out-crm","e-crm-b24"],
+    nodes: ["manager","nginx","web","pg","outbox","tg","max","crmsync","b24crm"],
+    steps: [
+      "Менеджер пишет в «Чатах» или виджете карточки → POST через nginx (кука + Origin)",
+      "<b>web</b>: Message(out, pending) + OutboxItem(queued) одной транзакцией",
+      "<b>OutboxWorker</b>: throttle аккаунта → отправка провайдером канала; FloodWait/сбой → backoff-ретраи",
+      "Клиент получает сообщение с личного аккаунта; статусы ⏳ → ✓ → ✓✓ в UI",
+      "on_sent → crm_sync → исходящее в timeline карточки"
+    ]
+  },
+  bizproc: {
+    name: "Отправка из бизнес-процесса",
+    edges: ["e-bp-call","e-bp-pg","e-out-pg","e-out-tg","e-out-max","e-out-crm","e-crm-b24"],
+    nodes: ["bp","bph","pg","outbox","tg","max","crmsync","b24crm"],
+    steps: [
+      "Шаг «ЧатМост: отправить сообщение» в БП/роботе → B24 POST-ит значения на хендлер (через nginx)",
+      "Авторизация (секрет/member_id+user.current) → <b>последний диалог</b> сущности из БД — ни одного лишнего вызова B24",
+      "<code>[https-ссылка]</code> в тексте: скачивание с SSRF-фильтром → вложение; остальной текст — подпись",
+      "Message + OutboxItem в outbox → доставку тянут ретраи воркера (fire-and-forget: шаг завершён)",
+      "Нет диалога/линии → шаг падает — видно в журнале БП"
+    ]
+  },
+  media: {
+    name: "Путь вложений",
+    edges: ["e-in-media","e-web-media","e-out-media","e-out-tg","e-out-max"],
+    nodes: ["incoming","web","media","outbox","tg","max"],
+    steps: [
+      "Входящее медиа: bridge скачивает из канала → медиа-том, в БД — метаданные",
+      "Upload менеджера: web пишет файл на том ДО enqueue (воркер не увидит элемент без файла)",
+      "Раздача — только через авторизованный API (владелец диалога/supervisor)",
+      "Исходящее: <code>send_media</code> провайдера с подписью- caption"
+    ]
+  }
+};
+
+const stage = document.getElementById('stage');
+const svg = document.getElementById('svg');
+const content = document.getElementById('svg-content');
+const nodes = document.querySelectorAll('.node');
+const chips = document.querySelectorAll('.chip');
+const fcap = document.getElementById('flowcap');
+const detail = document.getElementById('detail');
+
+/* ── потоки ─────────────────────────────────── */
+function setFlow(key) {
+  chips.forEach(c => c.classList.toggle('on', c.dataset.flow === key));
+  document.querySelectorAll('.edge').forEach(e => e.classList.remove('lit'));
+  document.querySelectorAll('.elbl').forEach(l => l.classList.remove('lit'));
+  nodes.forEach(n => n.classList.remove('lit'));
+  if (key === 'all') { stage.classList.remove('flowing'); fcap.classList.add('hidden'); return; }
+  const f = FLOWS[key];
+  stage.classList.add('flowing');
+  f.edges.forEach(id => document.getElementById(id)?.classList.add('lit'));
+  document.querySelectorAll('.elbl').forEach(l => { if (f.edges.includes(l.dataset.e)) l.classList.add('lit'); });
+  f.nodes.forEach(k => document.querySelector(`.node[data-k="${k}"]`)?.classList.add('lit'));
+  document.getElementById('f-name').textContent = f.name;
+  document.getElementById('f-steps').innerHTML = f.steps.map(s => `<li>${s}</li>`).join('');
+  fcap.classList.remove('hidden');
+}
+chips.forEach(c => c.addEventListener('click', () => setFlow(c.dataset.flow)));
+
+/* ── детали узла ────────────────────────────── */
+nodes.forEach(n => n.addEventListener('click', () => {
+  nodes.forEach(x => x.classList.remove('sel'));
+  n.classList.add('sel');
+  const d = DETAIL[n.dataset.k];
+  if (!d) return;
+  document.getElementById('d-title').textContent = d.t;
+  document.getElementById('d-meta').textContent = d.m;
+  document.getElementById('d-body').innerHTML = d.b;
+  detail.classList.remove('hidden');
+}));
+
+/* карточки закрываемы; открываются снова кликом по узлу/чипу */
+document.querySelectorAll('.card .close').forEach(b => b.addEventListener('click', () => {
+  document.getElementById(b.dataset.close).classList.add('hidden');
+}));
+
+/* ── тема ───────────────────────────────────── */
+document.getElementById('themeToggle').addEventListener('click', () => {
+  const dark = !document.documentElement.classList.contains('dark');
+  document.documentElement.classList.toggle('dark', dark);
+  localStorage.setItem('chatmost-theme', dark ? 'dark' : 'light');
+});
+
+/* ── панорама и зум ─────────────────────────── */
+let tx = 0, ty = 0, k = 1;
+const zoomLevel = document.getElementById('zoomLevel');
+
+function apply() {
+  content.setAttribute('transform', `translate(${tx} ${ty}) scale(${k})`);
+  zoomLevel.textContent = Math.round(k * 100) + '%';
+}
+function svgPoint(ev) {
+  const pt = svg.createSVGPoint();
+  pt.x = ev.clientX; pt.y = ev.clientY;
+  return pt.matrixTransform(svg.getScreenCTM().inverse());
+}
+
+let panning = false, moved = 0, last = null;
+stage.addEventListener('pointerdown', ev => {
+  if (ev.target.closest('.card, .chip, button')) return;
+  panning = true; moved = 0; last = svgPoint(ev);
+  stage.classList.add('panning');
+  stage.setPointerCapture(ev.pointerId);
+});
+stage.addEventListener('pointermove', ev => {
+  if (!panning) return;
+  const p = svgPoint(ev);
+  tx += p.x - last.x; ty += p.y - last.y;   // 1:1 в SVG-пространстве
+  moved += Math.hypot(p.x - last.x, p.y - last.y);
+  last = p;
+  apply();
+});
+function endPan() { panning = false; stage.classList.remove('panning'); }
+stage.addEventListener('pointerup', endPan);
+stage.addEventListener('pointercancel', endPan);
+
+/* клик после перетаскивания не должен выбирать узел */
+stage.addEventListener('click', ev => {
+  if (moved > 5) { ev.stopPropagation(); }
+}, true);
+
+svg.addEventListener('wheel', ev => {
+  ev.preventDefault();
+  const p = svgPoint(ev);
+  const k2 = Math.min(4, Math.max(0.35, k * (ev.deltaY < 0 ? 1.12 : 1 / 1.12)));
+  tx = p.x - (p.x - tx) * k2 / k;
+  ty = p.y - (p.y - ty) * k2 / k;
+  k = k2;
+  apply();
+}, { passive: false });
+
+document.getElementById('zoomReset').addEventListener('click', () => { tx = 0; ty = 0; k = 1; apply(); });
+
+apply();
+</script>
+</body>
+</html>
