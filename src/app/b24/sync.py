@@ -24,8 +24,10 @@ TIMELINE_MODE_DEFAULT = "first"
 #: Какие CRM-карточки заводить новому клиенту (app_settings.crm_mode):
 #:  deal — контакт + сделка (классическая схема);
 #:  lead — только лид; контакт/сделку создаст конвертация менеджером.
-#: Режим применяется к НОВЫМ клиентам: тип живой привязки диалога
-#: авторитетнее (переключение режима не перекладывает существующие диалоги).
+#: Режим применяется к НОВЫМ клиентам: ЖИВАЯ привязка диалога авторитетнее
+#: (переключение режима не перекладывает существующие диалоги); карточки
+#: удалены в B24 (связка протухла) — клиент фактически новый, тип решает
+#: режим.
 CRM_MODES = ("deal", "lead")
 CRM_MODE_DEFAULT = "deal"
 
@@ -113,7 +115,9 @@ class Bitrix24Sync:
         приоритетнее поиска по телефону (findbyComm по пустому телефону у
         MAX-клиентов плодил бы дубли). ``crm_mode`` (app_settings) решает,
         какую карточку заводить НОВОМУ клиенту — 'deal' (контакт+сделка)
-        или 'lead' (только лид); тип живой привязки авторитетнее режима.
+        или 'lead' (только лид). Живая привязка диалога авторитетнее
+        режима; карточки удалены в B24 (связка протухла) — клиент
+        фактически новый, карточку заводит режим.
         ``timeline_mode`` (app_settings): all/first/none — что писать в
         таймлайн (уведомление менеджеру режимом не трогается).
         ``sender_first_name``/``sender_last_name``/``sender_username`` —
@@ -131,8 +135,9 @@ class Bitrix24Sync:
         profile = channel_profile(messenger)
         name = sender_name or sender_phone or "Без имени"
 
-        # 1. Разрешение CRM-сущности: тип живой привязки диалога
-        #    авторитетнее режима (см. CRM_MODES).
+        # 1. Разрешение CRM-сущности: живая привязка диалога авторитетнее
+        #    режима; протухшая (карточки удалены в B24) — режим решает
+        #    тип новой карточки (см. CRM_MODES и _new_client).
         kind = existing_entity_type or crm_mode
         if kind == "lead":
             entity = await self._resolve_lead_entity(
@@ -142,6 +147,7 @@ class Bitrix24Sync:
                 assigned=assigned_b24_user_id,
                 profile=profile,
                 existing_entity_id=existing_entity_id,
+                crm_mode=crm_mode,
                 first_name=sender_first_name,
                 last_name=sender_last_name,
                 username=sender_username,
@@ -155,6 +161,7 @@ class Bitrix24Sync:
                 profile=profile,
                 existing_contact_id=existing_contact_id,
                 existing_entity_id=existing_entity_id,
+                crm_mode=crm_mode,
                 first_name=sender_first_name,
                 last_name=sender_last_name,
                 username=sender_username,
@@ -211,6 +218,57 @@ class Bitrix24Sync:
             timeline_comment_id=comment_id,
         )
 
+    async def _new_client(
+        self,
+        auth: str,
+        *,
+        crm_mode: str,
+        name: str,
+        phone: str,
+        assigned: int | None,
+        profile: B24ChannelProfile,
+        first_name: str | None,
+        last_name: str | None,
+        username: str | None,
+    ) -> _Entities:
+        """Карточка нового клиента — тип решает crm_mode (панель).
+
+        Единая точка создания: оба резолвера попадают сюда, когда живых
+        связок не осталось (включая протухшую привязку диалога — карточки
+        удалены в B24). Повторное обращение без живой карточки = новая
+        карточка по режиму, штатный паттерн (re-lead / re-deal).
+        """
+        if crm_mode == "lead":
+            lead = await self._crm.create_lead(
+                auth,
+                title=name,
+                phone=phone,
+                assigned_by_id=assigned,
+                source=profile.source_id,
+                first_name=first_name,
+                last_name=last_name,
+                username=username,
+            )
+            return _Entities("lead", lead.id, None, True)
+        contact = await self._crm.create_contact(
+            auth,
+            name=name,
+            phone=phone,
+            assigned_by_id=assigned,
+            source=profile.source_id,
+            first_name=first_name,
+            last_name=last_name,
+            username=username,
+        )
+        deal = await self._crm.create_deal(
+            auth,
+            title=name,
+            contact_id=contact.id,
+            assigned_by_id=assigned,
+            source=profile.source_id,
+        )
+        return _Entities("deal", deal.id, contact.id, True)
+
     async def _resolve_deal_entity(
         self,
         auth: str,
@@ -221,11 +279,12 @@ class Bitrix24Sync:
         profile: B24ChannelProfile,
         existing_contact_id: int | None,
         existing_entity_id: int | None,
+        crm_mode: str,
         first_name: str | None,
         last_name: str | None,
         username: str | None,
     ) -> _Entities:
-        """Режим 'deal': матчинг контакта → контакт + сделка."""
+        """Ветка 'deal': матчинг контакта → контакт + его сделка."""
         # Матчинг: известная CRM-связка приоритетнее поиска по телефону.
         if existing_contact_id is not None:
             contact = await self._crm.get_contact(auth, existing_contact_id)
@@ -235,28 +294,21 @@ class Bitrix24Sync:
         else:
             contact = await self._crm.find_contact_by_phone(auth, phone)
 
-        # Новый → создаём Контакт + Сделку. Существующий → его ОТКРЫТУЮ
-        # сделку (идемпотентность: раньше deal_id навсегда оставался None
-        # и все комментарии падали в карточку контакта).
+        # Новый → карточку заводит режим панели. Существующий → его
+        # ОТКРЫТУЮ сделку (идемпотентность: раньше deal_id навсегда
+        # оставался None и все комментарии падали в карточку контакта).
         if contact is None:
-            contact = await self._crm.create_contact(
+            return await self._new_client(
                 auth,
+                crm_mode=crm_mode,
                 name=name,
                 phone=phone,
-                assigned_by_id=assigned,
-                source=profile.source_id,
+                assigned=assigned,
+                profile=profile,
                 first_name=first_name,
                 last_name=last_name,
                 username=username,
             )
-            deal = await self._crm.create_deal(
-                auth,
-                title=name,
-                contact_id=contact.id,
-                assigned_by_id=assigned,
-                source=profile.source_id,
-            )
-            return _Entities("deal", deal.id, contact.id, True)
         if existing_entity_id is not None:
             return _Entities("deal", existing_entity_id, contact.id, False)
         deal = await self._crm.find_open_deal_for_contact(auth, contact.id)
@@ -275,11 +327,12 @@ class Bitrix24Sync:
         assigned: int | None,
         profile: B24ChannelProfile,
         existing_entity_id: int | None,
+        crm_mode: str,
         first_name: str | None,
         last_name: str | None,
         username: str | None,
     ) -> _Entities:
-        """Режим 'lead': только лид, без контакта (создаст конвертация)."""
+        """Ветка 'lead': матчинг лида, конвертация → ребинд на сделку."""
         # A. Живая привязка диалога к лиду.
         if existing_entity_id is not None:
             lead = await self._crm.get_lead(auth, existing_entity_id)
@@ -305,19 +358,19 @@ class Bitrix24Sync:
         lead = await self._crm.find_reusable_lead_by_phone(auth, phone) if phone else None
         if lead is not None:
             return _Entities("lead", lead.id, None, False)
-        # C. Новый клиент — классический crm.lead.add (повторное обращение
-        #    без живого лида = новый лид, штатный паттерн работы с лидами).
-        lead = await self._crm.create_lead(
+        # C. Живых лидов нет — новый клиент, карточку заводит режим панели
+        #    (сюда же выводит протухшая lead-привязка: лид удалён в B24).
+        return await self._new_client(
             auth,
-            title=name,
+            crm_mode=crm_mode,
+            name=name,
             phone=phone,
-            assigned_by_id=assigned,
-            source=profile.source_id,
+            assigned=assigned,
+            profile=profile,
             first_name=first_name,
             last_name=last_name,
             username=username,
         )
-        return _Entities("lead", lead.id, None, True)
 
     async def process_outbound(
         self,
