@@ -5,8 +5,9 @@
 сделки/лида больше не пишется — только в поле «Источник» (SOURCE_ID).
 
 SOURCE_ID должен существовать в справочнике портала (crm.status.source);
-«TELEGRAM» — стандартный, «MAX» добавляется scripts/add_max_source.py
-(пока записи нет, карточки молча создаются без источника).
+ни TELEGRAM, ни MAX стандартными НЕ являются — оба добавляются
+scripts/add_max_source.py (пока записи нет, карточки создаются без
+источника, фолбэк пишет WARNING в лог).
 """
 
 from dataclasses import dataclass

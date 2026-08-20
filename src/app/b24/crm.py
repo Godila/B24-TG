@@ -1,8 +1,11 @@
 """CRM-операции Bitrix24: контакты, сделки, лиды, timeline."""
 
+import logging
 from typing import Any
 
 from app.b24.client import Bitrix24Client, Bitrix24Error
+
+logger = logging.getLogger(__name__)
 
 # entityTypeId для универсального метода crm.item.add. Лид (1) сюда НЕ
 # входит: item.add молча теряет PHONE/IM — лиды ходят классическим
@@ -161,6 +164,15 @@ class CrmService:
         except Bitrix24Error as exc:
             if not source or "SOURCE" not in str(exc).upper():
                 raise
+            # Не тихо (поймано живым тестом 2026-08-20: источника TELEGRAM
+            # не было в справочнике — карточки молча теряли «Источник»).
+            logger.warning(
+                "%s: источник %r отвергнут порталом (%s) — карточка "
+                "создаётся без источника; запустите scripts/add_max_source.py",
+                method,
+                source,
+                exc,
+            )
             params["fields"] = {k: v for k, v in fields.items() if k != "SOURCE_ID"}
             return await self._client.call(method, auth_token=auth_token, params=params)
 

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Добавить источник «MAX» в справочник CRM-источников портала.
+"""Добавить канальные источники (TELEGRAM, MAX) в справочник CRM портала.
 
-Контакты, созданные из MAX-диалогов, получают SOURCE_ID="MAX" (см.
-app/b24/channels.py). Стандартного источника MAX в портале нет — без записи
-контакты получали дефолтный «Звонок»/«CALL».
+Карточки, созданные из диалогов, получают SOURCE_ID канала (см.
+app/b24/channels.py). Ни TELEGRAM, ни MAX в стандартном справочнике портала
+НЕТ — без записей create_* молча ретраит без источника (фолбэк в crm.py),
+и поле «Источник» остаётся пустым (поймано живым тестом 2026-08-20).
 
-Идемпотентно: crm.status.list → запись с STATUS_ID="MAX" есть? выходим :
-crm.status.add.
+Идемпотентно: crm.status.list → недостающие записи добавляем crm.status.add.
 
 Запуск на VM (с доступом к .env):
     docker compose exec web python /app/scripts/add_max_source.py
@@ -19,8 +19,10 @@ from app.b24.client import Bitrix24Client
 from app.b24.token_manager import TokenManager
 
 SOURCE_ENTITY = "SOURCE"
-SOURCE_STATUS_ID = "MAX"
-SOURCE_NAME = "MAX (мессенджер)"
+CHANNEL_SOURCES = {
+    "TELEGRAM": "Telegram (мессенджер)",
+    "MAX": "MAX (мессенджер)",
+}
 
 
 async def main() -> None:
@@ -42,27 +44,24 @@ async def main() -> None:
             params={"filter": {"ENTITY_ID": SOURCE_ENTITY}},
         )
         entries = existing if isinstance(existing, list) else existing.get("items", [])
-        for e in entries:
-            if str(e.get("STATUS_ID", "")).upper() == SOURCE_STATUS_ID:
-                print(
-                    f"OK: источник уже есть (STATUS_ID={SOURCE_STATUS_ID}, "
-                    f"NAME={e.get('NAME')}) — ничего не делаем."
-                )
-                return
-
-        result = await client.call(
-            "crm.status.add",
-            auth_token=token.access_token,
-            params={
-                "fields": {
-                    "ENTITY_ID": SOURCE_ENTITY,
-                    "STATUS_ID": SOURCE_STATUS_ID,
-                    "NAME": SOURCE_NAME,
-                    "SORT": 500,
-                }
-            },
-        )
-        print(f"Создан источник {SOURCE_STATUS_ID} ({SOURCE_NAME}), status-id={result}")
+        have = {str(e.get("STATUS_ID", "")).upper() for e in entries}
+        for status_id, name in CHANNEL_SOURCES.items():
+            if status_id in have:
+                print(f"OK: источник уже есть (STATUS_ID={status_id}) — пропускаем.")
+                continue
+            result = await client.call(
+                "crm.status.add",
+                auth_token=token.access_token,
+                params={
+                    "fields": {
+                        "ENTITY_ID": SOURCE_ENTITY,
+                        "STATUS_ID": status_id,
+                        "NAME": name,
+                        "SORT": 500,
+                    }
+                },
+            )
+            print(f"Создан источник {status_id} ({name}), status-id={result}")
     finally:
         await client.aclose()
 
