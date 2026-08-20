@@ -1,0 +1,204 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 1400" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" role="img" aria-label="Архитектура ЧатМост">
+  <style>
+    .bg { fill: #FAF9F5; }
+    .zrect { fill: rgba(20,20,19,0.025); stroke: #D1CFC5; stroke-width: 1.5; stroke-dasharray: 6 6; }
+    .ztitle { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 15px; letter-spacing: 1.5px; fill: #87867F; }
+    .zsub { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 13px; fill: #87867F; opacity: 0.8; }
+    .nrect { fill: #FFFFFF; stroke: #D1CFC5; stroke-width: 2; }
+    .nrect.gate { fill: rgba(217,119,87,0.10); stroke: #D97757; }
+    .nrect.store { fill: #F0EEE6; }
+    .nrect.do { fill: rgba(120,140,93,0.12); stroke: #788C5D; }
+    .nrect.ext { stroke-dasharray: 7 4; }
+    .nrect.blue { fill: rgba(91,126,150,0.10); stroke: #5B7E96; }
+    .t { font-size: 20px; font-weight: 600; fill: #141413; }
+    .m { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 13.5px; fill: #87867F; }
+    .k { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 12px; letter-spacing: 1px; fill: #D97757; }
+    .edge { stroke: #87867F; stroke-width: 2; fill: none; marker-end: url(#arr); }
+    .edge.dash { stroke-dasharray: 6 5; }
+    .elbl { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 12.5px; fill: #87867F; }
+    .cap { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 11.5px; fill: #87867F; }
+  </style>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#87867F"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1180" height="1400"/>
+
+  <!-- ═══ зоны ═══ -->
+  <rect class="zrect" x="40" y="40" width="1100" height="185" rx="16"/>
+  <text class="ztitle" x="62" y="70">УЧАСТНИКИ</text>
+
+  <rect class="zrect" x="40" y="280" width="660" height="745" rx="16"/>
+  <text class="ztitle" x="62" y="310">СЕРВЕР ЧАТМОСТ</text>
+  <text class="zsub" x="62" y="330">docker compose · web + bridge, общаются через PostgreSQL</text>
+  <rect class="zrect" x="55" y="820" width="630" height="190" rx="12"/>
+  <text class="ztitle" x="72" y="846" style="font-size:13px">BRIDGE · ФОНОВЫЕ ВОРКЕРЫ</text>
+
+  <rect class="zrect" x="740" y="280" width="400" height="745" rx="16"/>
+  <text class="ztitle" x="762" y="310">BITRIX24</text>
+  <text class="zsub" x="762" y="330">облачный портал</text>
+
+  <rect class="zrect" x="40" y="1080" width="1100" height="225" rx="16"/>
+  <text class="ztitle" x="62" y="1110">МЕССЕНДЖЕРЫ</text>
+
+  <!-- ═══ рёбра ═══ -->
+  <path class="edge"      d="M315,205 C315,250 340,290 368,328"/>
+  <path class="edge dash" d="M560,150 C700,130 760,250 760,392"/>
+  <path class="edge"      d="M700,205 C700,520 715,850 715,1125"/>
+  <path class="edge"      d="M215,580 L215,618"/>
+  <path class="edge"      d="M330,580 C360,595 400,605 430,618"/>
+  <path class="edge"      d="M530,580 C470,590 380,600 332,618"/>
+  <path class="edge"      d="M180,858 C175,830 210,810 215,782"/>
+  <path class="edge"      d="M360,858 C355,830 320,810 302,782"/>
+  <path class="edge"      d="M540,858 C520,830 505,808 500,782"/>
+  <path class="edge"      d="M240,858 C280,840 430,840 478,858"/>
+  <path class="edge"      d="M450,925 L463,925"/>
+  <path class="edge"      d="M290,1125 C240,1065 190,1030 172,992"/>
+  <path class="edge"      d="M700,1125 C600,1058 300,1032 222,992"/>
+  <path class="edge"      d="M350,992 C330,1040 292,1090 257,1125"/>
+  <path class="edge"      d="M430,992 C480,1050 580,1100 648,1125"/>
+  <path class="edge"      d="M645,900 C700,870 722,650 758,588"/>
+  <path class="edge"      d="M645,932 C700,942 722,940 758,936"/>
+  <path class="edge dash" d="M760,770 C710,730 692,580 672,514"/>
+  <path class="edge"      d="M240,862 C262,830 382,806 420,784"/>
+  <path class="edge"      d="M450,782 C432,812 404,836 384,856"/>
+
+  <!-- подписи рёбер -->
+  <text class="elbl" x="322" y="268">iframe · REST</text>
+  <text class="elbl" x="575" y="128">интерфейс Битрикс24</text>
+  <text class="elbl" x="712" y="640" transform="rotate(-90 712 640)">переписка</text>
+  <text class="elbl" x="560" y="742" text-anchor="end">шаг БП · POST</text>
+  <text class="elbl" x="655" y="700">REST: карточка ·</text>
+  <text class="elbl" x="655" y="716">timeline · notify</text>
+  <text class="elbl" x="150" y="815" text-anchor="end">persist</text>
+  <text class="elbl" x="410" y="812">очереди</text>
+  <text class="elbl" x="185" y="1058">входящие</text>
+  <text class="elbl" x="330" y="1052">отправка</text>
+  <text class="elbl" x="560" y="1044">входящие</text>
+  <text class="elbl" x="480" y="1078">отправка</text>
+
+  <!-- ═══ участники ═══ -->
+  <g>
+    <rect class="nrect" x="70" y="95" width="490" height="108" rx="12"/>
+    <text class="t" x="92" y="130">Менеджер</text>
+    <text class="m" x="92" y="156">Битрикс24 в браузере</text>
+    <text class="m" x="92" y="178">«Чаты» · виджет карточки · панель</text>
+  </g>
+  <g>
+    <rect class="nrect" x="610" y="95" width="490" height="108" rx="12"/>
+    <text class="t" x="632" y="130">Клиент</text>
+    <text class="m" x="632" y="156">Telegram или MAX на своём телефоне</text>
+    <text class="m" x="632" y="178">пишет первым или отвечает</text>
+  </g>
+
+  <!-- ═══ сервер ═══ -->
+  <g>
+    <rect class="nrect gate" x="70" y="330" width="600" height="86" rx="12"/>
+    <text class="t" x="92" y="365">nginx</text>
+    <text class="k" x="648" y="365" text-anchor="end">публичная граница</text>
+    <text class="m" x="92" y="392">TLS · reverse-proxy · единственный открытый порт</text>
+  </g>
+  <g>
+    <rect class="nrect" x="70" y="440" width="300" height="140" rx="12"/>
+    <text class="t" x="92" y="474">web · FastAPI</text>
+    <text class="m" x="92" y="500">placement-iframe: Чаты,</text>
+    <text class="m" x="92" y="522">Панель, виджет CRM</text>
+    <text class="m" x="92" y="544">REST API · статика</text>
+    <text class="m" x="92" y="566">сессии · CSRF Origin</text>
+  </g>
+  <g>
+    <rect class="nrect blue" x="390" y="440" width="280" height="140" rx="12"/>
+    <text class="t" x="412" y="474">Активити БП</text>
+    <text class="m" x="412" y="500">/webhook/b24/bizproc</text>
+    <text class="m" x="412" y="522">последний диалог</text>
+    <text class="m" x="412" y="544">[ссылка] → файл</text>
+    <text class="m" x="412" y="566">fire-and-forget</text>
+  </g>
+  <g>
+    <rect class="nrect store" x="70" y="620" width="290" height="160" rx="12"/>
+    <text class="t" x="92" y="654">PostgreSQL</text>
+    <text class="m" x="92" y="680">диалоги · сообщения</text>
+    <text class="m" x="92" y="702">очереди outbox</text>
+    <text class="m" x="92" y="724">+ crm_sync</text>
+    <text class="m" x="92" y="746">вся история у вас</text>
+  </g>
+  <g>
+    <rect class="nrect store" x="390" y="620" width="280" height="160" rx="12"/>
+    <text class="t" x="412" y="654">Медиа-том</text>
+    <text class="m" x="412" y="680">общий том web+bridge</text>
+    <text class="m" x="412" y="702">uuid-имена · ≤25 МБ</text>
+    <text class="m" x="412" y="724">MIME-allowlist</text>
+    <text class="m" x="412" y="746">раздача по API</text>
+  </g>
+  <g>
+    <rect class="nrect do" x="75" y="860" width="180" height="132" rx="12"/>
+    <text class="t" x="95" y="892" style="font-size:18px">Incoming</text>
+    <text class="m" x="95" y="918">дедуп по</text>
+    <text class="m" x="95" y="940">message-id</text>
+    <text class="m" x="95" y="962">persist → БД</text>
+  </g>
+  <g>
+    <rect class="nrect do" x="270" y="860" width="180" height="132" rx="12"/>
+    <text class="t" x="290" y="892" style="font-size:18px">Outbox</text>
+    <text class="m" x="290" y="918">throttle</text>
+    <text class="m" x="290" y="940">retry + backoff</text>
+    <text class="m" x="290" y="962">квитанции ✓✓</text>
+  </g>
+  <g>
+    <rect class="nrect do" x="465" y="860" width="180" height="132" rx="12"/>
+    <text class="t" x="485" y="892" style="font-size:18px">CrmSync</text>
+    <text class="m" x="485" y="918">findbyComm</text>
+    <text class="m" x="485" y="940">карточка: лид</text>
+    <text class="m" x="485" y="962">или сделка</text>
+  </g>
+
+  <!-- ═══ мессенджеры ═══ -->
+  <g>
+    <rect class="nrect ext" x="70" y="1125" width="490" height="150" rx="12"/>
+    <text class="t" x="92" y="1162">Telegram</text>
+    <text class="m" x="92" y="1190">MTProto (Telethon) · личные аккаунты</text>
+    <text class="m" x="92" y="1212">QR-подключение · медиа · ✓✓</text>
+    <text class="m" x="92" y="1234">можно писать первым</text>
+  </g>
+  <g>
+    <rect class="nrect ext" x="610" y="1125" width="490" height="150" rx="12"/>
+    <text class="t" x="632" y="1162">MAX</text>
+    <text class="m" x="632" y="1190">эмуляция web-клиента · WebSocket</text>
+    <text class="m" x="632" y="1212">QR-подключение · медиа · ✓✓</text>
+    <text class="m" x="632" y="1234">read-квитанции</text>
+  </g>
+
+  <!-- ═══ bitrix24 ═══ -->
+  <g>
+    <rect class="nrect ext" x="760" y="350" width="360" height="120" rx="12"/>
+    <text class="t" x="782" y="384">Встройки</text>
+    <text class="m" x="782" y="410">«ЧатМост» в левом меню</text>
+    <text class="m" x="782" y="432">вкладка чата в карточках</text>
+    <text class="m" x="782" y="454">сделки и лида</text>
+  </g>
+  <g>
+    <rect class="nrect ext" x="760" y="510" width="360" height="156" rx="12"/>
+    <text class="t" x="782" y="544">CRM</text>
+    <text class="m" x="782" y="570">Контакт+Сделка или Лид (режим)</text>
+    <text class="m" x="782" y="592">Источник = канал (справочник)</text>
+    <text class="m" x="782" y="614">timeline — вся переписка</text>
+    <text class="m" x="782" y="636">конвертация лида → ребинд</text>
+  </g>
+  <g>
+    <rect class="nrect ext" x="760" y="710" width="360" height="150" rx="12"/>
+    <text class="t" x="782" y="744">Бизнес-процессы</text>
+    <text class="m" x="782" y="770">шаг «ЧатМост: отправить</text>
+    <text class="m" x="782" y="792">сообщение» в БП и роботах</text>
+    <text class="m" x="782" y="814">переменные документа</text>
+    <text class="m" x="782" y="836">файл — [https-ссылка]</text>
+  </g>
+  <g>
+    <rect class="nrect ext" x="760" y="905" width="360" height="92" rx="12"/>
+    <text class="t" x="782" y="939">Уведомления</text>
+    <text class="m" x="782" y="965">новое сообщение → ответственному</text>
+  </g>
+
+  <text class="cap" x="1140" y="1348" text-anchor="end">ЧатМост · векторная схема — интерактивная версия: docs/diagrams.html</text>
+</svg>
