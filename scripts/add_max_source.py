@@ -3,10 +3,12 @@
 
 Карточки, созданные из диалогов, получают SOURCE_ID канала (см.
 app/b24/channels.py). Ни TELEGRAM, ни MAX в стандартном справочнике портала
-НЕТ — без записей create_* молча ретраит без источника (фолбэк в crm.py),
-и поле «Источник» остаётся пустым (поймано живым тестом 2026-08-20).
+НЕТ — без записей create_* ретраит без источника (фолбэк в crm.py), и поле
+«Источник» остаётся пустым (поймано живым тестом 2026-08-20).
 
-Идемпотентно: crm.status.list → недостающие записи добавляем crm.status.add.
+Идемпотентно и без дублей: crm.status.list → запись с нужным STATUS_ID есть?
+пропускаем; есть ПОХОЖАЯ ПО ИМЕНИ с другим кодом (NAME в B24 неуникален) —
+не создаём, предлагаем выбрать её в панели ЧатМост; иначе crm.status.add.
 
 Запуск на VM (с доступом к .env):
     docker compose exec web python /app/scripts/add_max_source.py
@@ -16,13 +18,24 @@ import asyncio
 import os
 
 from app.b24.client import Bitrix24Client
+from app.b24.sources import B24Source, fetch_sources, name_looks_like
 from app.b24.token_manager import TokenManager
+from app.models import Messenger
 
 SOURCE_ENTITY = "SOURCE"
 CHANNEL_SOURCES = {
     "TELEGRAM": "Telegram (мессенджер)",
     "MAX": "MAX (мессенджер)",
 }
+
+
+def duplicate_hint(entries: list[B24Source], status_id: str) -> B24Source | None:
+    """Похожая по имени запись с ДРУГИМ кодом — созда поверх, получим дубль."""
+    messenger = {"TELEGRAM": Messenger.tg, "MAX": Messenger.max}[status_id]
+    for e in entries:
+        if e.status_id.upper() != status_id and name_looks_like(e.name, messenger):
+            return e
+    return None
 
 
 async def main() -> None:
@@ -38,16 +51,18 @@ async def main() -> None:
 
     client = Bitrix24Client(client_endpoint=portal)
     try:
-        existing = await client.call(
-            "crm.status.list",
-            auth_token=token.access_token,
-            params={"filter": {"ENTITY_ID": SOURCE_ENTITY}},
-        )
-        entries = existing if isinstance(existing, list) else existing.get("items", [])
-        have = {str(e.get("STATUS_ID", "")).upper() for e in entries}
+        sources = await fetch_sources(client, token.access_token)
+        have = {s.status_id.upper() for s in sources}
         for status_id, name in CHANNEL_SOURCES.items():
             if status_id in have:
                 print(f"OK: источник уже есть (STATUS_ID={status_id}) — пропускаем.")
+                continue
+            hint = duplicate_hint(sources, status_id)
+            if hint is not None:
+                print(
+                    f"Похожая запись уже есть: {hint.name} ({hint.status_id}) — "
+                    f"выберите её в панели ЧатМост; создание {status_id} пропущено."
+                )
                 continue
             result = await client.call(
                 "crm.status.add",

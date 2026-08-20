@@ -121,6 +121,12 @@ class CrmSyncRepository:
         Дефолт CRM_MODE_DEFAULT — фейки в тестах наследуют режим 'deal'."""
         return CRM_MODE_DEFAULT
 
+    async def get_source_map(self) -> dict[Messenger, str]:
+        """Маппинг канал→источник карточек (app_settings.source_map).
+
+        Дефолт {} — фейки в тестах наследуют дефолты каналов."""
+        return {}
+
 
 class CrmSyncWorker:
     """Воркер очереди crm_sync: poll → CRM-вызовы → retry/backoff."""
@@ -173,10 +179,13 @@ class CrmSyncWorker:
         timeline_mode = await self._repo.get_timeline_mode()
         media_to_timeline = await self._repo.get_media_to_timeline()
         crm_mode = await self._repo.get_crm_mode()
+        source_map = await self._repo.get_source_map()
         items = await self._repo.fetch_due(self._batch_size)
         for item in items:
             if item.kind == KIND_INBOUND:
-                await self._handle_inbound(item, timeline_mode, media_to_timeline, crm_mode)
+                await self._handle_inbound(
+                    item, timeline_mode, media_to_timeline, crm_mode, source_map
+                )
             else:
                 await self._handle_outbound(item, timeline_mode, media_to_timeline)
 
@@ -218,7 +227,12 @@ class CrmSyncWorker:
         return files
 
     async def _handle_inbound(
-        self, item: CrmSyncItem, timeline_mode: str, media_to_timeline: bool, crm_mode: str
+        self,
+        item: CrmSyncItem,
+        timeline_mode: str,
+        media_to_timeline: bool,
+        crm_mode: str,
+        source_map: dict[Messenger, str],
     ) -> None:
         data = await self._repo.collect(item.message_id)
         if data is None:
@@ -243,6 +257,7 @@ class CrmSyncWorker:
                 existing_entity_id=data.crm_entity_id,
                 existing_entity_type=data.crm_entity_type,
                 crm_mode=crm_mode,
+                source_map=source_map,
                 timeline_mode=timeline_mode,
                 sender_first_name=data.sender_first_name,
                 sender_last_name=data.sender_last_name,

@@ -7,7 +7,8 @@
 SOURCE_ID должен существовать в справочнике портала (crm.status.source);
 ни TELEGRAM, ни MAX стандартными НЕ являются — оба добавляются
 scripts/add_max_source.py (пока записи нет, карточки создаются без
-источника, фолбэк пишет WARNING в лог).
+источника, фолбэк пишет WARNING в лог). Панель «Настройки» может
+подменить источник канала (app_settings.source_map поверх дефолта).
 """
 
 from dataclasses import dataclass

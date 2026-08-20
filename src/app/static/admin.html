@@ -313,6 +313,22 @@
           на своих карточках. Канал связи (Telegram/MAX) пишется в поле «Источник».
         </p>
         <div class="set-row" style="margin-top:12px">
+          <strong>Источник карточек CRM:</strong>
+          <select class="line-add" id="source-tg" aria-label="Источник для Telegram"></select>
+          <select class="line-add" id="source-max" aria-label="Источник для MAX"></select>
+          <button class="btn btn--ghost" id="sources-refresh" type="button">Обновить из CRM</button>
+          <span id="sources-state" style="font-size:var(--fs-sm);color:var(--muted)"></span>
+        </div>
+        <p class="hint" style="margin:8px 0 0">
+          Записи с «похожим» именем уже есть в справочнике — выбирайте их вместо
+          создания новых (дубли в отчётах CRM никому не нужны). Новые записи заводит
+          scripts/add_max_source.py.
+          <span id="source-tg-missing" hidden style="color:var(--err)">
+            Telegram: выбранного источника нет в CRM.</span>
+          <span id="source-max-missing" hidden style="color:var(--err)">
+            MAX: выбранного источника нет в CRM.</span>
+        </p>
+        <div class="set-row" style="margin-top:12px">
           <strong>Дублировать переписку в таймлайн CRM:</strong>
           <div class="segment" id="timeline-segment">
             <button data-mode="first" type="button">Только первое сообщение</button>
@@ -424,6 +440,64 @@
       }
       catch { /* не supervisor — секция скрыта целиком */ }
     }
+
+    // ---- Источники карточек CRM (справочник портала) ----
+    function renderSourceSelect(selId, ch, d) {
+      const sel = document.getElementById(selId);
+      const cur = d.mapping[ch] ?? d.defaults[ch];
+      let html =
+        '<option value="' + esc(d.defaults[ch]) + '">По умолчанию (' +
+        esc(d.defaults[ch]) + ")</option>" +
+        '<option value="">Не передавать</option>';
+      for (const s of d.sources) {
+        const like = ch === "tg" ? s.like_tg : s.like_max;
+        html += '<option value="' + esc(s.status_id) + '">' + esc(s.name) +
+          (like ? " — похож на " + (ch === "tg" ? "Telegram" : "MAX") : "") + "</option>";
+      }
+      // Выбранный код исчез из справочника — держим его видимым с пометкой.
+      if (cur && cur !== d.defaults[ch] &&
+          !d.sources.some((s) => s.status_id === cur)) {
+        html += '<option value="' + esc(cur) + '">' + esc(cur) + " — нет в CRM</option>";
+      }
+      sel.innerHTML = html;
+      sel.value = cur;
+      document.getElementById("source-" + ch + "-missing").hidden = !d.missing[ch];
+    }
+    async function loadSources(showErrors) {
+      try {
+        const d = await api("/admin/api/sources");
+        renderSourceSelect("source-tg", "tg", d);
+        renderSourceSelect("source-max", "max", d);
+        return d;
+      } catch (e) {
+        if (showErrors) showToast("Не получилось загрузить источники: " + e.message);
+        return null;
+      }
+    }
+    ["tg", "max"].forEach((ch) => {
+      document.getElementById("source-" + ch).addEventListener("change", async (ev) => {
+        try {
+          await api("/admin/api/sources/mapping", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ [ch]: ev.target.value }),
+          });
+          loadSources(false); // перерисовать бейдж «нет в CRM» по факту
+        } catch (e) {
+          showToast("Не получилось сохранить: " + e.message);
+          loadSources(false);
+        }
+      });
+    });
+    document.getElementById("sources-refresh").addEventListener("click", async () => {
+      const btn = document.getElementById("sources-refresh");
+      const state = document.getElementById("sources-state");
+      btn.disabled = true;
+      state.textContent = "обновляем…";
+      const d = await loadSources(true);
+      state.textContent = d ? "готово" : "не удалось";
+      btn.disabled = false;
+    });
 
     // ---- Supervisor-зона ----
     let managersCache = [];
@@ -625,6 +699,7 @@
       document.getElementById("supervisor-zone").style.display = "";
       await loadManagers();
       await loadLines();
+      loadSources(false); // тихо: прод без токена не должен спамить тостами
     }
 
     // ---- делегирование: один слушатель на список, строки перерисовываются ----

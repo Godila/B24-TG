@@ -1,9 +1,10 @@
 """Bitrix24Sync: оркестрация входящего сообщения → CRM."""
 
 import logging
+from collections.abc import Mapping
 from typing import NamedTuple
 
-from app.b24.channels import B24ChannelProfile, channel_profile
+from app.b24.channels import channel_profile
 from app.b24.crm import CrmService
 from app.b24.im import ImService
 from app.b24.token_manager import TokenManager
@@ -94,6 +95,9 @@ class Bitrix24Sync:
         existing_entity_id: int | None = None,
         existing_entity_type: str | None = None,
         crm_mode: str = CRM_MODE_DEFAULT,
+        # Маппинг канал→код источника (app_settings.source_map, панель):
+        # нет канала в мапе → дефолт профиля; "" → источник не передавать.
+        source_map: Mapping[Messenger, str] | None = None,
         # Дефолт — TIMELINE_MODE_DEFAULT (дефолт приложения), а не "all":
         # вызов без явного режима не должен молча включать самый шумный.
         timeline_mode: str = TIMELINE_MODE_DEFAULT,
@@ -120,6 +124,8 @@ class Bitrix24Sync:
         фактически новый, карточку заводит режим.
         ``timeline_mode`` (app_settings): all/first/none — что писать в
         таймлайн (уведомление менеджеру режимом не трогается).
+        ``source_map`` (app_settings, панель) подменяет источник карточек:
+        нет канала — дефолт профиля канала, "" — источник не передавать.
         ``sender_first_name``/``sender_last_name``/``sender_username`` —
         дополнительные данные канала: split-имя в NAME/LAST_NAME, @username
         (TG) — в мульти-поле IM.
@@ -134,6 +140,7 @@ class Bitrix24Sync:
         auth = token.access_token
         profile = channel_profile(messenger)
         name = sender_name or sender_phone or "Без имени"
+        source = (source_map or {}).get(messenger, profile.source_id)
 
         # 1. Разрешение CRM-сущности: живая привязка диалога авторитетнее
         #    режима; протухшая (карточки удалены в B24) — режим решает
@@ -145,7 +152,7 @@ class Bitrix24Sync:
                 name=name,
                 phone=sender_phone,
                 assigned=assigned_b24_user_id,
-                profile=profile,
+                source=source,
                 existing_entity_id=existing_entity_id,
                 crm_mode=crm_mode,
                 first_name=sender_first_name,
@@ -158,7 +165,7 @@ class Bitrix24Sync:
                 name=name,
                 phone=sender_phone,
                 assigned=assigned_b24_user_id,
-                profile=profile,
+                source=source,
                 existing_contact_id=existing_contact_id,
                 existing_entity_id=existing_entity_id,
                 crm_mode=crm_mode,
@@ -226,7 +233,7 @@ class Bitrix24Sync:
         name: str,
         phone: str,
         assigned: int | None,
-        profile: B24ChannelProfile,
+        source: str | None,
         first_name: str | None,
         last_name: str | None,
         username: str | None,
@@ -244,7 +251,7 @@ class Bitrix24Sync:
                 title=name,
                 phone=phone,
                 assigned_by_id=assigned,
-                source=profile.source_id,
+                source=source,
                 first_name=first_name,
                 last_name=last_name,
                 username=username,
@@ -255,7 +262,7 @@ class Bitrix24Sync:
             name=name,
             phone=phone,
             assigned_by_id=assigned,
-            source=profile.source_id,
+            source=source,
             first_name=first_name,
             last_name=last_name,
             username=username,
@@ -265,7 +272,7 @@ class Bitrix24Sync:
             title=name,
             contact_id=contact.id,
             assigned_by_id=assigned,
-            source=profile.source_id,
+            source=source,
         )
         return _Entities("deal", deal.id, contact.id, True)
 
@@ -276,7 +283,7 @@ class Bitrix24Sync:
         name: str,
         phone: str,
         assigned: int | None,
-        profile: B24ChannelProfile,
+        source: str | None,
         existing_contact_id: int | None,
         existing_entity_id: int | None,
         crm_mode: str,
@@ -304,7 +311,7 @@ class Bitrix24Sync:
                 name=name,
                 phone=phone,
                 assigned=assigned,
-                profile=profile,
+                source=source,
                 first_name=first_name,
                 last_name=last_name,
                 username=username,
@@ -325,7 +332,7 @@ class Bitrix24Sync:
         name: str,
         phone: str,
         assigned: int | None,
-        profile: B24ChannelProfile,
+        source: str | None,
         existing_entity_id: int | None,
         crm_mode: str,
         first_name: str | None,
@@ -366,7 +373,7 @@ class Bitrix24Sync:
             name=name,
             phone=phone,
             assigned=assigned,
-            profile=profile,
+            source=source,
             first_name=first_name,
             last_name=last_name,
             username=username,

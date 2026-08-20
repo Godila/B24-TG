@@ -6,12 +6,16 @@
 долгоживущего воркера: свежая сессия на каждый вызов.
 """
 
+import json
+import logging
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.b24.sources import SOURCE_ID_RE
 from app.b24.sync import CRM_MODE_DEFAULT, CRM_MODES, TIMELINE_MODE_DEFAULT, TIMELINE_MODES
 from app.bridge.crm_sync_worker import AttachmentMeta, CrmSyncData, CrmSyncRepository
 from app.models import (
@@ -24,7 +28,10 @@ from app.models import (
     Dialog,
     Manager,
     Message,
+    Messenger,
 )
+
+logger = logging.getLogger(__name__)
 
 TIMELINE_MODE_KEY = "timeline_mode"
 #: Грузить ли файлы вложений в timeline-комментарии CRM (FILES у
@@ -34,6 +41,9 @@ MEDIA_TO_TIMELINE_KEY = "media_to_timeline"
 #: Какие CRM-карточки заводить новым клиентам: "deal" (контакт+сделка)
 #: или "lead" (только лид). По умолчанию "deal" — прежнее поведение.
 CRM_MODE_KEY = "crm_mode"
+#: Маппинг канал→код записи справочника источников, JSON {"tg": "...", "max": ""}
+#: (панель «Настройки»). Нет ключа/строки → дефолт канала; "" → не передавать.
+SOURCE_MAP_KEY = "source_map"
 
 
 async def _read_setting(session_factory, key: str) -> str | None:
@@ -92,6 +102,44 @@ async def set_crm_mode(session_factory, mode: str) -> None:
     if mode not in CRM_MODES:
         raise ValueError(f"bad crm_mode: {mode!r}")
     await _upsert_setting(session_factory, CRM_MODE_KEY, mode)
+
+
+_SOURCE_ID_RE = re.compile(SOURCE_ID_RE)
+
+
+async def get_source_map(session_factory) -> dict[Messenger, str]:
+    """Прочитать app_settings.source_map (мусор — {}: дефолты каналов)."""
+    raw = await _read_setting(session_factory, SOURCE_MAP_KEY)
+    if raw is None:
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        logger.warning("app_settings.source_map: мусор — игнорируем: %r", raw[:64])
+        return {}
+    result: dict[Messenger, str] = {}
+    for key, value in data.items():
+        try:
+            messenger = Messenger(key)
+        except ValueError:
+            logger.warning("source_map: неизвестный канал %r пропущен", key)
+            continue
+        if isinstance(value, str):
+            result[messenger] = value
+    return result
+
+
+async def set_source_map(session_factory, mapping: dict[Messenger, str]) -> None:
+    """Upsert app_settings.source_map (значения — коды записей или "")."""
+    for messenger, value in mapping.items():
+        if not isinstance(value, str) or not _SOURCE_ID_RE.fullmatch(value):
+            raise ValueError(f"bad source for {messenger.value}: {value!r}")
+    payload = {m.value: v for m, v in mapping.items()}
+    await _upsert_setting(
+        session_factory, SOURCE_MAP_KEY, json.dumps(payload, separators=(",", ":"))
+    )
 
 
 class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
@@ -333,6 +381,9 @@ class WorkerCrmSyncRepository(CrmSyncRepository):
 
     async def get_crm_mode(self) -> str:
         return await get_crm_mode(self._session_factory)
+
+    async def get_source_map(self) -> dict[Messenger, str]:
+        return await get_source_map(self._session_factory)
 
     async def mark_done(self, item: CrmSyncItem) -> None:
         async with self._session_factory() as s:

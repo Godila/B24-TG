@@ -56,6 +56,7 @@ def _make_repo(items, data) -> AsyncMock:
     repo.get_timeline_mode = AsyncMock(return_value="all")
     repo.get_media_to_timeline = AsyncMock(return_value=False)
     repo.get_crm_mode = AsyncMock(return_value="deal")
+    repo.get_source_map = AsyncMock(return_value={})
     return repo
 
 
@@ -347,6 +348,23 @@ async def test_worker_passes_crm_mode_and_entity_binding():
         crm_entity_id=55,
         timeline_comment_id=None,
     )
+
+
+@pytest.mark.asyncio
+async def test_worker_passes_source_map_to_sync():
+    """Маппинг источников из repo.get_source_map() доезжает до process_inbound."""
+    data = _make_data()
+    repo = _make_repo([_make_item()], data)
+    repo.get_source_map = AsyncMock(return_value={Messenger.tg: "CALL"})
+    sync = AsyncMock()
+    sync.process_inbound = AsyncMock(
+        return_value=SyncResult(crm_entity_type="deal", crm_entity_id=100, contact_id=42, is_new=True)
+    )
+
+    worker = CrmSyncWorker(repo=repo, b24sync=sync, max_attempts=5)
+    await worker._process_once()
+
+    assert sync.process_inbound.call_args.kwargs.get("source_map") == {Messenger.tg: "CALL"}
 
 
 # ---------------------------------------------------------------------- #

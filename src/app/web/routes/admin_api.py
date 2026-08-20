@@ -14,7 +14,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 
+from app.b24.channels import channel_profile
 from app.b24.client import Bitrix24Client, Bitrix24Error
+from app.b24.sources import SOURCE_ID_RE, fetch_sources, name_looks_like
 from app.b24.sync import CRM_MODES, TIMELINE_MODES
 from app.b24.token_manager import TokenManager
 from app.b24.users import fetch_b24_users, is_last_active_supervisor, upsert_managers_from_b24
@@ -229,6 +231,97 @@ async def sync_managers_b24(supervisor: SupervisorDep) -> dict:
         supervisor.id,
     )
     return result
+
+
+# ---------------------------------------------------------------------- #
+# Справочник CRM-источников (панель «Настройки»)
+# ---------------------------------------------------------------------- #
+class SourceMappingIn(BaseModel):
+    """Маппинг канал→код записи справочника; None — не трогать,
+    "" — источник не передавать (регекс — SOURCE_ID_RE из b24/sources)."""
+
+    tg: str | None = Field(default=None, pattern="^" + SOURCE_ID_RE + "$")
+    max: str | None = Field(default=None, pattern="^" + SOURCE_ID_RE + "$")
+
+
+@router.get("/sources", response_model=None)
+async def get_sources(supervisor: SupervisorDep) -> dict:
+    """Справочник источников портала + маппинг каналов (для панели).
+
+    Живой crm.status.list на каждый вызов (панель открывают редко,
+    свежесть важнее кэша); похожие по имени на каналы записи помечаем,
+    выбранный-but-удалённый код — флаг missing.
+    """
+    # Локальный импорт: глобальное имя get_settings занято роутом настроек.
+    from app.bridge.crm_sync_repo import get_source_map
+    from app.config import get_settings
+
+    settings = get_settings()
+    token = await TokenManager(
+        client_id=settings.b24_client_id,
+        client_secret=settings.b24_client_secret,
+    ).get_token()
+    if token is None:
+        raise HTTPException(
+            status_code=503, detail="Приложение ЧатМост не установлено в Битрикс24"
+        )
+    # Одноразовый клиент на запрос (web-процесс; паттерн placement.py).
+    client = Bitrix24Client(
+        client_endpoint=token.client_endpoint or settings.b24_portal.rstrip("/") + "/rest/",
+        min_interval=settings.b24_min_call_interval,
+    )
+    try:
+        sources = await fetch_sources(client, token.access_token)
+    except Bitrix24Error as e:
+        if e.code == "ERROR_SCOPE":
+            raise HTTPException(
+                status_code=400,
+                detail="У приложения нет права «CRM» — переустановите приложение с этим разрешением",
+            ) from None
+        raise HTTPException(status_code=502, detail=f"Битрикс24: {e}") from None
+    finally:
+        await client.aclose()
+
+    mapping = await get_source_map(async_session)
+    ids = {s.status_id.upper() for s in sources}
+    defaults = {m: channel_profile(m).source_id for m in (Messenger.tg, Messenger.max)}
+    # Равен дефолту канала — не «пропажа»: его отсутствие — отдельное
+    # состояние (фолбэк+WARNING), бейдж должен подсвечивать только
+    # явно выбранные записи.
+    missing = {
+        m: bool(v) and v.upper() not in ids and v != defaults[m]
+        for m, v in mapping.items()
+    }
+    return {
+        "sources": [
+            {
+                "status_id": s.status_id,
+                "name": s.name,
+                "like_tg": name_looks_like(s.name, Messenger.tg),
+                "like_max": name_looks_like(s.name, Messenger.max),
+            }
+            for s in sources
+        ],
+        "defaults": {m.value: v for m, v in defaults.items()},
+        "mapping": {m.value: v for m, v in mapping.items()},
+        "missing": {m.value: v for m, v in missing.items()},
+    }
+
+
+@router.put("/sources/mapping", response_model=None)
+async def put_sources_mapping(body: SourceMappingIn, supervisor: SupervisorDep) -> dict:
+    """Сохранить маппинг канал→источник (частично: только переданные)."""
+    from app.bridge.crm_sync_repo import get_source_map, set_source_map
+
+    if body.tg is None and body.max is None:
+        raise HTTPException(status_code=422, detail="Нечего обновлять")
+    current = await get_source_map(async_session)
+    if body.tg is not None:
+        current[Messenger.tg] = body.tg
+    if body.max is not None:
+        current[Messenger.max] = body.max
+    await set_source_map(async_session, current)
+    return {"mapping": {m.value: v for m, v in current.items()}}
 
 
 # ---------------------------------------------------------------------- #

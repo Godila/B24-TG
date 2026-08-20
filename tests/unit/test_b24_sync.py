@@ -4,6 +4,7 @@ import pytest
 
 from app.b24.crm import ContactInfo, DealInfo, LeadInfo
 from app.b24.sync import OUTBOUND_COMMENT_PREFIX, Bitrix24Sync
+from app.models import Messenger
 
 
 def _make_sync(crm, im):
@@ -606,3 +607,53 @@ async def test_stale_lead_binding_follows_deal_mode():
     assert result.crm_entity_id == 71
     assert result.contact_id == 70
     assert result.is_new is True
+
+
+# --- Маппинг источников (app_settings.source_map) ------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_source_map_overrides_channel_default():
+    """Панель подменила источник: карточка получает его, а не дефолт канала."""
+    crm = _crm_new_lead()
+    sync = _make_sync(crm, AsyncMock())
+    await sync.process_inbound(
+        sender_name="Иван",
+        sender_phone="+7999",
+        message_text="Привет",
+        assigned_b24_user_id=1,
+        crm_mode="lead",
+        source_map={Messenger.tg: "CALL"},
+    )
+    assert crm.create_lead.call_args.kwargs["source"] == "CALL"
+
+
+@pytest.mark.asyncio
+async def test_source_map_empty_string_disables_source():
+    crm = _crm_new_lead()
+    sync = _make_sync(crm, AsyncMock())
+    await sync.process_inbound(
+        sender_name="Иван",
+        sender_phone="+7999",
+        message_text="Привет",
+        assigned_b24_user_id=1,
+        crm_mode="lead",
+        source_map={Messenger.tg: ""},
+    )
+    assert crm.create_lead.call_args.kwargs["source"] == ""
+
+
+@pytest.mark.asyncio
+async def test_source_map_other_channel_untouched():
+    """Канала нет в мапе (или мапы нет) — дефолт профиля канала."""
+    crm = _crm_new_lead()
+    sync = _make_sync(crm, AsyncMock())
+    await sync.process_inbound(
+        sender_name="Иван",
+        sender_phone="+7999",
+        message_text="Привет",
+        assigned_b24_user_id=1,
+        crm_mode="lead",
+        source_map={Messenger.max: "WEB"},
+    )
+    assert crm.create_lead.call_args.kwargs["source"] == "telegram"

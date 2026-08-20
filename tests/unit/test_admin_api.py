@@ -1,6 +1,7 @@
 """verify_origin + admin_api: роуты панели и онбординга (прямые вызовы)."""
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
@@ -255,6 +256,85 @@ async def test_settings_crm_mode_roundtrip(db):
     assert result["timeline_mode"] == "first"  # другой режим не тронут
     await admin_api.put_settings(admin_api.SettingsIn(crm_mode="deal"), supervisor)
     assert (await admin_api.get_settings(supervisor))["crm_mode"] == "deal"
+
+
+# ---------------------------------------------------------------------- #
+# Справочник источников (GET /sources + PUT /sources/mapping)
+# ---------------------------------------------------------------------- #
+def _fake_token(monkeypatch, token="tok"):
+    tm = SimpleNamespace(get_token=AsyncMock(return_value=SimpleNamespace(
+        access_token=token, client_endpoint=""
+    )))
+    monkeypatch.setattr(admin_api, "TokenManager", lambda **kw: tm)
+
+
+@pytest.mark.asyncio
+async def test_get_sources_lists_flags_and_mapping(db, monkeypatch):
+    from app.b24.sources import B24Source
+
+    supervisor = await _manager(db, 1)
+    _fake_token(monkeypatch)
+    monkeypatch.setattr(
+        admin_api,
+        "fetch_sources",
+        AsyncMock(return_value=[
+            B24Source("TELEGRAM", "Telegram (мессенджер)"),
+            B24Source("MAXOLD", "Максим Никифоров"),  # \bмакс\b ≠ Максим
+            B24Source("CALL", "Звонок"),
+        ]),
+    )
+    await admin_api.put_sources_mapping(admin_api.SourceMappingIn(tg="GONE"), supervisor)
+
+    result = await admin_api.get_sources(supervisor)
+    assert result["defaults"] == {"tg": "telegram", "max": "MAX"}
+    by_id = {s["status_id"]: s for s in result["sources"]}
+    assert by_id["TELEGRAM"]["like_tg"] is True
+    assert by_id["MAXOLD"]["like_max"] is False
+    assert result["mapping"] == {"tg": "GONE"}
+    # missing считается по замапленным каналам (max не тронут — ключа нет).
+    assert result["missing"] == {"tg": True}  # GONE нет в CRM
+
+
+@pytest.mark.asyncio
+async def test_get_sources_no_token_503(db, monkeypatch):
+    supervisor = await _manager(db, 1)
+    monkeypatch.setattr(
+        admin_api,
+        "TokenManager",
+        lambda **kw: SimpleNamespace(get_token=AsyncMock(return_value=None)),
+    )
+    with pytest.raises(HTTPException) as ei:
+        await admin_api.get_sources(supervisor)
+    assert ei.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_put_sources_mapping_partial_merge(db):
+    from app.bridge.crm_sync_repo import get_source_map
+    from app.models import Messenger
+
+    supervisor = await _manager(db, 1)
+    res = await admin_api.put_sources_mapping(admin_api.SourceMappingIn(tg="CALL"), supervisor)
+    assert res["mapping"] == {"tg": "CALL"}
+    # Частичное обновление: второй канал не тронут, "" сохраняется.
+    res = await admin_api.put_sources_mapping(admin_api.SourceMappingIn(max=""), supervisor)
+    assert res["mapping"] == {"tg": "CALL", "max": ""}
+    assert await get_source_map(admin_api.async_session) == {
+        Messenger.tg: "CALL",
+        Messenger.max: "",
+    }
+
+
+@pytest.mark.asyncio
+async def test_put_sources_mapping_rejects_empty_and_bad(db):
+    import pydantic
+
+    supervisor = await _manager(db, 1)
+    with pytest.raises(HTTPException) as ei:
+        await admin_api.put_sources_mapping(admin_api.SourceMappingIn(), supervisor)
+    assert ei.value.status_code == 422
+    with pytest.raises(pydantic.ValidationError):
+        admin_api.SourceMappingIn(tg="плохо!")
 
 
 @pytest.mark.asyncio

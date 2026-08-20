@@ -387,3 +387,35 @@ async def test_crm_mode_setting_roundtrip(session):
     assert await get_crm_mode(factory) == "deal"
     with pytest.raises(ValueError):
         await set_crm_mode(factory, "client")
+
+
+@pytest.mark.asyncio
+async def test_source_map_setting_roundtrip(session):
+    """app_settings.source_map: нет строки — {}; "" сохраняется; мусор и
+    неизвестные каналы — fail-closed пропуск."""
+    from sqlalchemy import update
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.bridge.crm_sync_repo import get_source_map, set_source_map
+    from app.models import AppSetting, Messenger
+
+    factory = async_sessionmaker(bind=session.bind, expire_on_commit=False)
+
+    assert await get_source_map(factory) == {}
+    await set_source_map(factory, {Messenger.tg: "CALL", Messenger.max: ""})
+    assert await get_source_map(factory) == {Messenger.tg: "CALL", Messenger.max: ""}
+
+    async def _raw_set(value: str) -> None:
+        async with factory() as s:
+            await s.execute(
+                update(AppSetting).where(AppSetting.key == "source_map").values(value=value)
+            )
+            await s.commit()
+
+    await _raw_set("{junk")  # не JSON
+    assert await get_source_map(factory) == {}
+    await _raw_set('{"icq": "1", "tg": 5, "max": "WEB"}')  # мусорные ключи/значения
+    assert await get_source_map(factory) == {Messenger.max: "WEB"}
+
+    with pytest.raises(ValueError):
+        await set_source_map(factory, {Messenger.tg: "плохо!"})
