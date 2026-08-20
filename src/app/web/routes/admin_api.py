@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.b24.channels import channel_profile
 from app.b24.client import Bitrix24Client, Bitrix24Error
-from app.b24.sources import SOURCE_ID_RE, fetch_sources, name_looks_like
+from app.b24.sources import SOURCE_ID_RE, fetch_sources
 from app.b24.sync import CRM_MODES, TIMELINE_MODES
 from app.b24.token_manager import TokenManager
 from app.b24.users import fetch_b24_users, is_last_active_supervisor, upsert_managers_from_b24
@@ -249,8 +249,7 @@ async def get_sources(supervisor: SupervisorDep) -> dict:
     """Справочник источников портала + маппинг каналов (для панели).
 
     Живой crm.status.list на каждый вызов (панель открывают редко,
-    свежесть важнее кэша); похожие по имени на каналы записи помечаем,
-    выбранный-but-удалённый код — флаг missing.
+    свежесть важнее кэша); выбранный-but-удалённый код — флаг missing.
     """
     # Локальный импорт: глобальное имя get_settings занято роутом настроек.
     from app.bridge.crm_sync_repo import get_source_map
@@ -293,15 +292,7 @@ async def get_sources(supervisor: SupervisorDep) -> dict:
         for m, v in mapping.items()
     }
     return {
-        "sources": [
-            {
-                "status_id": s.status_id,
-                "name": s.name,
-                "like_tg": name_looks_like(s.name, Messenger.tg),
-                "like_max": name_looks_like(s.name, Messenger.max),
-            }
-            for s in sources
-        ],
+        "sources": [{"status_id": s.status_id, "name": s.name} for s in sources],
         "defaults": {m.value: v for m, v in defaults.items()},
         "mapping": {m.value: v for m, v in mapping.items()},
         "missing": {m.value: v for m, v in missing.items()},

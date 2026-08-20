@@ -320,9 +320,9 @@
           <span id="sources-state" style="font-size:var(--fs-sm);color:var(--muted)"></span>
         </div>
         <p class="hint" style="margin:8px 0 0">
-          Записи с «похожим» именем уже есть в справочнике — выбирайте их вместо
-          создания новых (дубли в отчётах CRM никому не нужны). Новые записи заводит
-          scripts/add_max_source.py.
+          Выбранная запись подставляется в поле «Источник» новых карточек
+          (название в CRM — то, что у записи в справочнике). Новые записи
+          заводит scripts/add_max_source.py.
           <span id="source-tg-missing" hidden style="color:var(--err)">
             Telegram: выбранного источника нет в CRM.</span>
           <span id="source-max-missing" hidden style="color:var(--err)">
@@ -444,18 +444,25 @@
     // ---- Источники карточек CRM (справочник портала) ----
     function renderSourceSelect(selId, ch, d) {
       const sel = document.getElementById(selId);
-      const cur = d.mapping[ch] ?? d.defaults[ch];
+      const defCode = d.defaults[ch];
+      // Код дефолта есть в справочнике → показываем его запись как
+      // «По умолчанию» (с живым именем) и не дублируем в списке.
+      const defEntry = d.sources.find(
+        (s) => s.status_id.toUpperCase() === defCode.toUpperCase()
+      );
+      const defVal = defEntry ? defEntry.status_id : defCode;
+      const cur = d.mapping[ch] ?? defVal;
       let html =
-        '<option value="' + esc(d.defaults[ch]) + '">По умолчанию (' +
-        esc(d.defaults[ch]) + ")</option>" +
-        '<option value="">Не передавать</option>';
+        '<option value="' + esc(defVal) + '">По умолчанию' +
+        (defEntry ? " — " + esc(defEntry.name) : " (" + esc(defCode) + ")") +
+        "</option>" +
+        '<option value="">Не передавать</option>";
       for (const s of d.sources) {
-        const like = ch === "tg" ? s.like_tg : s.like_max;
-        html += '<option value="' + esc(s.status_id) + '">' + esc(s.name) +
-          (like ? " — похож на " + (ch === "tg" ? "Telegram" : "MAX") : "") + "</option>";
+        if (s === defEntry) continue;
+        html += '<option value="' + esc(s.status_id) + '">' + esc(s.name) + "</option>";
       }
       // Выбранный код исчез из справочника — держим его видимым с пометкой.
-      if (cur && cur !== d.defaults[ch] &&
+      if (cur && cur !== defVal &&
           !d.sources.some((s) => s.status_id === cur)) {
         html += '<option value="' + esc(cur) + '">' + esc(cur) + " — нет в CRM</option>";
       }

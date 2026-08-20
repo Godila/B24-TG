@@ -279,7 +279,6 @@ async def test_get_sources_lists_flags_and_mapping(db, monkeypatch):
         "fetch_sources",
         AsyncMock(return_value=[
             B24Source("TELEGRAM", "Telegram (мессенджер)"),
-            B24Source("MAXOLD", "Максим Никифоров"),  # \bмакс\b ≠ Максим
             B24Source("CALL", "Звонок"),
         ]),
     )
@@ -287,9 +286,10 @@ async def test_get_sources_lists_flags_and_mapping(db, monkeypatch):
 
     result = await admin_api.get_sources(supervisor)
     assert result["defaults"] == {"tg": "telegram", "max": "MAX"}
-    by_id = {s["status_id"]: s for s in result["sources"]}
-    assert by_id["TELEGRAM"]["like_tg"] is True
-    assert by_id["MAXOLD"]["like_max"] is False
+    assert result["sources"] == [
+        {"status_id": "TELEGRAM", "name": "Telegram (мессенджер)"},
+        {"status_id": "CALL", "name": "Звонок"},
+    ]
     assert result["mapping"] == {"tg": "GONE"}
     # missing считается по замапленным каналам (max не тронут — ключа нет).
     assert result["missing"] == {"tg": True}  # GONE нет в CRM
