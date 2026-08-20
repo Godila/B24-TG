@@ -49,18 +49,23 @@ async def _token_belongs_to_portal(auth: OnAppInstallAuth) -> bool:
 async def on_app_install(request: Request) -> JSONResponse:
     """Обработчик события установки приложения.
 
-    Bitrix24 присылает OAuth-токены в POST body (поле auth).
+    Bitrix24 присылает OAuth-токены в POST body (поле auth). Реальный вызов
+    с портала — form-urlencoded с php-массивами (auth[access_token]=… —
+    живой лог 08-20), ручной/скриптовый — JSON; парсер общий с bizproc.
 
     Авторизация — один из двух эшелонов: ручной вызов несёт заголовок
     ``X-Webhook-Secret`` (``B24_WEBHOOK_SECRET`` из .env); реальный вызов
     с портала заголовка не имеет (B24 их не подписывает) и допускается
     самовалидацией токена через user.current (_token_belongs_to_portal).
     """
-    try:
-        payload = await request.json()
-    except ValueError:
-        # json.JSONDecodeError — подкласс ValueError; битое тело → 422, не 500.
-        logger.warning("ONAPPINSTALL: malformed JSON body rejected")
+    # Приватный хелпер соседнего роута: JSON|form-парсинг с php-ключами —
+    # единая точка разбора B24-тел (дублировать 30 строк дороже импорта).
+    from app.web.routes.bizproc import _payload_dict
+
+    payload = _payload_dict(await request.body(), request.headers.get("content-type", ""))
+    if payload is None:
+        # Битое тело → 422, не 500.
+        logger.warning("ONAPPINSTALL: malformed body rejected (не JSON/form)")
         return JSONResponse({"error": "validation error"}, status_code=422)
     auth_raw = payload.get("auth", {}) if isinstance(payload, dict) else {}
     try:

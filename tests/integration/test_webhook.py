@@ -144,3 +144,35 @@ def test_onappinstall_malformed_json_returns_422(client):
 
     assert response.status_code == 422
     tm.save_install_data.assert_not_awaited()
+
+
+def test_onappinstall_form_encoded_body_saves(client):
+    """Реальный вызов с портала (живой лог 08-20): form-urlencoded с
+    php-массивами auth[access_token]=… — раньше отвергался как «не JSON»."""
+    with patch("app.web.routes.webhook.get_token_manager") as mock_get, \
+         patch("app.web.routes.webhook._token_belongs_to_portal",
+               new=AsyncMock(return_value=True)):
+        tm = AsyncMock()
+        tm.save_install_data = AsyncMock()
+        mock_get.return_value = tm
+        response = client.post(
+            "/webhook/b24/onappinstall",
+            content=(
+                "event=ONAPPINSTALL"
+                "&auth[access_token]=new_access"
+                "&auth[expires_in]=3600"
+                "&auth[scope]=crm,im,bizproc"
+                "&auth[domain]=b24-ye2jjz.bitrix24.ru"
+                "&auth[client_endpoint]=https://b24-ye2jjz.bitrix24.ru/rest/"
+                "&auth[member_id]=test_member_123"
+                "&auth[refresh_token]=new_refresh"
+                "&auth[user_id]=1"
+            ),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+
+    assert response.status_code == 200
+    saved = tm.save_install_data.await_args.args[0]
+    assert saved["access_token"] == "new_access"
+    assert saved["member_id"] == "test_member_123"
+    assert saved["user_id"] == 1  # строка приведена схемой к int
