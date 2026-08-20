@@ -7,6 +7,9 @@ from app.messaging.telegram.proxy import telethon_proxy
 
 
 def _settings(**kw) -> Settings:
+    # Прокси-поля зануляем ЯВНО: pydantic-settings дочитывает env, а на проде
+    # в контейнере выставлены TG_PROXY_* (xray) — без этого тесты, ожидающие
+    # «поля пустые», зависят от машины запуска (поймано прогоном на VM).
     base: dict = {
         "tg_api_id": 1,
         "tg_api_hash": "x",
@@ -15,6 +18,11 @@ def _settings(**kw) -> Settings:
         "b24_client_secret": "s",
         "database_url": "sqlite+aiosqlite:///:memory:",
         "session_secret": "sec",
+        "tg_proxy_scheme": "",
+        "tg_proxy_host": "",
+        "tg_proxy_port": 0,
+        "tg_proxy_username": "",
+        "tg_proxy_password": "",
     }
     base.update(kw)
     return Settings(**base)
