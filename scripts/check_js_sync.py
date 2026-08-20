@@ -11,6 +11,9 @@ app.js (виджет сделки) и inbox.js («Чаты») делят общ�
   supervisor-режим inbox): заморожены хэши обеих сторон; изменение любой
   стороны = «проверь парную копию: синхронизировать или обновить базу».
 - Новый общий метод вне базы = ошибка: классифицируй через --update-baseline.
+- ``node --check`` на app.js/inbox.js и инлайн-скрипты admin.html
+  (инцидент 2026-08-20: кавычка в инлайн-JS убила весь скрипт панели —
+  pytest/ruff JS не видят; нет node в окружении — проверка тихо скипается).
 
 Baseline (``scripts/js_sync_baseline.json``) коммитится. После осознанного
 изменения: ``python scripts/check_js_sync.py --update-baseline``.
@@ -65,6 +68,35 @@ def _sha(body: str) -> str:
     return hashlib.sha256(body.encode()).hexdigest()
 
 
+def _node_check(sources: list[tuple[str, str]]) -> list[str]:
+    """``node --check`` на JS-источники (файлы и инлайн-скрипты)."""
+    import shutil
+    import subprocess
+    import tempfile
+
+    node = shutil.which("node")
+    if node is None:
+        print("node не найден — синтаксис JS не проверен", file=sys.stderr)
+        return []
+    errors: list[str] = []
+    for name, src in sources:
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".js", delete=False, encoding="utf-8"
+        ) as f:
+            f.write(src)
+            tmp = f.name
+        try:
+            r = subprocess.run(
+                [node, "--check", tmp], capture_output=True, text=True, check=False
+            )
+        finally:
+            Path(tmp).unlink(missing_ok=True)
+        if r.returncode != 0:
+            lines = (r.stderr or "").strip().splitlines()
+            errors.append(f"syntax: {name} — {lines[-1] if lines else 'node --check failed'}")
+    return errors
+
+
 def _classify(app: dict[str, str], inbox: dict[str, str]) -> dict:
     common = sorted(set(app) & set(inbox))
     same = [n for n in common if app[n] == inbox[n]]
@@ -106,9 +138,27 @@ def main() -> int:
     parser.add_argument("--update-baseline", action="store_true", help="перезаписать baseline")
     args = parser.parse_args()
 
-    app = _extract_methods(args.app.read_text(encoding="utf-8"))
-    inbox = _extract_methods(args.inbox.read_text(encoding="utf-8"))
+    app_src = args.app.read_text(encoding="utf-8")
+    inbox_src = args.inbox.read_text(encoding="utf-8")
+    admin_html = (REPO / "src/app/static/admin.html").read_text(encoding="utf-8")
+    inline = re.findall(r"<script>(.*?)</script>", admin_html, re.DOTALL)
+    syntax_errors = _node_check(
+        [
+            ("app.js", app_src),
+            ("inbox.js", inbox_src),
+            *[(f"admin.html<script#{i}>", s) for i, s in enumerate(inline, 1)],
+        ]
+    )
+
+    app = _extract_methods(app_src)
+    inbox = _extract_methods(inbox_src)
     state = _classify(app, inbox)
+
+    if syntax_errors:
+        print(f"js syntax: {len(syntax_errors)} проблем(а)", file=sys.stderr)
+        for e in syntax_errors:
+            print(f"  {e}", file=sys.stderr)
+        return 1
 
     if args.update_baseline:
         BASELINE.write_text(json.dumps(state, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

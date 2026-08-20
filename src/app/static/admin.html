@@ -456,7 +456,7 @@
         '<option value="' + esc(defVal) + '">По умолчанию' +
         (defEntry ? " — " + esc(defEntry.name) : " (" + esc(defCode) + ")") +
         "</option>" +
-        '<option value="">Не передавать</option>";
+        '<option value="">Не передавать</option>';
       for (const s of d.sources) {
         if (s === defEntry) continue;
         html += '<option value="' + esc(s.status_id) + '">' + esc(s.name) + "</option>";
