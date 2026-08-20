@@ -13,6 +13,7 @@ from app.config import get_settings
 from app.web.routes import (
     admin,
     admin_api,
+    bizproc,
     dialogs,
     health,
     inbox,
@@ -111,6 +112,8 @@ def create_app() -> FastAPI:
     # --- Маршруты ---
     app.include_router(health.router)
     app.include_router(webhook.router)
+    # Активити бизнес-процессов (server-to-server, как webhook).
+    app.include_router(bizproc.router)
     app.include_router(placement.router)
     app.include_router(dialogs.router)
     app.include_router(inbox.router)
