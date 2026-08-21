@@ -459,3 +459,205 @@ async def test_inbound_media_missing_file_skipped(tmp_path):
 
     assert sync.process_inbound.await_args.kwargs["files"] == []
     repo.mark_done.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------- #
+# Открытые линии (imconnector): ветки воркера вместо CRM-синка
+# ---------------------------------------------------------------------- #
+
+from app.b24.client import Bitrix24Error
+
+
+class _FakeOpenLine:
+    def __init__(self, send_result=True, send_exc=None):
+        self.send_calls: list = []
+        self.delivery_calls: list = []
+        self._send_result = send_result
+        self._send_exc = send_exc
+
+    async def send_messages(self, *, line_id, messages):
+        self.send_calls.append((line_id, messages))
+        if self._send_exc is not None:
+            raise self._send_exc
+        return self._send_result
+
+    async def send_status_delivery(self, *, line_id, messages):
+        self.delivery_calls.append((line_id, messages))
+        return self._send_result
+
+
+def _ol_data(**kw):
+    defaults = {
+        "message_text": "Привет из TG",
+        "sender_name": "Иван",
+        "sender_phone": "+7999",
+        "messenger": Messenger.tg,
+        "dialog_id": 11,
+        "chat_title": None,
+        "external_message_id": "991",
+        "message_created_at": datetime(2026, 8, 20, 12, 0, tzinfo=UTC),
+        "sent_at": None,
+        "contact_external_user_id": "u50",
+        "ol_line_id": "107",
+        "ol_active": True,
+    }
+    defaults.update(kw)
+    return _make_data(**defaults)
+
+
+@pytest.mark.asyncio
+async def test_ol_inbound_sends_to_line_instead_of_crm():
+    repo = _make_repo([_make_item()], _ol_data())
+    sync = AsyncMock()
+    ol = _FakeOpenLine()
+    worker = CrmSyncWorker(repo=repo, b24sync=sync, openline=ol)
+    await worker._process_once()
+
+    sync.process_inbound.assert_not_awaited()
+    assert len(ol.send_calls) == 1
+    line_id, messages = ol.send_calls[0]
+    assert line_id == "107"
+    (msg,) = messages
+    assert msg["chat"]["id"] == "11"
+    assert msg["user"]["id"] == "tg_u50"
+    assert msg["message"]["id"] == "991"
+    assert msg["message"]["text"] == "Привет из TG"
+    repo.mark_done.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_ol_inbound_inactive_waits_without_burning_attempts():
+    repo = _make_repo([_make_item()], _ol_data(ol_active=False))
+    ol = _FakeOpenLine()
+    worker = CrmSyncWorker(repo=repo, b24sync=AsyncMock(), openline=ol)
+    await worker._process_once()
+
+    assert ol.send_calls == []
+    repo.reschedule.assert_awaited_once()
+    kwargs = repo.reschedule.call_args.kwargs
+    assert kwargs["delay_seconds"] == 300
+    assert kwargs["count_attempt"] is False
+    repo.mark_done.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ol_inbound_not_active_line_waits_without_burning_attempts():
+    repo = _make_repo([_make_item()], _ol_data())
+    ol = _FakeOpenLine(send_exc=Bitrix24Error("NOT_ACTIVE_LINE", "линия выключена"))
+    worker = CrmSyncWorker(repo=repo, b24sync=AsyncMock(), openline=ol)
+    await worker._process_once()
+
+    repo.reschedule.assert_awaited_once()
+    assert repo.reschedule.call_args.kwargs["count_attempt"] is False
+    repo.mark_failed.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ol_inbound_no_token_retries_with_attempt():
+    repo = _make_repo([_make_item()], _ol_data())
+    ol = _FakeOpenLine(send_result=None)
+    worker = CrmSyncWorker(repo=repo, b24sync=AsyncMock(), openline=ol)
+    await worker._process_once()
+
+    repo.reschedule.assert_awaited_once()
+    # count_attempt не передан = дефолт True (burn), unlike ol_inactive-ветки
+    assert "count_attempt" not in repo.reschedule.call_args.kwargs
+    assert "no_b24_token" in repo.reschedule.call_args.kwargs["error"]
+
+
+@pytest.mark.asyncio
+async def test_ol_inbound_files_signed_urls(monkeypatch):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://app.example")
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        repo = _make_repo(
+            [_make_item()],
+            _ol_data(
+                attachments=[
+                    AttachmentMeta(
+                        file_path="in/x.png",
+                        file_name="foto.png",
+                        mime_type="image/png",
+                        size=10,
+                        attachment_id=33,
+                    )
+                ]
+            ),
+        )
+        ol = _FakeOpenLine()
+        worker = CrmSyncWorker(repo=repo, b24sync=AsyncMock(), openline=ol)
+        await worker._process_once()
+
+        (msg,) = ol.send_calls[0][1]
+        (f,) = msg["message"]["files"]
+        assert f["name"] == "foto.png"
+        assert f["url"].startswith("https://app.example/media/public/33/")
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_ol_inbound_files_skipped_without_public_base_url():
+    repo = _make_repo(
+        [_make_item()],
+        _ol_data(attachments=[AttachmentMeta(file_path="in/x.png", attachment_id=33)]),
+    )
+    ol = _FakeOpenLine()
+    worker = CrmSyncWorker(repo=repo, b24sync=AsyncMock(), openline=ol)
+    await worker._process_once()
+
+    (msg,) = ol.send_calls[0][1]
+    assert "files" not in msg["message"]
+
+
+@pytest.mark.asyncio
+async def test_ol_outbound_sends_delivery_status():
+    repo = _make_repo(
+        [_make_item(kind=KIND_OUTBOUND)],
+        _ol_data(
+            b24_im_chat_id=1807,
+            b24_im_message_id=86497,
+            sent_at=datetime(2026, 8, 20, 12, 0, tzinfo=UTC),
+        ),
+    )
+    sync = AsyncMock()
+    ol = _FakeOpenLine()
+    worker = CrmSyncWorker(repo=repo, b24sync=sync, openline=ol)
+    await worker._process_once()
+
+    sync.process_outbound.assert_not_awaited()
+    assert len(ol.delivery_calls) == 1
+    line_id, messages = ol.delivery_calls[0]
+    assert line_id == "107"
+    (m,) = messages
+    assert m["im"] == {"chat_id": 1807, "message_id": 86497}
+    assert m["chat"]["id"] == "11"
+    repo.mark_done.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_ol_outbound_without_im_pair_done_noop():
+    """Панель/шаг БП: im-пар нет — статус слать некому, done без действий."""
+    repo = _make_repo([_make_item(kind=KIND_OUTBOUND)], _ol_data())
+    ol = _FakeOpenLine()
+    worker = CrmSyncWorker(repo=repo, b24sync=AsyncMock(), openline=ol)
+    await worker._process_once()
+
+    assert ol.delivery_calls == []
+    repo.mark_done.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_ol_outbound_not_active_line_loses_status_but_done():
+    repo = _make_repo(
+        [_make_item(kind=KIND_OUTBOUND)],
+        _ol_data(b24_im_chat_id=1807, b24_im_message_id=86497),
+    )
+    ol = _FakeOpenLine(send_exc=Bitrix24Error("NOT_ACTIVE_LINE", "off"))
+    worker = CrmSyncWorker(repo=repo, b24sync=AsyncMock(), openline=ol)
+    await worker._process_once()
+
+    repo.mark_done.assert_awaited_once()
+    repo.reschedule.assert_not_awaited()

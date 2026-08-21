@@ -19,14 +19,21 @@ import json
 import logging
 import re
 import time
+from html import escape
 from pathlib import Path
 
-from fastapi import APIRouter, Form, Query, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 
 from app.b24.client import Bitrix24Client, Bitrix24Error
+from app.b24.openlines import OpenLineService
+from app.b24.token_manager import TokenManager
 from app.config import get_settings
-from app.web.deps import ManagerDep
+from app.db import async_session
+from app.models import Manager, ManagerRole, TgAccount
+from app.web.deps import ManagerDep, verify_origin
 from app.web.session import (
     SESSION_COOKIE,
     create_session_cookie_params,
@@ -397,7 +404,7 @@ async def placement_deal_dev(
     deal_id: int | None = Query(default=None),
     b24_user_id: int | None = Query(default=None),
     entity_type: str = Query(default="deal", pattern="^(deal|lead)$"),
-) -> HTMLResponse | JSONResponse:
+) -> HTMLResponse:
     """Dev-режим: открыть placement локально без B24 POST.
 
     Доступен только когда settings.dev_mode == True.
@@ -409,4 +416,247 @@ async def placement_deal_dev(
         return JSONResponse({"error": "b24_user_id required"}, status_code=400)
     return _set_session_and_respond(
         b24_user_id=b24_user_id, deal_id=deal_id, entity_type=entity_type
+    )
+
+
+# --------------------------------------------------------------------- #
+# Слайдер SETTING_CONNECTOR: привязка открытой линии B24 к линии ЧатМост
+# (открывается из настроек коннектора в карточке линии контакт-центра).
+# Страница — серверный рендер: одна форма, ноль JS.
+# --------------------------------------------------------------------- #
+
+
+def _account_label(a: TgAccount) -> str:
+    base = f"{a.messenger.value.upper()} · {a.phone}"
+    return f"{base} · {a.display_name}" if a.display_name else base
+
+
+def _connector_page(
+    line: str,
+    accounts: list[TgAccount],
+    current: TgAccount | None,
+    message: str = "",
+    error: str = "",
+) -> str:
+    # display_name/phone — внешние данные (профиль MAX/TG), line — из B24:
+    # всё интерполируется в HTML — экранируем (страница на нашем origin).
+    safe_line = escape(line)
+    rows = []
+    for a in accounts:
+        bound_other = a.ol_line_id is not None and a.ol_line_id != line
+        checked = "checked" if current is not None and current.id == a.id else ""
+        disabled = "disabled" if bound_other else ""
+        note = f" (привязан к линии {a.ol_line_id})" if bound_other else ""
+        rows.append(
+            f'<label style="display:block;margin:6px 0">'
+            f'<input type="radio" name="account" value="{a.id}" {checked} {disabled}> '
+            f"{escape(_account_label(a))}{escape(note)}</label>"
+        )
+    rows.append(
+        f'<label style="display:block;margin:6px 0">'
+        f'<input type="radio" name="account" value="none"'
+        f'{"checked" if current is None else ""}> Не использовать ЧатМост</label>'
+    )
+    notice = (
+        f'<p style="color:#1a7f37">{escape(message)}</p>' if message else
+        f'<p style="color:#b3261e">{escape(error)}</p>' if error else ""
+    )
+    cur = f"Сейчас привязан: {escape(_account_label(current))}." if current else "Линия не привязана к ЧатМост."
+    return (
+        '<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">'
+        "<title>ЧатМост — коннектор открытой линии</title></head>"
+        '<body style="font-family:system-ui,sans-serif;max-width:520px;margin:24px;padding:0 8px">'
+        f"<h3>Коннектор ЧатМост · линия {safe_line}</h3>"
+        f"<p>{cur} Выберите линию ЧатМост (канал), переписка которой будет "
+        "идти в этот чат открытой линии:</p>"
+        f'<form method="post" action="/placement/connector/save">'
+        f'<input type="hidden" name="line" value="{safe_line}">'
+        f"{''.join(rows)}"
+        '<button type="submit" style="margin-top:12px">Сохранить</button>'
+        "</form>"
+        f"{notice}"
+        "</body></html>"
+    )
+
+
+def _connector_denied(text: str) -> HTMLResponse:
+    return HTMLResponse(
+        '<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"></head>'
+        f'<body style="font-family:system-ui,sans-serif;padding:24px">{text}</body></html>',
+        status_code=403,
+    )
+
+
+async def _connector_render(
+    b24_user_id: int, line: str, message: str = "", error: str = ""
+) -> HTMLResponse:
+    async with async_session() as session:
+        manager = (
+            await session.execute(select(Manager).where(Manager.b24_user_id == b24_user_id))
+        ).scalar_one_or_none()
+        if manager is None or manager.role != ManagerRole.supervisor:
+            return _connector_denied(
+                "Настройка коннектора доступна только администраторам ЧатМост."
+            )
+        accounts = list(
+            (
+                await session.execute(
+                    select(TgAccount)
+                    .where(TgAccount.is_removed.is_(False))
+                    .order_by(TgAccount.id)
+                )
+            )
+            .scalars()
+        )
+        current = next((a for a in accounts if a.ol_line_id == line), None)
+    # Кука + HTML одним ответом — общий механизм всех placement-страниц.
+    return _set_session_and_respond(
+        b24_user_id, None, html=_connector_page(line, accounts, current, message, error)
+    )
+
+
+async def _b24_connector_calls(
+    line: str, *, active: bool, set_data: dict | None = None
+) -> None:
+    """activate (+опц. set_data) app-токеном; Bitrix24Error — наружу."""
+    settings = get_settings()
+    tm = TokenManager(client_id=settings.b24_client_id, client_secret=settings.b24_client_secret)
+    client = Bitrix24Client(client_endpoint=settings.b24_portal.rstrip("/") + "/rest/")
+    try:
+        ol = OpenLineService(tm, client)
+        result = await ol.activate(line_id=line, active=active)
+        if result is None:
+            raise Bitrix24Error("no_b24_token", "нет токена приложения — переустановите приложение")
+        if set_data is not None:
+            try:
+                await ol.set_data(line_id=line, data=set_data)
+            except Bitrix24Error as exc:
+                logger.warning("connector.data.set failed (некритично): %s", exc)
+    finally:
+        await client.aclose()
+
+
+@router.post("/connector", response_model=None)
+async def placement_connector_post(
+    request: Request,
+    placement: str = Form(default="", alias="PLACEMENT"),
+    placement_options: str = Form(default="{}", alias="PLACEMENT_OPTIONS"),
+    auth_id: str = Form(default="", alias="AUTH_ID"),
+    auth: str = Form(default="", alias="AUTH"),
+) -> HTMLResponse | JSONResponse:
+    """SETTING_CONNECTOR: B24 открывает слайдер настроек коннектора линии."""
+    settings = get_settings()
+    b24_user_id = await _resolve_b24_user(request, settings, auth, auth_id)
+    if isinstance(b24_user_id, JSONResponse):
+        return b24_user_id
+    try:
+        options = json.loads(placement_options) if placement_options else {}
+    except json.JSONDecodeError:
+        options = {}
+    line = str(options.get("LINE") or "")
+    if not line:
+        return JSONResponse({"error": "PLACEMENT_OPTIONS.LINE required"}, status_code=400)
+    logger.info("Placement opened: SETTING_CONNECTOR line=%s b24_user_id=%s", line, b24_user_id)
+    return await _connector_render(b24_user_id, line)
+
+
+@router.get("/connector", response_model=None)
+async def placement_connector_get(
+    manager: ManagerDep, line: str = Query(default="")
+) -> HTMLResponse | JSONResponse:
+    """GET-фолбэк (перезагрузка слайдера) — по живой сессионной куке."""
+    if not line:
+        return JSONResponse({"error": "line required"}, status_code=400)
+    return await _connector_render(manager.b24_user_id, line)
+
+
+@router.post("/connector/save", response_model=None, dependencies=[Depends(verify_origin)])
+async def placement_connector_save(
+    manager: ManagerDep,
+    line: str = Form(...),
+    account: str = Form(...),
+) -> HTMLResponse | JSONResponse:
+    """Сохранить привязку: activate на стороне B24 ДО записи в БД (без
+    активации события операторов не придут); set_data — best-effort."""
+    if manager.role != ManagerRole.supervisor:
+        return _connector_denied("Привязку меняет только администратор ЧатМост.")
+    if account == "none":
+        async with async_session() as session:
+            result = await session.execute(
+                update(TgAccount)
+                .where(TgAccount.ol_line_id == line)
+                .values(ol_line_id=None, ol_active=False)
+            )
+            await session.commit()
+            unbound = result.rowcount
+        try:
+            await _b24_connector_calls(line, active=False)
+        except Bitrix24Error as exc:
+            logger.warning("connector deactivate failed (линия могла удалиться): %s", exc)
+        return await _connector_render(
+            manager.b24_user_id, line, message=f"Привязка снята (аккаунтов: {unbound})."
+        )
+    try:
+        account_id = int(account)
+    except ValueError:
+        return JSONResponse({"error": "bad account"}, status_code=422)
+    async with async_session() as session:
+        acc = await session.get(TgAccount, account_id)
+        if acc is None or acc.is_removed:
+            return await _connector_render(manager.b24_user_id, line, error="Аккаунт не найден.")
+        conflict = (
+            await session.execute(
+                select(TgAccount.id).where(
+                    TgAccount.ol_line_id == line, TgAccount.id != account_id
+                )
+            )
+        ).scalar_one_or_none()
+        if conflict is not None:
+            return await _connector_render(
+                manager.b24_user_id,
+                line,
+                error=f"Линия уже привязана к другому аккаунту (#{conflict}).",
+            )
+        set_data = {"ID": str(acc.id), "NAME": _account_label(acc)}
+        if get_settings().public_base_url:
+            set_data["URL_IM"] = get_settings().public_base_url.rstrip("/") + "/placement/app"
+        try:
+            await _b24_connector_calls(line, active=True, set_data=set_data)
+        except Bitrix24Error as exc:
+            return await _connector_render(
+                manager.b24_user_id, line, error=f"Bitrix24 отклонил активацию: {exc}"
+            )
+        # Перепривязка на другую линию: старую деактивируем best-effort —
+        # иначе её чат продолжал бы слать события операторов в никуда.
+        old_line = acc.ol_line_id if acc.ol_line_id not in (None, line) else None
+        acc.ol_line_id = line
+        acc.ol_active = True
+        try:
+            await session.commit()
+        except IntegrityError:
+            # Гонка двух сабмитов на одну линию: unique ol_line_id; B24 уже
+            # активирован — компенсируем, чтобы не осталось активной россылки.
+            await session.rollback()
+            try:
+                await _b24_connector_calls(line, active=False)
+            except Bitrix24Error as exc:
+                logger.warning("connector deactivate (компенсация) failed: %s", exc)
+            return await _connector_render(
+                manager.b24_user_id, line, error="Линию только что привязали к другому аккаунту."
+            )
+    if old_line is not None:
+        try:
+            await _b24_connector_calls(old_line, active=False)
+        except Bitrix24Error as exc:
+            logger.warning("старая линия %s не деактивирована: %s", old_line, exc)
+    logger.info(
+        "SETTING_CONNECTOR: line=%s привязан к аккаунту %s (b24_user_id=%s)",
+        line,
+        account_id,
+        manager.b24_user_id,
+    )
+    return await _connector_render(
+        manager.b24_user_id,
+        line,
+        message="Готово: переписка выбранной линии ЧатМост идёт в чат этой открытой линии.",
     )

@@ -222,3 +222,45 @@ async def test_url_rejects_unknown_host(monkeypatch):
 
     monkeypatch.setattr(bizproc, "_resolve_host_addrs", boom)
     assert not await _url_is_public_https("https://nope.invalid/x")
+
+
+# ---------------------------------------------------------------------- #
+# Рекурсивная form-ветка: php-массивы любой глубины (события коннектора
+# несут data[MESSAGES][0][im][chat_id]).
+# ----------------------------------------------------------------------
+
+
+def test_payload_dict_form_nested_php_arrays():
+    body = (
+        "event=ONIMCONNECTORMESSAGEADD"
+        "&data[CONNECTOR]=chatmost"
+        "&data[LINE]=107"
+        "&data[MESSAGES][0][im][chat_id]=1807"
+        "&data[MESSAGES][0][im][message_id]=86497"
+        "&data[MESSAGES][0][message][user_id]=27"
+        "&data[MESSAGES][0][message][text]=Привет"
+        "&data[MESSAGES][0][chat][id]=11"
+        "&data[MESSAGES][1][im][chat_id]=1807"
+        "&data[MESSAGES][1][im][message_id]=86500"
+        "&data[MESSAGES][1][chat][id]=11"
+    ).encode()
+    payload = bizproc._payload_dict(body, "application/x-www-form-urlencoded")
+    assert payload["event"] == "ONIMCONNECTORMESSAGEADD"
+    assert payload["data"]["CONNECTOR"] == "chatmost"
+    msgs = payload["data"]["MESSAGES"]
+    assert isinstance(msgs, list) and len(msgs) == 2
+    assert msgs[0]["im"]["chat_id"] == "1807"
+    assert msgs[0]["message"]["text"] == "Привет"
+    assert msgs[1]["im"]["message_id"] == "86500"
+
+
+def test_payload_dict_form_single_level_still_works():
+    body = b"event=ONAPPINSTALL&document_id[0]=crm&document_id[1]=CCrmDocumentDeal&document_id[2]=DEAL_5"
+    payload = bizproc._payload_dict(body, "application/x-www-form-urlencoded")
+    assert payload["document_id"] == ["crm", "CCrmDocumentDeal", "DEAL_5"]
+
+
+def test_payload_dict_form_numeric_order_preserved():
+    body = b"a[2]=third&a[0]=first&a[1]=second"
+    payload = bizproc._payload_dict(body, "application/x-www-form-urlencoded")
+    assert payload["a"] == ["first", "second", "third"]

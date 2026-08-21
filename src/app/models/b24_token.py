@@ -23,6 +23,9 @@ class B24Token(Base, TimestampMixin):
     portal: Mapped[str] = mapped_column(String(255), nullable=False)
     user_id: Mapped[int] = mapped_column(Integer, nullable=False)
     scope: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # Токен безопасности событий приложения (application_token из ONAPPINSTALL):
+    # сильная проверка вебхуков ONIMCONNECTOR* — OAuth-токены в них опциональны.
+    application_token: Mapped[str | None] = mapped_column(Text, nullable=True)
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )

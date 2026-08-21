@@ -4,13 +4,12 @@
 Использование: python logo_to_vector.py <input.jpg> [output_dir]
 """
 
-import sys
-import os
 import base64
+import sys
 from pathlib import Path
 
-from PIL import Image
 import numpy as np
+from PIL import Image
 
 
 def remove_background(input_path: str, output_path: str):
@@ -68,7 +67,7 @@ def png_to_svg(png_path: str, svg_path: str, color_mode="color"):
         
     except ImportError:
         # Fallback: SVG с embedded PNG + чистый viewBox
-        print(f"  [2/3] vtracer недоступен → создаю SVG с embedded изображением")
+        print("  [2/3] vtracer недоступен → создаю SVG с embedded изображением")
         
         img = Image.open(png_path)
         width, height = img.size
@@ -92,7 +91,7 @@ def png_to_svg(png_path: str, svg_path: str, color_mode="color"):
 
 def create_favicon(png_path: str, sizes=[16, 32, 48, 64, 128, 180, 192, 512]):
     """Создаёт favicon.ico и PNG разных размеров С СОХРАНЕНИЕМ ПРОПОРЦИЙ."""
-    print(f"  [3/3] Генерация favicon и размеров...")
+    print("  [3/3] Генерация favicon и размеров...")
     
     img = Image.open(png_path).convert("RGBA")
     orig_w, orig_h = img.size
@@ -123,8 +122,8 @@ def create_favicon(png_path: str, sizes=[16, 32, 48, 64, 128, 180, 192, 512]):
         out_path = str(Path(png_path).parent / out_name)
         padded.save(out_path, "PNG")
     
-    print(f"  ✓ PNG (с пропорциями): logo-WxH.png для каждого размера")
-    print(f"  ✓ PNG (квадратные): logo-square-SxS.png с прозрачными полями")
+    print("  ✓ PNG (с пропорциями): logo-WxH.png для каждого размера")
+    print("  ✓ PNG (квадратные): logo-square-SxS.png с прозрачными полями")
 
 
 def _resize_with_proportions(img: Image.Image, max_size: int) -> Image.Image:
@@ -162,7 +161,7 @@ def main():
     
     stem = input_file.stem
     
-    print(f"🌉 ЧатМост — обработка лого")
+    print("🌉 ЧатМост — обработка лого")
     print(f"   Вход:  {input_file.name}")
     print(f"   Выход: {output_dir}/")
     print()
@@ -183,7 +182,7 @@ def main():
     print("✅ Готово! Результаты:")
     print(f"   📄 PNG (прозрачный): {png_path.name}")
     print(f"   📐 Вектор:          {svg_path.name}")
-    print(f"   🔖 Favicon:         favicon.ico")
+    print("   🔖 Favicon:         favicon.ico")
     print()
     print("💡 Совет:")
     print("   Для идеального SVG открой logo-no-bg.png в Illustrator/Inkscape")

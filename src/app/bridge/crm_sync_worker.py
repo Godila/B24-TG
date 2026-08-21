@@ -22,10 +22,20 @@ import base64
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from app.b24.client import Bitrix24Error
+from app.b24.openlines import (
+    OpenLineService,
+    build_delivery_message,
+    build_send_message,
+    to_unixsec,
+)
 from app.b24.sync import CRM_MODE_DEFAULT, Bitrix24Sync
+from app.config import get_settings
+from app.media.public_url import sign_media_url
 from app.models import KIND_INBOUND, CrmSyncItem, Messenger
 
 if TYPE_CHECKING:  # pragma: no cover - только для type-checker
@@ -46,6 +56,7 @@ class AttachmentMeta:
     file_name: str | None = None
     mime_type: str | None = None
     size: int | None = None
+    attachment_id: int | None = None  # для публичной подписанной ссылки
 
 
 @dataclass(slots=True)
@@ -68,6 +79,17 @@ class CrmSyncData:
     sender_last_name: str | None = None  # Contact.last_name (split для CRM LAST_NAME)
     sender_username: str | None = None  # Contact.username → IM-поле CRM
     attachments: list[AttachmentMeta] | None = None  # вложения сообщения
+    # Открытые линии B24 (imconnector): маршрутизация и сериализация.
+    dialog_id: int | None = None  # chat.id коннектора (str(Dialog.id))
+    chat_title: str | None = None  # Dialog.title → chat.name
+    external_message_id: str | None = None  # message.id для send.messages
+    message_created_at: datetime | None = None  # date unixsec входящего
+    sent_at: datetime | None = None  # sent_at исходящего (delivery)
+    contact_external_user_id: str | None = None  # user.id коннектора
+    ol_line_id: str | None = None  # линия B24 аккаунта (None = классика)
+    ol_active: bool = False
+    b24_im_chat_id: int | None = None  # im-пара операторского исходящего
+    b24_im_message_id: int | None = None
 
 
 class CrmSyncRepository:
@@ -80,7 +102,12 @@ class CrmSyncRepository:
     async def mark_failed(self, item: CrmSyncItem, error: str) -> None: ...
 
     async def reschedule(
-        self, item: CrmSyncItem, *, delay_seconds: int, error: str | None = None
+        self,
+        item: CrmSyncItem,
+        *,
+        delay_seconds: int,
+        error: str | None = None,
+        count_attempt: bool = True,
     ) -> None: ...
 
     async def enqueue(self, *, kind: str, message_id: int) -> CrmSyncItem: ...
@@ -140,6 +167,7 @@ class CrmSyncWorker:
         batch_size: int = 20,
         media_storage: "MediaStorage | None" = None,
         media_timeline_max_bytes: int = MEDIA_TIMELINE_MAX_BYTES_DEFAULT,
+        openline: OpenLineService | None = None,
     ):
         self._repo = repo
         self._b24sync = b24sync
@@ -149,6 +177,8 @@ class CrmSyncWorker:
         # Медиа-том (bridge): чтение файлов вложений для timeline-комментариев.
         self._media_storage = media_storage
         self._media_timeline_max_bytes = media_timeline_max_bytes
+        # Открытые линии B24: None = сервис не сконфигурирован (тесты без OL).
+        self._openline = openline
         self._running = False
 
     # ------------------------------------------------------------------ #
@@ -245,6 +275,13 @@ class CrmSyncWorker:
             await self._repo.mark_failed(item, "message_not_found")
             return
 
+        if data.ol_line_id:
+            # Открытая линия: входящее уходит в нативный чат B24; наш
+            # CRM-синк (карточки/таймлайн/уведомления) отключён — CRM
+            # ведёт сама линия по своим правилам.
+            await self._handle_ol_inbound(item, data)
+            return
+
         try:
             result = await self._b24sync.process_inbound(
                 sender_name=data.sender_name or "",
@@ -295,6 +332,10 @@ class CrmSyncWorker:
             await self._repo.mark_failed(item, "message_not_found")
             return
 
+        if data.ol_line_id:
+            await self._handle_ol_outbound(item, data)
+            return
+
         try:
             comment_id = await self._b24sync.process_outbound(
                 dialog_entity_id=data.crm_entity_id,
@@ -313,6 +354,120 @@ class CrmSyncWorker:
             return
 
         await self._repo.mark_done(item)
+
+    async def _handle_ol_inbound(self, item: CrmSyncItem, data: CrmSyncData) -> None:
+        """Входящее → imconnector.send.messages (чат открытой линии)."""
+        if not data.ol_active:
+            # Коннектор деактивирован: ждём реактивации, попытки не сжигаем
+            # (паттерн outbox no_provider). LINEDELETE/STATUSDELETE почистят
+            # привязку — очередь вернётся к классическому CRM-синку.
+            await self._repo.reschedule(
+                item, delay_seconds=300, error="ol_inactive", count_attempt=False
+            )
+            return
+        message = build_send_message(
+            message_id=data.external_message_id or str(item.message_id),
+            dialog_id=data.dialog_id or 0,
+            date_unixsec=to_unixsec(data.message_created_at or datetime.now(UTC)),
+            text=data.message_text,
+            user_id=f"{data.messenger.value}_{data.contact_external_user_id or ''}",
+            user_name=data.sender_name,
+            user_last_name=data.sender_last_name,
+            files=self._ol_files(data),
+            chat_name=data.chat_title,
+        )
+        try:
+            if self._openline is None:  # pragma: no cover - wiring всегда передаёт
+                raise RuntimeError("no_openline_service")
+            sent = await self._openline.send_messages(
+                line_id=data.ol_line_id, messages=[message]
+            )
+            if sent is None:
+                # Нет B24-токена: ретраибельно (с burn-попытками), как в CRM-ветке.
+                raise RuntimeError("no_b24_token")
+        except Bitrix24Error as exc:
+            if exc.code == "NOT_ACTIVE_LINE":
+                # Линию выключили на портале: ждём, попытки не сжигаем.
+                await self._repo.reschedule(
+                    item, delay_seconds=300, error=exc.code, count_attempt=False
+                )
+                return
+            await self._fail_or_retry(item, exc)
+            return
+        except Exception as exc:  # noqa: BLE001 — очередь обязана переживать любой сбой
+            await self._fail_or_retry(item, exc)
+            return
+        await self._repo.mark_done(item)
+
+    async def _handle_ol_outbound(self, item: CrmSyncItem, data: CrmSyncData) -> None:
+        """Статус доставки операторского исходящего (вместо таймлайна)."""
+        if not (data.b24_im_chat_id and data.b24_im_message_id):
+            # Исходящее из панели/шага БП: B24 im-пары о нём не знает —
+            # статус слать некому, терминальный done.
+            # ponytail: зеркало в чат линии через send.messages с user_id
+            # автора, когда понадобится аудит панельных отправок операторами.
+            logger.info(
+                "crm_sync item %s: OL-исходящее без im-пары (панель/БП) — done",
+                item.id,
+            )
+            await self._repo.mark_done(item)
+            return
+        payload = build_delivery_message(
+            dialog_id=data.dialog_id or 0,
+            im_chat_id=data.b24_im_chat_id,
+            im_message_id=data.b24_im_message_id,
+            date_unixsec=to_unixsec(
+                data.sent_at or data.message_created_at or datetime.now(UTC)
+            ),
+        )
+        try:
+            if self._openline is None:  # pragma: no cover - wiring всегда передаёт
+                raise RuntimeError("no_openline_service")
+            sent = await self._openline.send_status_delivery(
+                line_id=data.ol_line_id, messages=[payload]
+            )
+            if sent is None:
+                raise RuntimeError("no_b24_token")
+        except Bitrix24Error as exc:
+            if exc.code == "NOT_ACTIVE_LINE":
+                # Статус косметический (B24 пометит прочитанным): сообщение
+                # уже доставлено в мессенджер — теряем статус, не очередь.
+                logger.warning(
+                    "crm_sync item %s: OL delivery status lost: %s", item.id, exc.code
+                )
+                await self._repo.mark_done(item)
+                return
+            await self._fail_or_retry(item, exc)
+            return
+        except Exception as exc:  # noqa: BLE001 — очередь обязана переживать любой сбой
+            await self._fail_or_retry(item, exc)
+            return
+        await self._repo.mark_done(item)
+
+    def _ol_files(self, data: CrmSyncData) -> list[dict[str, str]]:
+        """Вложения → files[] для send.messages (публичные подписанные URL)."""
+        settings = get_settings()
+        if not data.attachments:
+            return []
+        if not settings.public_base_url:
+            logger.warning("OL: public_base_url пуст — вложения уйдут без файла")
+            return []
+        files: list[dict[str, str]] = []
+        for att in data.attachments:
+            if att.attachment_id is None:
+                continue
+            files.append(
+                {
+                    "url": sign_media_url(
+                        settings.public_base_url,
+                        att.attachment_id,
+                        secret=settings.session_secret,
+                        ttl_sec=settings.media_public_ttl_sec,
+                    ),
+                    "name": att.file_name or Path(att.file_path).name,
+                }
+            )
+        return files
 
     async def _fail_or_retry(self, item: CrmSyncItem, exc: Exception) -> None:
         """Попытка не удалась: backoff 30 * 2^attempts, после max — failed."""

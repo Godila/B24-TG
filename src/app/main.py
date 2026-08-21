@@ -64,6 +64,7 @@ async def run_bridge() -> None:
     from app.b24.client import Bitrix24Client
     from app.b24.crm import CrmService
     from app.b24.im import ImService
+    from app.b24.openlines import OpenLineService
     from app.b24.sync import Bitrix24Sync
     from app.b24.token_manager import TokenManager
     from app.bridge.account_sync import AccountSyncWorker, make_register_failure_hook
@@ -130,6 +131,8 @@ async def run_bridge() -> None:
         client_secret=settings.b24_client_secret,
     )
     b24sync = Bitrix24Sync(token_mgr=token_mgr, crm=crm, im=im)
+    # Открытые линии B24 (imconnector): входящие в чат линии, статусы доставки.
+    openline = OpenLineService(token_mgr=token_mgr, client=b24_client)
 
     # Алерты админу (план 009): HealthChecker шлёт в B24-чат через TokenManager
     # + ImService на том же shared-клиенте, что и CRM-конвейер.
@@ -186,7 +189,8 @@ async def run_bridge() -> None:
 
     # CRM-воркер: те же retry-механики, что и outbox (5 попыток, backoff).
     # media_storage — чтение файлов вложений для FILES timeline-комментариев
-    # (app_settings.media_to_timeline, выключено по умолчанию).
+    # (app_settings.media_to_timeline, выключено по умолчанию). openline —
+    # ветка imconnector: сообщения OL-аккаунтов идут в чат линии, не в CRM.
     crm_worker = CrmSyncWorker(
         repo=crm_repo,
         b24sync=b24sync,
@@ -194,6 +198,7 @@ async def run_bridge() -> None:
         poll_interval=settings.crm_sync_poll_interval,
         media_storage=media_storage,
         media_timeline_max_bytes=settings.media_timeline_max_bytes,
+        openline=openline,
     )
 
     # 5-6. Фоновые задачи: outbox + crm_sync + health + по задаче на входящий

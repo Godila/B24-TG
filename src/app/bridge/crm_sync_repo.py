@@ -29,6 +29,7 @@ from app.models import (
     Manager,
     Message,
     Messenger,
+    TgAccount,
 )
 
 logger = logging.getLogger(__name__)
@@ -200,20 +201,27 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
         await self._session.commit()
 
     async def reschedule(
-        self, item: CrmSyncItem, *, delay_seconds: int, error: str | None = None
+        self,
+        item: CrmSyncItem,
+        *,
+        delay_seconds: int,
+        error: str | None = None,
+        count_attempt: bool = True,
     ) -> None:
+        # count_attempt=False — безобидные отклонения (линия деактивирована):
+        # попытка не расходуется, иначе очередь умрёт в failed до реактивации.
         next_at = datetime.now(UTC) + timedelta(seconds=delay_seconds)
+        values: dict = {
+            "status": CrmSyncStatus.retrying,
+            "next_attempt_at": next_at,
+            # String(512): длинная строка httpx-исключения без обрезки
+            # падает на postgres, item остаётся due — hot retry loop.
+            "last_error": error[:512] if error is not None else None,
+        }
+        if count_attempt:
+            values["attempts"] = item.attempts + 1
         await self._session.execute(
-            update(CrmSyncItem)
-            .where(CrmSyncItem.id == item.id)
-            .values(
-                status=CrmSyncStatus.retrying,
-                attempts=item.attempts + 1,
-                next_attempt_at=next_at,
-                # String(512): длинная строка httpx-исключения без обрезки
-                # падает на postgres, item остаётся due — hot retry loop.
-                last_error=error[:512] if error is not None else None,
-            )
+            update(CrmSyncItem).where(CrmSyncItem.id == item.id).values(**values)
         )
         await self._session.commit()
 
@@ -225,21 +233,32 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
         stmt = (
             select(
                 Message.text,
+                Message.dialog_id,
+                Message.created_at,
+                Message.sent_at,
+                Message.external_message_id,
+                Message.b24_im_chat_id,
+                Message.b24_im_message_id,
                 Contact.name,
                 Contact.phone,
                 Contact.first_name,
                 Contact.last_name,
                 Contact.username,
+                Contact.external_user_id,
                 Contact.crm_contact_id,
                 Dialog.crm_deal_id,
                 Dialog.crm_entity_type,
                 Dialog.messenger,
                 Dialog.account_id,
+                Dialog.title,
+                TgAccount.ol_line_id,
+                TgAccount.ol_active,
                 Manager.b24_user_id,
             )
             .join(Dialog, Message.dialog_id == Dialog.id)
             .join(Contact, Dialog.contact_id == Contact.id)
             .outerjoin(Manager, Dialog.assigned_user_id == Manager.id)
+            .outerjoin(TgAccount, Dialog.account_id == TgAccount.id)
             .where(Message.id == message_id)
         )
         row = (await self._session.execute(stmt)).one_or_none()
@@ -271,6 +290,7 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
         att_rows = (
             await self._session.execute(
                 select(
+                    Attachment.id,
                     Attachment.file_path,
                     Attachment.file_name,
                     Attachment.mime_type,
@@ -293,12 +313,23 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
             assigned_b24_user_id=row.b24_user_id,
             notify_user_ids=notify_ids,
             messenger=row.messenger,
+            dialog_id=row.dialog_id,
+            chat_title=row.title,
+            external_message_id=row.external_message_id,
+            message_created_at=row.created_at,
+            sent_at=row.sent_at,
+            contact_external_user_id=row.external_user_id,
+            ol_line_id=row.ol_line_id,
+            ol_active=bool(row.ol_active),
+            b24_im_chat_id=row.b24_im_chat_id,
+            b24_im_message_id=row.b24_im_message_id,
             attachments=[
                 AttachmentMeta(
                     file_path=a.file_path,
                     file_name=a.file_name,
                     mime_type=a.mime_type,
                     size=a.size,
+                    attachment_id=a.id,
                 )
                 for a in att_rows
             ],
@@ -394,11 +425,16 @@ class WorkerCrmSyncRepository(CrmSyncRepository):
             await SqlAlchemyCrmSyncRepository(s).mark_failed(item, error)
 
     async def reschedule(
-        self, item: CrmSyncItem, *, delay_seconds: int, error: str | None = None
+        self,
+        item: CrmSyncItem,
+        *,
+        delay_seconds: int,
+        error: str | None = None,
+        count_attempt: bool = True,
     ) -> None:
         async with self._session_factory() as s:
             await SqlAlchemyCrmSyncRepository(s).reschedule(
-                item, delay_seconds=delay_seconds, error=error
+                item, delay_seconds=delay_seconds, error=error, count_attempt=count_attempt
             )
 
     async def enqueue(self, *, kind: str, message_id: int) -> CrmSyncItem:

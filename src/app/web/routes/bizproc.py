@@ -123,25 +123,40 @@ def _payload_dict(body: bytes, content_type: str) -> dict | None:
             return None
         return data if isinstance(data, dict) else None
     if "form" in content_type.lower():
-        # ponytail: form-ветка — до живого прогона (формат payload B24 в доках
-        # не описан); если очередь шлёт JSON — вырезать вместе с кандидатами.
-        root: dict = {}
-        indexed: dict[str, list[str]] = {}
-        for key, value in urllib.parse.parse_qsl(
-            body.decode("utf-8", "replace"), keep_blank_values=True
-        ):
-            m = re.fullmatch(r"(\w+)\[(\w+)\]", key)
-            if m:
-                # PHP-массив B24: a[0]/a[1]/… — список, иначе вложенный dict.
-                if m.group(2).isdigit():
-                    indexed.setdefault(m.group(1), []).append(value)
-                else:
-                    root.setdefault(m.group(1), {})[m.group(2)] = value
-            else:
-                root[key] = value
-        root.update(indexed)
-        return root
+        # PHP-массивы B24 любой глубины (data[MESSAGES][0][im][chat_id]):
+        # строим вложенные dict, целиком числовые уровни → списки.
+        return _php_form_to_dict(
+            urllib.parse.parse_qsl(body.decode("utf-8", "replace"), keep_blank_values=True)
+        )
     return None
+
+
+def _php_form_to_dict(pairs: list[tuple[str, str]]) -> dict:
+    root: dict = {}
+    for key, value in pairs:
+        m = re.fullmatch(r"(\w+)((?:\[[^\]]*\])*)", key)
+        if not m:
+            root[key] = value
+            continue
+        parts = [m.group(1), *re.findall(r"\[([^\]]*)\]", m.group(2))]
+        node: dict = root
+        for part in parts[:-1]:
+            child = node.get(part)
+            if not isinstance(child, dict):
+                child = {}
+                node[part] = child
+            node = child
+        leaf = parts[-1]
+        node[leaf] = value
+    return _numeric_lists(root)
+
+
+def _numeric_lists(node: dict) -> dict | list:
+    """Уровни с целиком числовыми ключами → списки по порядку индексов."""
+    node = {k: _numeric_lists(v) if isinstance(v, dict) else v for k, v in node.items()}
+    if node and all(k.isdigit() for k in node):
+        return [node[k] for k in sorted(node, key=int)]
+    return node
 
 
 def _first_str(value: object) -> str | None:
@@ -227,27 +242,47 @@ async def _token_alive(access_token: str) -> bool:
     return resp.status_code == 200 and isinstance(data.get("result"), dict)
 
 
+def _secret_header_ok(secret_header: str | None) -> bool:
+    """Эшелон 1 (общий для B24-вебхуков): X-Webhook-Secret."""
+    settings = get_settings()
+    return bool(secret_header) and bool(settings.b24_webhook_secret) and hmac.compare_digest(
+        secret_header.encode("utf-8"), settings.b24_webhook_secret.encode("utf-8")
+    )
+
+
+async def _member_token_authorized(
+    session: AsyncSession, member_id: str | None, access_token: str
+) -> bool:
+    """Эшелон member_id-сверки с БД + self-check живого токена (кэш общий).
+
+    Security-логика вебхуков живёт в одном месте (принцип placement.py
+    «рассинхрон роутов оставил бы дыру») — открытая линия зовёт эти же
+    хелперы.
+    """
+    if not member_id:
+        return False
+    token_row = (await session.execute(select(B24Token).limit(1))).scalar_one_or_none()
+    if token_row is None or token_row.member_id != member_id:
+        return False
+    now = time.monotonic()
+    if _selfcheck_ok.get(access_token, 0.0) > now:
+        return True
+    if await _token_alive(access_token):
+        _prune_expired(_selfcheck_ok)
+        _selfcheck_ok[access_token] = now + _SELFCHECK_TTL
+        return True
+    return False
+
+
 async def _authorized(
     secret_header: str | None, ar: ActivityRequest, session: AsyncSession
 ) -> bool:
     """Эшелоны: секрет-заголовок → member_id-сверка с БД → self-check токена."""
-    settings = get_settings()
-    if secret_header and settings.b24_webhook_secret and hmac.compare_digest(
-        secret_header.encode("utf-8"), settings.b24_webhook_secret.encode("utf-8")
-    ):
+    if _secret_header_ok(secret_header):
         return True
     if not ar.access_token or not ar.member_id:
         return False
-    token_row = (await session.execute(select(B24Token).limit(1))).scalar_one_or_none()
-    if token_row is None or token_row.member_id != ar.member_id:
-        return False
-    now = time.monotonic()
-    if _selfcheck_ok.get(ar.access_token, 0.0) > now:
-        return True
-    if await _token_alive(ar.access_token):
-        _selfcheck_ok[ar.access_token] = now + _SELFCHECK_TTL
-        return True
-    return False
+    return await _member_token_authorized(session, ar.member_id, ar.access_token)
 
 
 def _is_recent_event(event_token: str | None) -> bool:

@@ -86,11 +86,12 @@ ruff check src/ tests/
 Production-деплой описан в [`docs/DEPLOY.md`](docs/DEPLOY.md). Кратко:
 
 1. Сервер с публичным IP + домен с A-записью.
-2. Локальное OAuth-приложение в Bitrix24 (scopes: `crm`, `im`, `placement`, `user`, `bizproc`).
-3. `git clone` на сервер, сгенерировать `.env` (`scripts/gen_prod_env.py`).
+2. Локальное OAuth-приложение в Bitrix24 (scopes: `crm`, `im`, `placement`, `user`, `bizproc`, `imopenlines`, `imconnector`).
+3. `git clone` на сервер, сгенерировать `.env` (`scripts/gen_prod_env.py`); `PUBLIC_BASE_URL` — публичный адрес приложения (нужен открытым линиям для файлов и handler-ов).
 4. `docker compose up -d --build` + `alembic upgrade head`.
 5. Let's Encrypt TLS + `placement.bind` (`scripts/bind_chats_placement.py`) + регистрация активити БП (`scripts/register_bizproc.py`).
-6. Подключить аккаунты менеджеров — QR-онбординг или share-ссылка из вкладки «Панель».
+6. Открытые линии (опционально): выдать права `imopenlines`+`imconnector` и переустановить приложение → `scripts/register_openline.py` → в Контакт-центре открытых линий подключить коннектор «ЧатМост» и привязать его к линии (слайдер).
+7. Подключить аккаунты менеджеров — QR-онбординг или share-ссылка из вкладки «Панель».
 
 ⚠️ После каждого деплоя `docker compose restart nginx` — иначе держит старый IP пересозданного web-контейнера (502).
 

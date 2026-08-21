@@ -58,6 +58,8 @@ class TokenManager:
             "user_id": int(auth_data.get("user_id", 0)),
             "scope": auth_data.get("scope", ""),
             "expires_in": int(auth_data.get("expires_in", 3600)),
+            # Опционален: B24 присылает application_token не в каждом install.
+            "application_token": auth_data.get("application_token"),
         }
         async with async_session() as session:
             await session.execute(
@@ -113,6 +115,10 @@ class TokenManager:
         token.portal = data.get("domain", token.portal)
         token.user_id = data.get("user_id", token.user_id)
         token.scope = data.get("scope", token.scope)
+        # OAuth-refresh не возвращает application_token — ключ отсутствует,
+        # храним прежний (get с дефолтом, не перезапись None).
+        if "application_token" in data:
+            token.application_token = data["application_token"]
         token.expires_at = datetime.now(UTC) + timedelta(
             seconds=data.get("expires_in", 3600)
         )

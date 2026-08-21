@@ -62,6 +62,16 @@ class TgAccount(Base, TimestampMixin):
     )
     #: Удалена из панели (история диалогов/FK остаются; см. DELETE /lines).
     is_removed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Открытая линия B24 (imconnector): id линии из контакт-центра, когда
+    # аккаунт привязан к ней (слайдер коннектора в карточке линии). None =
+    # классический режим (панель + наш CRM-синк). Unique — одна линия B24
+    # не обслуживается двумя аккаунтами (NULL у непривязанных допустим).
+    ol_line_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True
+    )
+    # Коннектор активен на линии (imconnector.activate); при False сообщения
+    # копятся в очереди crm_sync и ждут реактивации.
+    ol_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # ponytail: legacy-колонка владельца (nullable, кодом не читается);
     # drop отдельным контракт-релизом, если появится 3-й читатель схемы.
     manager_id: Mapped[int | None] = mapped_column(

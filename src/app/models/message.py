@@ -4,7 +4,17 @@ import enum
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
@@ -27,8 +37,23 @@ class MessageStatus(str, enum.Enum):
     error = "error"
 
 
+# Дедуп событий ONIMCONNECTORMESSAGEADD на уровне БД: дубль доставки события
+# = дубль отправки клиенту; SELECT-проверка одна гонку не закрывает.
+_B24_IM_UNIQUE_WHERE = text("b24_im_message_id IS NOT NULL")
+
+
 class Message(Base, TimestampMixin):
     __tablename__ = "messages"
+    __table_args__ = (
+        Index(
+            "uq_messages_dialog_b24_im_message",
+            "dialog_id",
+            "b24_im_message_id",
+            unique=True,
+            sqlite_where=_B24_IM_UNIQUE_WHERE,
+            postgresql_where=_B24_IM_UNIQUE_WHERE,
+        ),
+    )
 
     # BigInteger на Postgres; на SQLite автоинкремент работает только для
     # INTEGER PRIMARY KEY, поэтому через variant используем Integer.
@@ -63,6 +88,14 @@ class Message(Base, TimestampMixin):
     )
     author_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     timeline_comment_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Открытые линии B24: im-пара события ONIMCONNECTORMESSAGEADD (id чата и
+    # сообщения B24) — нужна для imconnector.send.status.delivery после
+    # реальной отправки в мессенджер. Только у исходящих операторов из чата
+    # линии. Прецедент точечной B24-колонки — timeline_comment_id.
+    b24_im_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    b24_im_message_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, index=True
+    )
 
     dialog: Mapped["Dialog"] = relationship(back_populates="messages")
     attachments: Mapped[list["Attachment"]] = relationship(back_populates="message")

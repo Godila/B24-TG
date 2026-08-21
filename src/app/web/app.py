@@ -17,7 +17,9 @@ from app.web.routes import (
     dialogs,
     health,
     inbox,
+    openline,
     placement,
+    public_media,
     templates,
     webhook,
 )
@@ -114,6 +116,8 @@ def create_app() -> FastAPI:
     app.include_router(webhook.router)
     # Активити бизнес-процессов (server-to-server, как webhook).
     app.include_router(bizproc.router)
+    # События коннектора открытых линий (server-to-server, как webhook).
+    app.include_router(openline.router)
     app.include_router(placement.router)
     app.include_router(dialogs.router)
     app.include_router(inbox.router)
@@ -126,6 +130,8 @@ def create_app() -> FastAPI:
     from app.web.routes import connect
 
     app.include_router(connect.router)
+    # Публичная раздача медиа по подписи (imconnector: B24 качает files[].url).
+    app.include_router(public_media.router)
     from app.models import Messenger
     from app.onboarding.max_channel import MaxOnboardingChannel
     from app.onboarding.tg_channel import TgOnboardingChannel

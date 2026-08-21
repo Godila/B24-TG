@@ -37,6 +37,9 @@ class OnAppInstallAuth(BaseModel):
     user_id: int
     expires_in: int
     scope: str
+    #: Токен безопасности событий (для авторизации вебхуков ONIMCONNECTOR*);
+    #: B24 присылает его не всегда — опционален.
+    application_token: str | None = None
 
 
 class DialogOut(BaseModel):
