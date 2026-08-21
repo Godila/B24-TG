@@ -39,7 +39,16 @@ def _b(code: str, handler: str) -> dict:
 BINDINGS = [
     # Вкладки карточек CRM: тип сущности хендлер узнаёт из кода placement.
     _b(code, "/placement/deal")
-    for code in ("CRM_DEAL_DETAIL_TAB", "CRM_LEAD_DETAIL_TAB", "CRM_CONTACT_DETAIL_TAB")
+    for code in (
+        "CRM_DEAL_DETAIL_TAB",
+        "CRM_LEAD_DETAIL_TAB",
+        "CRM_CONTACT_DETAIL_TAB",
+        # Пункт «ЧатМост» в меню «Ещё» над таймлайном (Дело/Комментарий/
+        # Сообщение) — главный вход «написать клиенту» не выходя из карточки.
+        "CRM_DEAL_DETAIL_ACTIVITY",
+        "CRM_LEAD_DETAIL_ACTIVITY",
+        "CRM_CONTACT_DETAIL_ACTIVITY",
+    )
 ] + [
     # Пункт «ЧатМост» в главном меню портала (оболочка вкладок).
     _b("LEFT_MENU", "/placement/admin"),

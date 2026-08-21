@@ -88,6 +88,11 @@ def test_placement_lead_tab_injects_entity_type(monkeypatch):
     for placement, entity in (
         ("CRM_LEAD_DETAIL_TAB", "lead"),
         ("CRM_DEAL_DETAIL_TAB", "deal"),
+        ("CRM_CONTACT_DETAIL_TAB", "contact"),
+        # Пункт в меню «Ещё» над таймлайном: тот же хендлер и тот же {ID}.
+        ("CRM_DEAL_DETAIL_ACTIVITY", "deal"),
+        ("CRM_LEAD_DETAIL_ACTIVITY", "lead"),
+        ("CRM_CONTACT_DETAIL_ACTIVITY", "contact"),
     ):
         form_data = {
             "PLACEMENT": placement,

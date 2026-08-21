@@ -46,10 +46,16 @@ router = APIRouter(prefix="/placement", tags=["placement"])
 
 # Точки встройки чат-виджета: тип сущности берём из кода placement —
 # B24 сам говорит, в карточке чего открыт фрейм.
+# *_DETAIL_TAB — вкладка карточки; *_DETAIL_ACTIVITY — пункт в меню «Ещё»
+# панели над таймлайном (рядом с Дело/Комментарий/Сообщение — где менеджер
+# и ждёт «написать»). PLACEMENT_OPTIONS у обеих точек одинаков ({ID}).
 _PLACEMENT_CODES = {
     "CRM_DEAL_DETAIL_TAB": "deal",
     "CRM_LEAD_DETAIL_TAB": "lead",
     "CRM_CONTACT_DETAIL_TAB": "contact",
+    "CRM_DEAL_DETAIL_ACTIVITY": "deal",
+    "CRM_LEAD_DETAIL_ACTIVITY": "lead",
+    "CRM_CONTACT_DETAIL_ACTIVITY": "contact",
 }
 _ADMIN_PLACEMENT_CODE = "LEFT_MENU"
 
