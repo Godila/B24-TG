@@ -38,9 +38,15 @@ for _key, _value in BASE_ENV.items():
 def _hermetic_env(monkeypatch):
     for k, v in BASE_ENV.items():
         monkeypatch.setenv(k, v)
-    from app.config import get_settings
+    from app.config import Settings, get_settings
     from app.media.storage import get_media_storage
 
+    # env_file=".env" из CWD проглядывал мимо BASE_ENV (живой кейс 08-21:
+    # PUBLIC_BASE_URL из смонтированного в прод-образ /repo/.env). Сьют
+    # живёт только на env — файл настроек отключаем целиком.
+    monkeypatch.setattr(
+        Settings, "model_config", {**Settings.model_config, "env_file": None}
+    )
     get_settings.cache_clear()
     # Синглтон storage держит путь из первого обращения — сбрасываем,
     # чтобы переопределённый MEDIA_DIR теста был услышан.
