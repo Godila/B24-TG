@@ -28,7 +28,7 @@
           @click="openInitiate()" title="Начать новый диалог (телефон/@username)">Написать первым</button>
       </div>
       <div class="status" x-show="!dialog && !loading">
-        <span>Нет активного диалога для этой сделки</span>
+        <span x-text="'Нет активного диалога для ' + entityNoun"></span>
         <button class="btn" type="button" x-show="dealId && !readonly"
           @click="openInitiate()">Написать первым</button>
       </div>
@@ -75,6 +75,11 @@
       </template>
       <div class="empty" x-show="dialog && messages.length === 0 && !loading">
         <span>Сообщений пока нет — напишите первым</span>
+      </div>
+      <!-- Приглашение в пустой карточке: пустота — повод действовать. -->
+      <div class="empty" x-show="!dialog && !loading">
+        <span>Диалогов с этим клиентом пока нет.<br>
+          Нажмите «Написать первым», чтобы начать переписку</span>
       </div>
     </main>
 
@@ -157,9 +162,15 @@
           <input type="checkbox" x-model="initRemember" :disabled="initBusy">
           Запомнить этот аккаунт для канала
         </label>
-        <div class="initiate-error" x-show="initError" x-text="initError"></div>
+        <div class="initiate-error" x-show="initError">
+          <svg class="i i--14" aria-hidden="true"><use href="/static/icons.svg#warning"/></svg>
+          <span x-text="initError"></span>
+        </div>
+        <div class="initiate-note" x-show="initBusy">
+          Окно можно закрыть — поиск продолжится, диалог появится в списке сам
+        </div>
         <div class="initiate-actions">
-          <button class="btn" type="button" @click="closeInitiate()" :disabled="initBusy">Отмена</button>
+          <button class="btn" type="button" @click="closeInitiate()">Закрыть</button>
           <button class="btn btn-primary" type="button" @click="submitInitiate()"
             :disabled="initBusy || !initDest.trim() || !initText.trim() || !initMessenger"
             x-text="initBusy ? 'Ищем собеседника…' : 'Отправить'"></button>

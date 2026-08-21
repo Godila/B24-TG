@@ -262,3 +262,62 @@ def test_contact_card_lists_dialogs_via_contact_binding(env):
     assert data[0]["external_chat_id"] == "55"
     # Не-контактный id не показывает чужое.
     assert client.get("/api/dialogs", params={"deal_id": 999, "entity_type": "contact"}).json() == []
+
+
+# --------------------------------------------------------------------- #
+# Prefill «Кому»: телефон клиента из карточки
+# --------------------------------------------------------------------- #
+def test_prefill_uses_our_contact_phone_without_b24(env, monkeypatch):
+    """Быстрый путь: контакт известен ЧатМосту — без похода в B24."""
+    client, SessionLocal, _app, _mgr = env
+    import asyncio
+
+    from app.models import Contact, Messenger
+
+    async def seed():
+        async with SessionLocal() as s:
+            s.add(Contact(messenger=Messenger.tg, external_user_id="77",
+                          name="Клиент", phone="+79996543946", crm_contact_id=321))
+            await s.commit()
+
+    asyncio.run(seed())
+
+    from unittest.mock import AsyncMock
+
+    import app.web.routes.dialogs as dialogs_mod
+
+    b24 = AsyncMock(return_value=None)
+    monkeypatch.setattr(dialogs_mod, "_b24_entity_phone", b24)
+
+    r = client.get("/api/dialogs/initiate/prefill",
+                   params={"entity_type": "contact", "entity_id": 321})
+    assert r.status_code == 200
+    assert r.json() == {"phone": "+79996543946"}
+    b24.assert_not_awaited()  # наш контакт — сети не было
+
+
+def test_prefill_falls_back_to_b24(env, monkeypatch):
+    """Нет в нашей БД (сделка) → B24; fail-open зашит внутрь хелпера."""
+    client, _sl, _app, _mgr = env
+    from unittest.mock import AsyncMock
+
+    import app.web.routes.dialogs as dialogs_mod
+
+    b24 = AsyncMock(return_value="+79991112233")
+    monkeypatch.setattr(dialogs_mod, "_b24_entity_phone", b24)
+    r = client.get("/api/dialogs/initiate/prefill",
+                   params={"entity_type": "deal", "entity_id": 13})
+    assert r.json() == {"phone": "+79991112233"}
+    b24.assert_awaited_once_with("deal", 13)
+
+
+def test_prefill_phone_extractor_formats():
+    """Парсер PHONE из crm.*.get: список dict-ов, мусор → None (fail-closed)."""
+    from app.web.routes.dialogs import _first_crm_phone
+
+    assert _first_crm_phone({"PHONE": [{"ID": "1", "VALUE": " +7999 "}]}) == "+7999"
+    assert _first_crm_phone({"PHONE": [{"VALUE": ""}, {"VALUE": "+79991112233"}]}) == "+79991112233"
+    assert _first_crm_phone({"PHONE": []}) is None
+    assert _first_crm_phone({}) is None
+    assert _first_crm_phone(None) is None
+    assert _first_crm_phone({"PHONE": "не-список"}) is None

@@ -326,6 +326,8 @@ html, body {
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
   padding: 16px;
   width: min(360px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -371,10 +373,21 @@ html, body {
   font-size: var(--fs-sm);
   color: var(--meta);
 }
-.initiate-error { color: var(--err); font-size: var(--fs-sm); }
+.initiate-error { color: var(--err); font-size: var(--fs-sm); display: flex; align-items: center; gap: 6px; }
+.initiate-error svg.i { flex-shrink: 0; color: var(--err); }
+.initiate-note { color: var(--meta); font-size: var(--fs-sm); }
 .initiate-actions { display: flex; justify-content: flex-end; gap: 8px; }
+/* «Ищем собеседника…» шире «Отправить» — фиксируем min-width, иначе кнопки
+   прыгают при переходе в busy (единственный реальный layout shift формы). */
+.initiate-actions .btn-primary { min-width: 150px; }
 .btn-mini { margin-left: auto; padding: 4px 10px; }
 .chat-header .contact { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.chat-header .contact-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* Кнопки формы «Написать первым» (и пустого состояния шапки) */
 .btn {

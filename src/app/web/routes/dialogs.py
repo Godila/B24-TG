@@ -436,6 +436,82 @@ async def initiate_dialog(
     return InitiationOut(id=cmd.id, status=InitiationStatus.pending.value)
 
 
+def _first_crm_phone(fields: object) -> str | None:
+    """Первый PHONE из ответа crm.*.get: [{ID, VALUE, VALUE_TYPE}, …]."""
+    phones = fields.get("PHONE") if isinstance(fields, dict) else None
+    if isinstance(phones, list):
+        for p in phones:
+            if isinstance(p, dict) and p.get("VALUE"):
+                return str(p["VALUE"]).strip()
+    return None
+
+
+async def _b24_entity_phone(entity_type: str, entity_id: int) -> str | None:
+    """Телефон клиента из карточки B24 (сделка → контакт по связи).
+
+    Одноразовый клиент на запрос — паттерн admin_api/placement (web-процесс
+    не держит общий B24-клиент). Любой сбой → None: prefill fail-open.
+    """
+    from app.b24.client import Bitrix24Client
+    from app.b24.token_manager import TokenManager
+    from app.config import get_settings
+
+    settings = get_settings()
+    token = await TokenManager(
+        client_id=settings.b24_client_id,
+        client_secret=settings.b24_client_secret,
+    ).get_token()
+    if token is None:
+        return None
+    client = Bitrix24Client(
+        client_endpoint=token.client_endpoint or settings.b24_portal.rstrip("/") + "/rest/",
+        min_interval=settings.b24_min_call_interval,
+    )
+    try:
+        auth = token.access_token
+        if entity_type == "deal":
+            deal = await client.call("crm.deal.get", auth_token=auth, params={"ID": entity_id})
+            contact_ids = deal.get("CONTACT_IDS") if isinstance(deal, dict) else None
+            if not contact_ids:
+                return None
+            fields = await client.call(
+                "crm.contact.get", auth_token=auth, params={"ID": contact_ids[0]}
+            )
+        else:
+            method = "crm.contact.get" if entity_type == "contact" else "crm.lead.get"
+            fields = await client.call(method, auth_token=auth, params={"ID": entity_id})
+        return _first_crm_phone(fields)
+    except Exception:
+        logger.info("prefill: не удалось получить телефон из B24", exc_info=True)
+        return None
+    finally:
+        await client.aclose()
+
+
+@router.get("/dialogs/initiate/prefill")
+async def initiate_prefill(
+    manager: ManagerDep,
+    session: SessionDep,
+    entity_type: str = Query(pattern="^(deal|lead|contact)$"),
+    entity_id: int = Query(gt=0),
+) -> dict:
+    """Телефон клиента для предзаполнения «Кому» (суть фичи: телефон уже
+    в карточке, менеджер не должен перепечатывать). Быстрый путь — наш
+    Contact по привязке карточки; иначе 1-2 вызова B24. fail-open: null."""
+    phone: str | None = None
+    if entity_type == "contact":
+        phone = (
+            await session.execute(
+                select(Contact.phone)
+                .where(Contact.crm_contact_id == entity_id, Contact.phone.is_not(None))
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    if not phone:
+        phone = await _b24_entity_phone(entity_type, entity_id)
+    return {"phone": phone}
+
+
 @router.get("/dialogs/initiate/{cmd_id}")
 async def initiation_status(
     cmd_id: int, manager: ManagerDep, session: SessionDep

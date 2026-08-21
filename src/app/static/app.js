@@ -55,6 +55,12 @@ function chatApp() {
       return document.body.dataset.entityType || "deal";
     },
 
+    /** Существительное карточки для текстов пустого состояния. */
+    get entityNoun() {
+      return { deal: "этой сделки", lead: "этого лида", contact: "этого контакта" }[this.dealKind]
+        || "этой сделки";
+    },
+
     async init() {
       try {
         await Promise.all([this.loadMe(), this.loadDialogs(), this.loadTemplates()]);
@@ -299,6 +305,23 @@ function chatApp() {
       this.setInitMessenger(this.initMessenger || this.initMessengers[0] || "");
       // Нет доступных аккаунтов — честная ошибка в форме.
       if (!this.initMessenger) this.initError = "Нет доступных аккаунтов — обратитесь к администратору";
+      // Предзаполнение «Кому»: телефон клиента уже в карточке — не заставляем
+      // менеджера перепечатывать. fail-open: нет телефона/сбой → поле пустое.
+      if (!this.initDest && this.dealId) {
+        try {
+          const res = await fetch(
+            `/api/dialogs/initiate/prefill?entity_type=${encodeURIComponent(this.dealKind)}` +
+              `&entity_id=${encodeURIComponent(this.dealId)}`,
+            { credentials: "same-origin" },
+          );
+          if (res.ok) {
+            const phone = (await res.json()).phone;
+            if (phone) this.initDest = phone;
+          }
+        } catch {
+          // Предзаполнение опционально — не блокируем форму.
+        }
+      }
     },
 
     setInitMessenger(m) {
@@ -334,9 +357,10 @@ function chatApp() {
         });
         const body = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(body.detail || `Не удалось начать диалог (${res.status})`);
-        // Поллинг команды: linked → открыть диалог, failed → ошибка в форму.
-        // Цикл (а не таймер): закрытие формы гасит его флагом initOpen.
-        for (let i = 0; i < 80 && this.initOpen; i++) {
+        // Поллинг команды до терминального статуса — ДАЖЕ если менеджер
+        // закрыл форму: команду это не отменяет, а диалог должен появиться
+        // в списке сам (честность состояний: «Закрыть» ≠ «Отменить»).
+        for (let i = 0; i < 80; i++) {
           await new Promise((r) => setTimeout(r, 1500));
           const st = await fetch(`/api/dialogs/initiate/${body.id}`, {
             credentials: "same-origin",
@@ -355,7 +379,7 @@ function chatApp() {
         }
         throw new Error("Поиск затянулся — попробуйте ещё раз");
       } catch (e) {
-        this.initError = e.message || String(e);
+        if (this.initOpen) this.initError = e.message || String(e);
       } finally {
         this.initBusy = false;
       }
