@@ -373,18 +373,8 @@ html, body {
 }
 .initiate-error { color: var(--err); font-size: var(--fs-sm); }
 .initiate-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.initiate-mini {
-  margin-left: auto;
-  border: none;
-  background: transparent;
-  color: var(--meta);
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: var(--r-sm);
-}
-.initiate-mini:hover { background: rgba(0, 0, 0, 0.06); color: var(--accent); }
+.btn-mini { margin-left: auto; padding: 4px 10px; }
+.chat-header .contact { display: flex; align-items: center; gap: 8px; min-width: 0; }
 
 /* Кнопки формы «Написать первым» (и пустого состояния шапки) */
 .btn {

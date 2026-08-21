@@ -24,8 +24,8 @@
           <span class="channel-badge" :class="dialog?.messenger" x-text="channelLabel(dialog?.messenger)"></span>
           <span x-text="dialog?.contact_name || 'Неизвестный'"></span>
         </span>
-        <button class="initiate-mini" type="button" x-show="dealId && !readonly && !loading"
-          @click="openInitiate()" title="Написать первым" aria-label="Написать первым">＋</button>
+        <button class="btn btn-mini" type="button" x-show="dealId && !readonly && !loading"
+          @click="openInitiate()" title="Начать новый диалог (телефон/@username)">Написать первым</button>
       </div>
       <div class="status" x-show="!dialog && !loading">
         <span>Нет активного диалога для этой сделки</span>
