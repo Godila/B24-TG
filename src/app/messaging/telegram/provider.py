@@ -4,12 +4,14 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 from telethon import TelegramClient, events
-from telethon.errors import FloodWaitError
+from telethon.errors import FloodWaitError, UsernameInvalidError, UsernameNotOccupiedError
 from telethon.tl import types as tl
-from telethon.tl.types import User
+from telethon.tl.functions.contacts import ImportContactsRequest
+from telethon.tl.types import InputPhoneContact, User
 
 from app.media.storage import MediaStorage, ext_for, sanitize_file_name
 from app.messaging.provider import MessengerProvider, SessionRevokedError
+from app.messaging.resolve import ParsedDest, ResolvedPeer
 from app.messaging.types import (
     MEDIA_PLACEHOLDERS,
     ContentType,
@@ -340,6 +342,41 @@ class TelegramProvider(MessengerProvider):
         except Exception as e:
             logger.exception("send_message failed")
             return SendResult(success=False, error=str(e))
+
+    async def resolve_peer(self, dest: ParsedDest) -> ResolvedPeer | None:
+        """@username → get_entity; телефон → ImportContacts (штатный путь
+        «написать первым»). Приватный чат TG == id клиента. ValueError/
+        Username* → None («не найден»); сеть/FloodWait прокидываются."""
+        if not self._client:
+            raise ConnectionError("tg provider not connected")
+        try:
+            if dest.kind == "username":
+                entity = await self._client.get_entity(dest.value)
+            else:
+                result = await self._client(
+                    ImportContactsRequest(
+                        contacts=[
+                            InputPhoneContact(
+                                client_id=0, phone=dest.value, first_name="", last_name=""
+                            )
+                        ]
+                    )
+                )
+                entity = next(iter(result.users), None)
+        except (UsernameInvalidError, UsernameNotOccupiedError, ValueError):
+            return None
+        if not isinstance(entity, User):
+            return None  # канал/группа — не собеседник личного диалога
+        name = " ".join(filter(None, [entity.first_name, entity.last_name])) or None
+        return ResolvedPeer(
+            external_user_id=str(entity.id),
+            external_chat_id=str(entity.id),
+            name=name,
+            first_name=entity.first_name,
+            last_name=entity.last_name,
+            username=entity.username,
+            phone=entity.phone,
+        )
 
     def supports_media(self) -> bool:
         return True

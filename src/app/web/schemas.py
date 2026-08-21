@@ -97,6 +97,37 @@ class SendMessageIn(BaseModel):
     text: str = Field(..., min_length=1, max_length=4096)
 
 
+class InitiateIn(BaseModel):
+    """«Написать первым» из карточки CRM: резолвит bridge-воркер."""
+
+    messenger: str = Field(..., pattern="^(tg|max)$")
+    entity_type: str = Field(..., pattern="^(deal|lead|contact)$")
+    entity_id: int = Field(..., gt=0)
+    #: None → приоритетный аккаунт менеджера → единственный доступный.
+    account_id: int | None = None
+    #: Телефон (+7…) или @username (только tg); нормализация — normalize_dest.
+    dest: str = Field(..., min_length=3, max_length=128)
+    text: str = Field(..., min_length=1, max_length=4096)
+    #: Запомнить выбранный аккаунт как приоритетный для канала.
+    remember_account: bool = False
+
+
+class InitiationOut(BaseModel):
+    id: int
+    status: str  # pending | linked | failed
+    dialog_id: int | None = None
+    error: str | None = None
+
+
+class AccountOut(BaseModel):
+    """Аккаунт для селектора «написать первым»."""
+
+    id: int
+    messenger: str
+    label: str
+    is_default: bool
+
+
 class InboxDialogOut(BaseModel):
     """Строка списка «Чатов» (общий мессенджер): диалог + агрегаты на лету.
 

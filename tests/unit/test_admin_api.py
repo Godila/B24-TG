@@ -224,6 +224,7 @@ async def test_settings_default_is_first(db):
         "timeline_mode": "first",
         "media_to_timeline": False,
         "crm_mode": "deal",
+        "ol_panel_mirror": True,
     }
 
 

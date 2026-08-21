@@ -2,9 +2,9 @@
 """Регистрация placement-виджетов «ЧатМост» в Bitrix24 (один раз при установке).
 
 Биндит точки:
-- CRM_DEAL_DETAIL_TAB и CRM_LEAD_DETAIL_TAB → /placement/deal — вкладка
-  «ЧатМост» в карточках сделки и лида (тип сущности хендлер узнаёт из
-  кода placement);
+- CRM_DEAL_DETAIL_TAB, CRM_LEAD_DETAIL_TAB и CRM_CONTACT_DETAIL_TAB →
+  /placement/deal — вкладка «ЧатМост» в карточках сделки/лида/контакта
+  (тип сущности хендлер узнаёт из кода placement);
 - LEFT_MENU → /placement/admin — пункт «ЧатМост» в главном меню портала
   (панель управления внутри интерфейса B24).
 
@@ -24,34 +24,25 @@ from app.b24.token_manager import TokenManager
 
 BASE_URL = "https://b24-tg.haragy.top"
 
+_LANG_ALL = {"ru": {"TITLE": "ЧатМост"}, "en": {"TITLE": "ChatMost"}}
+
+
+def _b(code: str, handler: str) -> dict:
+    return {
+        "PLACEMENT": code,
+        "HANDLER": f"{BASE_URL}{handler}",
+        "TITLE": "ЧатМост",
+        "LANG_ALL": _LANG_ALL,
+    }
+
+
 BINDINGS = [
-    {
-        "PLACEMENT": "CRM_DEAL_DETAIL_TAB",
-        "HANDLER": f"{BASE_URL}/placement/deal",
-        "TITLE": "ЧатМост",
-        "LANG_ALL": {
-            "ru": {"TITLE": "ЧатМост"},
-            "en": {"TITLE": "ChatMost"},
-        },
-    },
-    {
-        "PLACEMENT": "CRM_LEAD_DETAIL_TAB",
-        "HANDLER": f"{BASE_URL}/placement/deal",
-        "TITLE": "ЧатМост",
-        "LANG_ALL": {
-            "ru": {"TITLE": "ЧатМост"},
-            "en": {"TITLE": "ChatMost"},
-        },
-    },
-    {
-        "PLACEMENT": "LEFT_MENU",
-        "HANDLER": f"{BASE_URL}/placement/admin",
-        "TITLE": "ЧатМост",
-        "LANG_ALL": {
-            "ru": {"TITLE": "ЧатМост"},
-            "en": {"TITLE": "ChatMost"},
-        },
-    },
+    # Вкладки карточек CRM: тип сущности хендлер узнаёт из кода placement.
+    _b(code, "/placement/deal")
+    for code in ("CRM_DEAL_DETAIL_TAB", "CRM_LEAD_DETAIL_TAB", "CRM_CONTACT_DETAIL_TAB")
+] + [
+    # Пункт «ЧатМост» в главном меню портала (оболочка вкладок).
+    _b("LEFT_MENU", "/placement/admin"),
 ]
 
 

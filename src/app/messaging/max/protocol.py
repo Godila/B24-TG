@@ -28,6 +28,11 @@ OP_GET_CONTACTS = 32
 #: CHAT_INFO: {chatId} → payload.chat{type, participants, ...} — тип чата
 #: для «лёгких» push'ей (в payload.message нет chat.type).
 OP_CHAT_INFO = 61
+#: CONTACT_INFO_BY_PHONE: {phone} → payload.contact{id, names, ...} — поиск
+#: юзера по телефону («написать первым»). Проверено живьём 2026-08-20:
+#: формат телефона прощающий (+7/7/8); «не найден/приватность» = cmd=3
+#: error "not.found" (пустого contact не бывает).
+OP_CONTACT_INFO_BY_PHONE = 46
 
 # Медиа-файлы (реверс комьюнити, тот же транспорт ver=11; смоук уточнит
 # детали — все чтения ответов идут через толерантные экстракторы ниже).

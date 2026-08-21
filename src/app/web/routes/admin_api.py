@@ -110,28 +110,41 @@ class SettingsIn(BaseModel):
     timeline_mode: str | None = Field(default=None, pattern="^(" + "|".join(TIMELINE_MODES) + ")$")
     media_to_timeline: bool | None = None
     crm_mode: str | None = Field(default=None, pattern="^(" + "|".join(CRM_MODES) + ")$")
+    ol_panel_mirror: bool | None = None
 
 
 @router.get("/settings", response_model=None)
 async def get_settings(supervisor: SupervisorDep) -> dict:
     """Глобальные настройки приложения (для supervisor-панели)."""
-    from app.bridge.crm_sync_repo import get_crm_mode, get_media_to_timeline, get_timeline_mode
+    from app.bridge.crm_sync_repo import (
+        get_crm_mode,
+        get_media_to_timeline,
+        get_ol_panel_mirror,
+        get_timeline_mode,
+    )
 
     return {
         "timeline_mode": await get_timeline_mode(async_session),
         "media_to_timeline": await get_media_to_timeline(async_session),
         "crm_mode": await get_crm_mode(async_session),
+        "ol_panel_mirror": await get_ol_panel_mirror(async_session),
     }
 
 
 @router.put("/settings", response_model=None)
 async def put_settings(body: SettingsIn, supervisor: SupervisorDep) -> dict:
-    from app.bridge.crm_sync_repo import set_crm_mode, set_media_to_timeline, set_timeline_mode
+    from app.bridge.crm_sync_repo import (
+        set_crm_mode,
+        set_media_to_timeline,
+        set_ol_panel_mirror,
+        set_timeline_mode,
+    )
 
     if (
         body.timeline_mode is None
         and body.media_to_timeline is None
         and body.crm_mode is None
+        and body.ol_panel_mirror is None
     ):
         raise HTTPException(status_code=422, detail="Нечего обновлять")
     if body.timeline_mode is not None:
@@ -140,10 +153,13 @@ async def put_settings(body: SettingsIn, supervisor: SupervisorDep) -> dict:
         await set_media_to_timeline(async_session, body.media_to_timeline)
     if body.crm_mode is not None:
         await set_crm_mode(async_session, body.crm_mode)
+    if body.ol_panel_mirror is not None:
+        await set_ol_panel_mirror(async_session, body.ol_panel_mirror)
     return {
         "timeline_mode": body.timeline_mode,
         "media_to_timeline": body.media_to_timeline,
         "crm_mode": body.crm_mode,
+        "ol_panel_mirror": body.ol_panel_mirror,
     }
 
 

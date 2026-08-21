@@ -24,9 +24,13 @@
           <span class="channel-badge" :class="dialog?.messenger" x-text="channelLabel(dialog?.messenger)"></span>
           <span x-text="dialog?.contact_name || 'Неизвестный'"></span>
         </span>
+        <button class="initiate-mini" type="button" x-show="dealId && !readonly && !loading"
+          @click="openInitiate()" title="Написать первым" aria-label="Написать первым">＋</button>
       </div>
       <div class="status" x-show="!dialog && !loading">
         <span>Нет активного диалога для этой сделки</span>
+        <button class="btn" type="button" x-show="dealId && !readonly"
+          @click="openInitiate()">Написать первым</button>
       </div>
       <div class="status" x-show="loading">
         <span>Загрузка…</span>
@@ -121,6 +125,47 @@
         </button>
       </div>
     </footer>
+
+    <!-- Форма «Написать первым»: канал → аккаунт → телефон/@username → текст.
+         Резолв исполняет bridge (2-6с) — кнопка остаётся занятой до статуса. -->
+    <div class="initiate-overlay" x-show="initOpen" @click.self="closeInitiate()"
+      @keydown.escape.window="closeInitiate()" role="dialog" aria-label="Написать первым">
+      <div class="initiate-card">
+        <div class="initiate-title">Написать первым</div>
+        <div class="initiate-row" x-show="initMessengers.length > 1">
+          <template x-for="m in initMessengers" :key="m">
+            <button type="button" class="initiate-chip" :class="{active: initMessenger === m}"
+              @click="setInitMessenger(m)" x-text="m === 'tg' ? 'Telegram' : 'MAX'"></button>
+          </template>
+        </div>
+        <label class="initiate-label" x-show="initAccounts.length > 1">Аккаунт отправки
+          <select x-model.number="initAccountId">
+            <template x-for="a in initAccounts" :key="a.id">
+              <option :value="a.id" x-text="a.label"></option>
+            </template>
+          </select>
+        </label>
+        <label class="initiate-label">Кому
+          <input type="text" x-model="initDest" :placeholder="initDestPlaceholder"
+            :disabled="initBusy" @keydown.enter.prevent="submitInitiate()">
+        </label>
+        <label class="initiate-label">Сообщение
+          <textarea x-model="initText" rows="3" :disabled="initBusy"
+            placeholder="Первое сообщение клиенту"></textarea>
+        </label>
+        <label class="initiate-check" x-show="initAccounts.length > 1">
+          <input type="checkbox" x-model="initRemember" :disabled="initBusy">
+          Запомнить этот аккаунт для канала
+        </label>
+        <div class="initiate-error" x-show="initError" x-text="initError"></div>
+        <div class="initiate-actions">
+          <button class="btn" type="button" @click="closeInitiate()" :disabled="initBusy">Отмена</button>
+          <button class="btn btn-primary" type="button" @click="submitInitiate()"
+            :disabled="initBusy || !initDest.trim() || !initText.trim() || !initMessenger"
+            x-text="initBusy ? 'Ищем собеседника…' : 'Отправить'"></button>
+        </div>
+      </div>
+    </div>
 
     <!-- Баннер ошибок -->
     <div class="error-banner" x-show="error" x-text="error" @click="error = ''"></div>

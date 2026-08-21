@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import aliased
 
 from app.b24.sources import SOURCE_ID_RE
 from app.b24.sync import CRM_MODE_DEFAULT, CRM_MODES, TIMELINE_MODE_DEFAULT, TIMELINE_MODES
@@ -39,6 +40,11 @@ TIMELINE_MODE_KEY = "timeline_mode"
 #: crm.timeline.comment.add): "on" | "off". По умолчанию выключено —
 #: диск/квота портала B24 дороже текст-метки «[фото]».
 MEDIA_TO_TIMELINE_KEY = "media_to_timeline"
+#: Зеркалить ли панельные/БП-исходящие в чат открытой линии (send.messages
+#: с user=клиент и префиксом автора): "on" | "off". По умолчанию on —
+#: иначе разговор в OL-режиме разорван (ответ клиента придёт в OL-чат,
+#: а сообщение менеджера видно только в нашей вкладке).
+OL_PANEL_MIRROR_KEY = "ol_panel_mirror"
 #: Какие CRM-карточки заводить новым клиентам: "deal" (контакт+сделка)
 #: или "lead" (только лид). По умолчанию "deal" — прежнее поведение.
 CRM_MODE_KEY = "crm_mode"
@@ -90,6 +96,16 @@ async def get_media_to_timeline(session_factory) -> bool:
 async def set_media_to_timeline(session_factory, enabled: bool) -> None:
     """Upsert app_settings.media_to_timeline."""
     await _upsert_setting(session_factory, MEDIA_TO_TIMELINE_KEY, "on" if enabled else "off")
+
+
+async def get_ol_panel_mirror(session_factory) -> bool:
+    """Прочитать app_settings.ol_panel_mirror (нет строки/мусор — ВКЛ)."""
+    return await _read_setting(session_factory, OL_PANEL_MIRROR_KEY) != "off"
+
+
+async def set_ol_panel_mirror(session_factory, enabled: bool) -> None:
+    """Upsert app_settings.ol_panel_mirror."""
+    await _upsert_setting(session_factory, OL_PANEL_MIRROR_KEY, "on" if enabled else "off")
 
 
 async def get_crm_mode(session_factory) -> str:
@@ -230,6 +246,7 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
 
         None — сообщение (или его диалог/контакт) не найдено.
         """
+        author = aliased(Manager)
         stmt = (
             select(
                 Message.text,
@@ -239,6 +256,7 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
                 Message.external_message_id,
                 Message.b24_im_chat_id,
                 Message.b24_im_message_id,
+                Message.author_user_id,
                 Contact.name,
                 Contact.phone,
                 Contact.first_name,
@@ -254,10 +272,12 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
                 TgAccount.ol_line_id,
                 TgAccount.ol_active,
                 Manager.b24_user_id,
+                author.name.label("author_name"),
             )
             .join(Dialog, Message.dialog_id == Dialog.id)
             .join(Contact, Dialog.contact_id == Contact.id)
             .outerjoin(Manager, Dialog.assigned_user_id == Manager.id)
+            .outerjoin(author, Message.author_user_id == author.b24_user_id)
             .outerjoin(TgAccount, Dialog.account_id == TgAccount.id)
             .where(Message.id == message_id)
         )
@@ -323,6 +343,7 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
             ol_active=bool(row.ol_active),
             b24_im_chat_id=row.b24_im_chat_id,
             b24_im_message_id=row.b24_im_message_id,
+            author_name=row.author_name,
             attachments=[
                 AttachmentMeta(
                     file_path=a.file_path,
@@ -409,6 +430,9 @@ class WorkerCrmSyncRepository(CrmSyncRepository):
 
     async def get_media_to_timeline(self) -> bool:
         return await get_media_to_timeline(self._session_factory)
+
+    async def get_ol_panel_mirror(self) -> bool:
+        return await get_ol_panel_mirror(self._session_factory)
 
     async def get_crm_mode(self) -> str:
         return await get_crm_mode(self._session_factory)

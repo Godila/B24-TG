@@ -16,6 +16,7 @@ from app.models.contact import Contact
 from app.models.crm_sync import KIND_INBOUND, KIND_OUTBOUND, CrmSyncItem, CrmSyncStatus
 from app.models.dialog import Dialog, DialogStatus, Messenger
 from app.models.dialog_read import DialogRead
+from app.models.initiation import Initiation, InitiationStatus
 from app.models.login_command import (
     ACTIVE_STATUSES,
     LoginCommand,
@@ -24,7 +25,7 @@ from app.models.login_command import (
     terminate_active_commands,
 )
 from app.models.manager import Manager, ManagerRole
-from app.models.message import Message, MessageDirection, MessageStatus
+from app.models.message import Message, MessageDirection, MessageStatus, has_inbound
 from app.models.outbox import OutboxItem, OutboxStatus
 from app.models.template import Template
 from app.models.tg_account import TgAccount, TgAccountStatus
@@ -46,6 +47,8 @@ __all__ = [
     "Dialog",
     "DialogRead",
     "DialogStatus",
+    "Initiation",
+    "InitiationStatus",
     "LineRole",
     "LoginCommand",
     "LoginCommandKind",
@@ -62,6 +65,7 @@ __all__ = [
     "TgAccount",
     "TgAccountStatus",
     "TimestampMixin",
+    "has_inbound",
     "issue_connect_token",
     "load_active_connect_token",
     "terminate_active_commands",

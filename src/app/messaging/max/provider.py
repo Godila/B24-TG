@@ -26,6 +26,7 @@ from app.media.storage import MediaStorage
 from app.messaging.max.media import MaxMediaClient, UploadWaiter
 from app.messaging.max.protocol import (
     OP_CHAT_INFO,
+    OP_CONTACT_INFO_BY_PHONE,
     OP_GET_CONTACTS,
     OP_INIT,
     OP_LOGIN,
@@ -37,9 +38,11 @@ from app.messaging.max.protocol import (
     UPLOAD_KIND_PHOTO,
     UPLOAD_KIND_VIDEO,
     MaxAuthError,
+    MaxProtocolError,
     init_payload,
     login_payload,
     msg_send_payload,
+    to_int,
 )
 from app.messaging.max.push_parser import (
     contact_display_name,
@@ -50,6 +53,7 @@ from app.messaging.max.push_parser import (
 )
 from app.messaging.max.ws_client import MaxWsClient
 from app.messaging.provider import MessengerProvider
+from app.messaging.resolve import ParsedDest, ResolvedPeer
 from app.messaging.types import (
     ContentType,
     IncomingMessage,
@@ -266,6 +270,42 @@ class MaxUserProvider(MessengerProvider):
         except Exception as exc:  # noqa: BLE001 - маппинг+лог в _send_exc_result
             return self._send_exc_result(exc)
         return self._send_result(resp)
+
+    async def resolve_peer(self, dest: ParsedDest) -> ResolvedPeer | None:
+        """Телефон → peer: op 46; chatId личного диалога = own ^ peer.
+
+        Только phone (поиска по username в протоколе нет); cmd=3 not.found
+        → None («не найден или скрыт приватностью», терминально).
+        """
+        if dest.kind != "phone":
+            return None
+        if self._client.closed or self._dead:
+            raise ConnectionError("max provider not connected")
+        if self._own_user_id is None:
+            raise RuntimeError("own max_user_id unknown")
+        try:
+            resp = await self._client.request(
+                OP_CONTACT_INFO_BY_PHONE, {"phone": dest.value}
+            )
+        except MaxProtocolError as exc:
+            err = exc.payload.get("error")
+            code = err.get("code") if isinstance(err, dict) else err
+            if code == "not.found":
+                return None
+            raise
+        contact = (resp.get("payload") or {}).get("contact")
+        uid = to_int(contact.get("id")) if isinstance(contact, dict) else None
+        if uid is None or uid <= 0:
+            return None
+        first, last = contact_name_parts(contact)
+        return ResolvedPeer(
+            external_user_id=str(uid),
+            external_chat_id=str(self._own_user_id ^ uid),
+            name=contact_display_name(contact),
+            first_name=first,
+            last_name=last,
+            phone=dest.value,
+        )
 
     # ------------------------------------------------------------------ #
     # Медиа (контракт MessengerProvider)

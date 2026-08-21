@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+from app.messaging.resolve import ParsedDest, ResolvedPeer
 from app.messaging.types import ContentType, IncomingMessage, ReadReceipt, SendResult
 
 
@@ -99,3 +100,10 @@ class MessengerProvider(ABC):
         аккаунта означает перепривязку (новый QR) — провайдер устарел.
         TG: None (сессия в файле, перепривязку отслеживает путь файла)."""
         return None
+
+    # --- Резолв «написать первым»: ОПЦИОНАЛЬНАЯ возможность канала ---
+    async def resolve_peer(self, dest: ParsedDest) -> ResolvedPeer | None:
+        """Резолв телефона/@username → peer. None = не найден или скрыт
+        настройками приватности (терминально); исключение = сбой канала.
+        Каналы без поиска наследуют дефолт NotImplementedError."""
+        raise NotImplementedError(f"resolve_peer не поддержан: {dest.kind}")

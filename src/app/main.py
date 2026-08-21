@@ -232,12 +232,18 @@ async def run_bridge() -> None:
         poll_interval=settings.login_worker_poll_sec,
         password_timeout_sec=settings.login_password_timeout_sec,
     )
+    # «Написать первым»: web пишет команды в initiations, bridge резолвит
+    # peer живым провайдером и создаёт диалог+сообщение в outbox.
+    from app.bridge.initiation_worker import InitiationWorker
+
+    initiation_worker = InitiationWorker(sm=sm, session_factory=async_session)
     tasks: list[asyncio.Task] = [
         asyncio.create_task(worker.run()),
         asyncio.create_task(crm_worker.run()),
         asyncio.create_task(health.run()),
         asyncio.create_task(account_sync.run()),
         asyncio.create_task(login_worker.run()),
+        asyncio.create_task(initiation_worker.run()),
     ]
     for account in registered.values():
         provider = sm.get(account.id)
@@ -260,6 +266,7 @@ async def run_bridge() -> None:
         health.stop()
         account_sync.stop()
         login_worker.stop()
+        initiation_worker.stop()
         await login_worker.shutdown()
         await account_sync.cancel_forwards()
         await sm.close_all()

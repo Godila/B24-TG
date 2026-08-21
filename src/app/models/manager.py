@@ -2,7 +2,7 @@
 
 import enum
 
-from sqlalchemy import Boolean, Enum, Integer, String
+from sqlalchemy import JSON, Boolean, Enum, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -29,3 +29,7 @@ class Manager(Base, TimestampMixin):
     #: Политика на НОВЫЕ отправки; уже поставленные в outbox отправляются
     #: (жёсткий транспортный стоп — деактивация аккаунта).
     is_readonly: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    #: Приоритетный аккаунт исходящих «написать первым» по каналам:
+    #: {"tg": <tg_accounts.id>, "max": <id>}. Нет ключа → единственный
+    #: доступный аккаунт канала. Валидация id — в момент использования.
+    default_outbound: Mapped[dict | None] = mapped_column(JSON, nullable=True)

@@ -62,6 +62,7 @@ from app.models import (
     MessageStatus,
     TgAccount,
     TgAccountStatus,
+    has_inbound,
 )
 
 logger = logging.getLogger(__name__)
@@ -415,15 +416,7 @@ async def _resolve_last_dialog(
 
 
 async def _is_initiation(session: AsyncSession, dialog_id: int) -> bool:
-    exists = await session.execute(
-        select(Message.id)
-        .where(
-            Message.dialog_id == dialog_id,
-            Message.direction == MessageDirection.inbound,
-        )
-        .limit(1)
-    )
-    return exists.scalar_one_or_none() is None
+    return not await has_inbound(session, dialog_id)
 
 
 async def handle_bizproc_message(

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from fastapi.responses import FileResponse
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -23,12 +24,15 @@ from app.media.storage import (
     sanitize_file_name,
     serve_mime,
 )
+from app.messaging.resolve import normalize_dest
 from app.messaging.types import MEDIA_PLACEHOLDERS
 from app.models import (
     AccountMember,
     Attachment,
     Contact,
     Dialog,
+    Initiation,
+    InitiationStatus,
     LineRole,
     Manager,
     ManagerRole,
@@ -36,11 +40,17 @@ from app.models import (
     MessageDirection,
     MessageStatus,
     TgAccount,
+    TgAccountStatus,
+    has_inbound,
 )
 from app.web.deps import get_current_manager, verify_origin
+from app.web.routes.placement import _account_label
 from app.web.schemas import (
+    AccountOut,
     AttachmentOut,
     DialogOut,
+    InitiateIn,
+    InitiationOut,
     MessageOut,
     SendMessageIn,
 )
@@ -180,7 +190,7 @@ async def list_dialogs(
     manager: ManagerDep,
     session: SessionDep,
     deal_id: int | None = Query(default=None),
-    entity_type: str = Query(default="deal", pattern="^(deal|lead)$"),
+    entity_type: str = Query(default="deal", pattern="^(deal|lead|contact)$"),
 ) -> list[DialogOut]:
     stmt = (
         select(Dialog, Contact)
@@ -188,10 +198,14 @@ async def list_dialogs(
         .where(_visible_dialogs_cond(manager))
     )
     if deal_id is not None:
-        # id-пространства сделок и лидов независимы — фильтруем и типом;
+        # id-пространства сущностей независимы — фильтруем и типом;
         # legacy-строки без crm_entity_type считаются сделками.
         if entity_type == "lead":
             stmt = stmt.where(Dialog.crm_deal_id == deal_id, Dialog.crm_entity_type == "lead")
+        elif entity_type == "contact":
+            # Контактная карточка: диалоги через живую привязку контакта
+            # (crm_entity_type='contact' не пишется — см. initiate_dialog).
+            stmt = stmt.where(Contact.crm_contact_id == deal_id)
         else:
             stmt = stmt.where(
                 Dialog.crm_deal_id == deal_id,
@@ -308,16 +322,136 @@ async def _outbound_context(
         )
 
     # is_initiation: нет ни одного входящего сообщения в диалоге.
-    inbound_exists = await session.execute(
-        select(Message.id)
-        .where(
-            Message.dialog_id == dialog_id,
-            Message.direction == MessageDirection.inbound,
-        )
-        .limit(1)
-    )
-    is_initiation = inbound_exists.scalar_one_or_none() is None
+    is_initiation = not await has_inbound(session, dialog_id)
     return dialog, account, is_initiation
+
+
+# --------------------------------------------------------------------- #
+# «Написать первым»: резолв исполняет bridge-воркер (провайдеры живут
+# только там), web пишет команду и поллит статус.
+# --------------------------------------------------------------------- #
+
+
+async def _writable_accounts(session: AsyncSession, manager: Manager) -> list[TgAccount]:
+    """Активные аккаунты, с которых менеджер может инициировать: личные
+    (manager_id) ИЛИ participant линий. Supervisor — все активные."""
+    stmt = select(TgAccount).where(
+        TgAccount.status == TgAccountStatus.active,
+        TgAccount.is_removed.is_(False),
+    )
+    if manager.role != ManagerRole.supervisor:
+        stmt = stmt.where(
+            or_(
+                TgAccount.manager_id == manager.id,
+                TgAccount.id.in_(
+                    select(AccountMember.account_id).where(
+                        AccountMember.manager_id == manager.id,
+                        AccountMember.role == LineRole.participant,
+                    )
+                ),
+            )
+        )
+    return list((await session.execute(stmt)).scalars().all())
+
+
+@router.get("/accounts")
+async def list_accounts(
+    manager: ManagerDep,
+    session: SessionDep,
+) -> list[AccountOut]:
+    """Селектор аккаунтов формы «написать первым» (+ флаг приоритетного);
+    фильтрацию по каналу делает фронт (клиентских аккаунтов мало)."""
+    accounts = await _writable_accounts(session, manager)
+    defaults = manager.default_outbound or {}
+    return [
+        AccountOut(
+            id=a.id,
+            messenger=a.messenger.value,
+            label=_account_label(a),
+            is_default=defaults.get(a.messenger.value) == a.id,
+        )
+        for a in accounts
+    ]
+
+
+@router.post("/dialogs/initiate", status_code=202)
+async def initiate_dialog(
+    body: InitiateIn, manager: ManagerDep, session: SessionDep
+) -> InitiationOut:
+    """Поставить команду «написать первым»: 202 + id, результат — поллингом."""
+    if manager.is_readonly:
+        raise HTTPException(status_code=403, detail="Режим только чтение: отправка запрещена")
+
+    accounts = [
+        a for a in await _writable_accounts(session, manager)
+        if a.messenger.value == body.messenger
+    ]
+    if body.account_id is not None:
+        account = next((a for a in accounts if a.id == body.account_id), None)
+        if account is None:
+            raise HTTPException(status_code=404, detail="Аккаунт не найден или недоступен")
+    else:
+        # Приоритетный → единственный доступный → 409 (выберите аккаунт).
+        default_id = (manager.default_outbound or {}).get(body.messenger)
+        account = next((a for a in accounts if a.id == default_id), None)
+        if account is None and len(accounts) == 1:
+            account = accounts[0]
+        if account is None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Не выбран аккаунт {body.messenger.upper()} для отправки",
+            )
+
+    dest = normalize_dest(account.messenger, body.dest)
+    if dest is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Укажите телефон в формате +7… или @username (только Telegram)",
+        )
+
+    cmd = Initiation(
+        account_id=account.id,
+        messenger=account.messenger,
+        author_manager_id=manager.id,
+        author_b24_user_id=manager.b24_user_id,
+        entity_type=body.entity_type,
+        entity_id=body.entity_id,
+        dest_kind=dest.kind,
+        dest_value=dest.value,
+        text=body.text,
+    )
+    session.add(cmd)
+    if body.remember_account:
+        defaults = dict(manager.default_outbound or {})
+        defaults[body.messenger] = account.id
+        manager.default_outbound = defaults
+    try:
+        await session.commit()
+    except IntegrityError:
+        # uq_initiations_active: дубль двойного клика по тому же номеру.
+        await session.rollback()
+        raise HTTPException(
+            status_code=409, detail="Этот номер уже в обработке — дождитесь результата"
+        ) from None
+    return InitiationOut(id=cmd.id, status=InitiationStatus.pending.value)
+
+
+@router.get("/dialogs/initiate/{cmd_id}")
+async def initiation_status(
+    cmd_id: int, manager: ManagerDep, session: SessionDep
+) -> InitiationOut:
+    """Статус инициализации (полл виджета): автор или supervisor, иначе 404."""
+    cmd = await session.get(Initiation, cmd_id)
+    if cmd is None or (
+        cmd.author_manager_id != manager.id and manager.role != ManagerRole.supervisor
+    ):
+        raise HTTPException(status_code=404, detail="Инициализация не найдена")
+    return InitiationOut(
+        id=cmd.id,
+        status=cmd.status.value,
+        dialog_id=cmd.dialog_id,
+        error=cmd.last_error,
+    )
 
 
 @router.post("/dialogs/{dialog_id}/messages", status_code=201)

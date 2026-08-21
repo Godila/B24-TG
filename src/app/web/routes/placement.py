@@ -46,7 +46,11 @@ router = APIRouter(prefix="/placement", tags=["placement"])
 
 # Точки встройки чат-виджета: тип сущности берём из кода placement —
 # B24 сам говорит, в карточке чего открыт фрейм.
-_PLACEMENT_CODES = {"CRM_DEAL_DETAIL_TAB": "deal", "CRM_LEAD_DETAIL_TAB": "lead"}
+_PLACEMENT_CODES = {
+    "CRM_DEAL_DETAIL_TAB": "deal",
+    "CRM_LEAD_DETAIL_TAB": "lead",
+    "CRM_CONTACT_DETAIL_TAB": "contact",
+}
 _ADMIN_PLACEMENT_CODE = "LEFT_MENU"
 
 # Кэш «AUTH_ID → b24_user_id» с TTL: B24 переиспользует access-токен между
@@ -403,7 +407,7 @@ async def placement_deal_post(
 async def placement_deal_dev(
     deal_id: int | None = Query(default=None),
     b24_user_id: int | None = Query(default=None),
-    entity_type: str = Query(default="deal", pattern="^(deal|lead)$"),
+    entity_type: str = Query(default="deal", pattern="^(deal|lead|contact)$"),
 ) -> HTMLResponse:
     """Dev-режим: открыть placement локально без B24 POST.
 

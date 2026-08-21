@@ -90,6 +90,9 @@ class CrmSyncData:
     ol_active: bool = False
     b24_im_chat_id: int | None = None  # im-пара операторского исходящего
     b24_im_message_id: int | None = None
+    # Автор исходящего (Manager.name по Message.author_user_id) — маркер
+    # «↗️ Исходящее (ЧатМост, Иван)» в зеркале чата линии.
+    author_name: str | None = None
 
 
 class CrmSyncRepository:
@@ -141,6 +144,11 @@ class CrmSyncRepository:
         """Грузить ли файлы вложений в timeline-комментарии (default: нет —
         фейки в тестах наследуют прежнее текст-меточное поведение)."""
         return False
+
+    async def get_ol_panel_mirror(self) -> bool:
+        """Зеркалить ли панельные/БП-исходящие в чат линии (default: да —
+        иначе разговор в OL-режиме разорван наполовину)."""
+        return True
 
     async def get_crm_mode(self) -> str:
         """Какие карточки заводить новым клиентам (app_settings.crm_mode).
@@ -400,17 +408,39 @@ class CrmSyncWorker:
         await self._repo.mark_done(item)
 
     async def _handle_ol_outbound(self, item: CrmSyncItem, data: CrmSyncData) -> None:
-        """Статус доставки операторского исходящего (вместо таймлайна)."""
+        """Исходящее линии: операторскому (im-пара) — статус доставки,
+        панельному/БП/инициации (без пары) — зеркало в чат линии."""
         if not (data.b24_im_chat_id and data.b24_im_message_id):
-            # Исходящее из панели/шага БП: B24 im-пары о нём не знает —
-            # статус слать некому, терминальный done.
-            # ponytail: зеркало в чат линии через send.messages с user_id
-            # автора, когда понадобится аудит панельных отправок операторами.
-            logger.info(
-                "crm_sync item %s: OL-исходящее без im-пары (панель/БП) — done",
-                item.id,
+            if not data.ol_active:
+                # Коннектор деактивирован: ждём реактивации/перепривязки —
+                # очередь вернётся к классическому CRM-синку (как inbound).
+                await self._repo.reschedule(
+                    item, delay_seconds=300, error="ol_inactive", count_attempt=False
+                )
+                return
+            if not await self._repo.get_ol_panel_mirror():
+                await self._repo.mark_done(item)
+                return
+            # imconnector инжектит в чат линии только «от клиента»: user =
+            # клиент (тред сохраняется, ответ клиента придёт сюда же), а
+            # автор-менеджер честно виден в префиксе текста.
+            author = f", {data.author_name}" if data.author_name else ""
+            message = build_send_message(
+                message_id=data.external_message_id or str(item.message_id),
+                dialog_id=data.dialog_id or 0,
+                date_unixsec=to_unixsec(
+                    data.sent_at or data.message_created_at or datetime.now(UTC)
+                ),
+                text=f"↗️ Исходящее (ЧатМост{author}): {data.message_text or ''}",
+                user_id=f"{data.messenger.value}_{data.contact_external_user_id or ''}",
+                user_name=data.sender_name,
+                files=self._ol_files(data),
+                chat_name=data.chat_title,
             )
-            await self._repo.mark_done(item)
+            if await self._ol_send_outbound(
+                item, line_id=data.ol_line_id, messages=[message], delivery=False
+            ):
+                await self._repo.mark_done(item)
             return
         payload = build_delivery_message(
             dialog_id=data.dialog_id or 0,
@@ -420,29 +450,50 @@ class CrmSyncWorker:
                 data.sent_at or data.message_created_at or datetime.now(UTC)
             ),
         )
+        if await self._ol_send_outbound(
+            item, line_id=data.ol_line_id, messages=[payload], delivery=True
+        ):
+            await self._repo.mark_done(item)
+
+    async def _ol_send_outbound(
+        self,
+        item: CrmSyncItem,
+        *,
+        line_id: str | None,
+        messages: list[dict],
+        delivery: bool,
+    ) -> bool:
+        """Общий хвост OL-исходящих. True = отправлено (вызывающий делает
+        mark_done); False — обработано здесь: NOT_ACTIVE_LINE — done с
+        потерей косметики (статус/зеркало, сообщение уже доставлено),
+        прочее — fail_or_retry."""
         try:
             if self._openline is None:  # pragma: no cover - wiring всегда передаёт
                 raise RuntimeError("no_openline_service")
-            sent = await self._openline.send_status_delivery(
-                line_id=data.ol_line_id, messages=[payload]
-            )
+            if delivery:
+                sent = await self._openline.send_status_delivery(
+                    line_id=line_id, messages=messages
+                )
+            else:
+                sent = await self._openline.send_messages(
+                    line_id=line_id, messages=messages
+                )
             if sent is None:
+                # Нет B24-токена: ретраибельно (с burn-попытками), как в CRM-ветке.
                 raise RuntimeError("no_b24_token")
         except Bitrix24Error as exc:
             if exc.code == "NOT_ACTIVE_LINE":
-                # Статус косметический (B24 пометит прочитанным): сообщение
-                # уже доставлено в мессенджер — теряем статус, не очередь.
                 logger.warning(
-                    "crm_sync item %s: OL delivery status lost: %s", item.id, exc.code
+                    "crm_sync item %s: OL delivery/mirror lost: %s", item.id, exc.code
                 )
                 await self._repo.mark_done(item)
-                return
+                return False
             await self._fail_or_retry(item, exc)
-            return
-        except Exception as exc:  # noqa: BLE001 — очередь обязана переживать любой сбой
+            return False
+        except Exception as exc:  # noqa: BLE001 — очередь обязана переживать любой сбой B24
             await self._fail_or_retry(item, exc)
-            return
-        await self._repo.mark_done(item)
+            return False
+        return True
 
     def _ol_files(self, data: CrmSyncData) -> list[dict[str, str]]:
         """Вложения → files[] для send.messages (публичные подписанные URL)."""

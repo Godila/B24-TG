@@ -28,6 +28,16 @@ function chatApp() {
     lastId: 0,
     hasMore: false,
     pollTimer: null,
+    // «Написать первым»: форма + поллинг команды инициализации.
+    initOpen: false,
+    initBusy: false,
+    initError: "",
+    accounts: [],
+    initMessenger: "",
+    initAccountId: null,
+    initDest: "",
+    initText: "",
+    initRemember: false,
 
     /**
      * Текущий deal_id: из query (?deal_id=) при dev-входе через /dev/login,
@@ -256,11 +266,115 @@ function chatApp() {
       this.draft = this.draft ? this.draft + "\n" + body : body;
     },
 
+    // --- «Написать первым» (только app.js: inbox-копия фичи не имеет) ---
+
+    /** Каналы, из которых есть что выбрать. */
+    get initMessengers() {
+      return [...new Set(this.accounts.map((a) => a.messenger))];
+    },
+
+    /** Аккаунты выбранного канала (для селектора). */
+    get initAccounts() {
+      return this.accounts.filter((a) => a.messenger === this.initMessenger);
+    },
+
+    /** Подсказка ввода зависит от канала: MAX ищет только по телефону. */
+    get initDestPlaceholder() {
+      return this.initMessenger === "max" ? "Телефон +7…" : "Телефон +7… или @username";
+    },
+
+    async openInitiate() {
+      this.initOpen = true;
+      this.initError = "";
+      if (this.accounts.length === 0) {
+        try {
+          const res = await fetch("/api/accounts", { credentials: "same-origin" });
+          if (!res.ok) throw new Error(`Не удалось загрузить аккаунты (${res.status})`);
+          this.accounts = await res.json();
+        } catch (e) {
+          this.showError(e);
+          return;
+        }
+      }
+      this.setInitMessenger(this.initMessenger || this.initMessengers[0] || "");
+      // Нет доступных аккаунтов — честная ошибка в форме.
+      if (!this.initMessenger) this.initError = "Нет доступных аккаунтов — обратитесь к администратору";
+    },
+
+    setInitMessenger(m) {
+      this.initMessenger = m;
+      const list = this.accounts.filter((a) => a.messenger === m);
+      const def = list.find((a) => a.is_default);
+      this.initAccountId = def ? def.id : list.length === 1 ? list[0].id : null;
+    },
+
+    closeInitiate() {
+      this.initOpen = false;
+      this.initError = "";
+    },
+
+    async submitInitiate() {
+      if (this.initBusy || !this.dealId || !this.initMessenger) return;
+      this.initBusy = true;
+      this.initError = "";
+      try {
+        const res = await fetch("/api/dialogs/initiate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            messenger: this.initMessenger,
+            entity_type: this.dealKind,
+            entity_id: Number(this.dealId),
+            account_id: this.initAccountId,
+            dest: this.initDest.trim(),
+            text: this.initText.trim(),
+            remember_account: this.initRemember,
+          }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.detail || `Не удалось начать диалог (${res.status})`);
+        // Поллинг команды: linked → открыть диалог, failed → ошибка в форму.
+        // Цикл (а не таймер): закрытие формы гасит его флагом initOpen.
+        for (let i = 0; i < 80 && this.initOpen; i++) {
+          await new Promise((r) => setTimeout(r, 1500));
+          const st = await fetch(`/api/dialogs/initiate/${body.id}`, {
+            credentials: "same-origin",
+          }).then((r) => (r.ok ? r.json() : null));
+          if (!st) throw new Error("Команда не найдена");
+          if (st.status === "linked") {
+            this.initOpen = false;
+            this.initDest = "";
+            this.initText = "";
+            await this.onInitiationLinked(st.dialog_id);
+            return;
+          }
+          if (st.status === "failed") {
+            throw new Error(st.error || "Не найден");
+          }
+        }
+        throw new Error("Поиск затянулся — попробуйте ещё раз");
+      } catch (e) {
+        this.initError = e.message || String(e);
+      } finally {
+        this.initBusy = false;
+      }
+    },
+
+    async onInitiationLinked(dialogId) {
+      await this.loadDialogs();
+      this.dialog = this.dialogs.find((d) => d.id === dialogId) || this.dialogs[0] || null;
+      if (this.dialog) {
+        await this.loadMessages();
+        this.startPolling();
+      }
+    },
+
     // --- Медиа-вложения (синхронизированная копия в inbox.js) ---
 
     /** Скрепка доступна: право записи в диалог, не read-only (TG и MAX умеют файлы). */
     get canAttach() {
-      return !!this.dialog && this.dialog.can_write !== false && !this.readonly;
+      return !!this.dialog && this.canWrite;
     },
 
     pickFile() {

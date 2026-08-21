@@ -646,15 +646,53 @@ async def test_ol_outbound_sends_delivery_status():
 
 
 @pytest.mark.asyncio
-async def test_ol_outbound_without_im_pair_done_noop():
-    """Панель/шаг БП: im-пар нет — статус слать некому, done без действий."""
-    repo = _make_repo([_make_item(kind=KIND_OUTBOUND)], _ol_data())
+async def test_ol_outbound_without_im_pair_mirrors_to_line():
+    """Панель/БП/инициация: im-пар нет — зеркало в чат линии send.messages
+    (user = клиент — тред сохраняется; автор в префиксе текста)."""
+    repo = _make_repo(
+        [_make_item(kind=KIND_OUTBOUND)],
+        _ol_data(author_name="Иван", sent_at=datetime(2026, 8, 20, 12, 0, tzinfo=UTC)),
+    )
     ol = _FakeOpenLine()
     worker = CrmSyncWorker(repo=repo, b24sync=AsyncMock(), openline=ol)
     await worker._process_once()
 
     assert ol.delivery_calls == []
+    assert len(ol.send_calls) == 1
+    line_id, messages = ol.send_calls[0]
+    assert line_id == "107"
+    (m,) = messages
+    assert m["user"]["id"] == "tg_u50"  # клиент — тред чата не форкается
+    assert m["message"]["id"] == "991"
+    assert m["message"]["text"] == "↗️ Исходящее (ЧатМост, Иван): Привет из TG"
     repo.mark_done.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_ol_outbound_mirror_disabled_done():
+    """Тумблер ol_panel_mirror=off — зеркало выключено, done без действий."""
+    repo = _make_repo([_make_item(kind=KIND_OUTBOUND)], _ol_data())
+    repo.get_ol_panel_mirror = AsyncMock(return_value=False)
+    ol = _FakeOpenLine()
+    worker = CrmSyncWorker(repo=repo, b24sync=AsyncMock(), openline=ol)
+    await worker._process_once()
+
+    assert ol.send_calls == [] and ol.delivery_calls == []
+    repo.mark_done.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_ol_outbound_mirror_inactive_line_waits_without_burn():
+    """Коннектор деактивирован: панельное исходящее ждёт реактивации
+    (как inbound) — перепривязка вернёт его в классический CRM-синк."""
+    repo = _make_repo([_make_item(kind=KIND_OUTBOUND)], _ol_data(ol_active=False))
+    ol = _FakeOpenLine()
+    worker = CrmSyncWorker(repo=repo, b24sync=AsyncMock(), openline=ol)
+    await worker._process_once()
+
+    assert ol.send_calls == []
+    repo.reschedule.assert_awaited_once()
+    assert repo.reschedule.call_args.kwargs["count_attempt"] is False
 
 
 @pytest.mark.asyncio

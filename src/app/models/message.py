@@ -13,6 +13,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    select,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -99,3 +100,22 @@ class Message(Base, TimestampMixin):
 
     dialog: Mapped["Dialog"] = relationship(back_populates="messages")
     attachments: Mapped[list["Attachment"]] = relationship(back_populates="message")
+
+
+async def has_inbound(session, dialog_id: int) -> bool:
+    """Есть ли в диалоге хоть одно входящее (→ is_initiation отправки).
+
+    Единственная каноническая реализация предиката анти-бан throttler:
+    «диалог без ответа клиента». Паттерн модульной функции — как
+    terminate_active_commands (login_command.py). ``session`` — любая
+    AsyncSession (роут/воркер/тест).
+    """
+    row = await session.execute(
+        select(Message.id)
+        .where(
+            Message.dialog_id == dialog_id,
+            Message.direction == MessageDirection.inbound,
+        )
+        .limit(1)
+    )
+    return row.scalar_one_or_none() is not None
