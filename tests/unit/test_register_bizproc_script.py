@@ -21,3 +21,16 @@ def test_activity_constants():
     assert act["USE_SUBSCRIPTION"] == "N"
     assert act["HANDLER"].endswith("/webhook/b24/bizproc")
     assert act["PROPERTIES"]["message"]["Required"] == "Y"
+
+
+def test_robot_constants():
+    """Робот — отдельный реестр (визуальный редактор стадий): CODE отличен
+    от активити (общее пространство кодов), FILTER — сделки и лиды."""
+    mod = _load()
+    robot = mod.ROBOT
+    assert robot["CODE"] != mod.ACTIVITY["CODE"]
+    assert robot["HANDLER"] == mod.ACTIVITY["HANDLER"]
+    assert robot["USE_SUBSCRIPTION"] == "N"
+    assert robot["FILTER"] == {
+        "INCLUDE": [["crm", "CCrmDocumentDeal"], ["crm", "CCrmDocumentLead"]]
+    }

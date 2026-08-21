@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Регистрация активити БП «ЧатМост: отправить сообщение» (один раз после
-добавления права «Бизнес-процессы» приложению).
+"""Регистрация активити БП и РОБОТА «ЧатМост: отправить сообщение».
 
-Шаг появляется в конструкторе бизнес-процессов и роботах CRM-сущностей
-(FILTER INCLUDE ['crm']): сообщение уходит в последний диалог сделки/лида/
-контакта; [https://ссылка] в тексте — файлом (вложением).
+Два реестра Битрикс24, оба на один хендлер /webhook/b24/bizproc:
+- bizproc.activity.add — ДЕЙСТВИЕ для конструктора бизнес-процессов
+  (Автоматизация → Бизнес-процессы, палитра «Действия приложений»);
+- bizproc.robot.add — РОБОТ для визуального редактора роботов на стадиях
+  воронок сделок и лидов (куда обычно смотрят менеджеры).
+
+Шаг: сообщение уходит в последний диалог сделки/лида/контакта;
+[https://ссылка] в тексте — файлом (вложением).
 
 ОПЕРАТОРСКИЙ ШАПКА перед запуском: в настройках локального приложения
 Битрикс24 выдать право «Бизнес-процессы (bizproc)» и переустановить
@@ -52,6 +56,16 @@ ACTIVITY = {
     "FILTER": {"INCLUDE": [["crm"]]},
 }
 
+# Робот (визуальный редактор на стадиях): только сущности с воронками —
+# сделки и лиды (у контактов роботов нет). CODE отличен от активити:
+# пространства кодов у activity/robot общие (ERROR_ACTIVITY_ALREADY_INSTALLED).
+ROBOT = {
+    **ACTIVITY,
+    "CODE": "chatmost_send_message_robot",
+    # INCLUDE-правила робота адресуются парой [модуль, сущность документа].
+    "FILTER": {"INCLUDE": [["crm", "CCrmDocumentDeal"], ["crm", "CCrmDocumentLead"]]},
+}
+
 
 async def main() -> None:
     client_id = os.environ["B24_CLIENT_ID"]
@@ -79,10 +93,6 @@ async def main() -> None:
                     installed = True
                     if act.get("HANDLER") == ACTIVITY["HANDLER"]:
                         print(f"{ACTIVITY['CODE']}: уже установлен — ок")
-                        print(
-                            "Подсказка: чтобы обновить название/описание/свойства — "
-                            "bizproc.activity.delete, затем этот скрипт заново."
-                        )
                     else:
                         print(
                             f"{ACTIVITY['CODE']}: установлен с ДРУГИМ handler'ом "
@@ -105,6 +115,20 @@ async def main() -> None:
                     print(f"{ACTIVITY['CODE']}: уже установлен — ок")
                 else:
                     raise
+
+        # Робот для визуального редактора на стадиях (сделки/лиды).
+        try:
+            result = await client.call(
+                "bizproc.robot.add",
+                auth_token=token.access_token,
+                params=ROBOT,
+            )
+            print(f"{ROBOT['CODE']}: robot.add result={result}")
+        except Bitrix24Error as e:
+            if e.code == "ERROR_ACTIVITY_ALREADY_INSTALLED":
+                print(f"{ROBOT['CODE']}: робот уже установлен — ок")
+            else:
+                raise
     finally:
         await client.aclose()
 
