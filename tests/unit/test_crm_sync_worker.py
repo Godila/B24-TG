@@ -599,17 +599,25 @@ async def test_ol_inbound_files_signed_urls(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ol_inbound_files_skipped_without_public_base_url():
-    repo = _make_repo(
-        [_make_item()],
-        _ol_data(attachments=[AttachmentMeta(file_path="in/x.png", attachment_id=33)]),
-    )
-    ol = _FakeOpenLine()
-    worker = CrmSyncWorker(repo=repo, b24sync=AsyncMock(), openline=ol)
-    await worker._process_once()
+async def test_ol_inbound_files_skipped_without_public_base_url(monkeypatch):
+    # Герметичность: прод-контейнер несёт PUBLIC_BASE_URL в env — убираем.
+    monkeypatch.delenv("PUBLIC_BASE_URL", raising=False)
+    from app.config import get_settings
 
-    (msg,) = ol.send_calls[0][1]
-    assert "files" not in msg["message"]
+    get_settings.cache_clear()
+    try:
+        repo = _make_repo(
+            [_make_item()],
+            _ol_data(attachments=[AttachmentMeta(file_path="in/x.png", attachment_id=33)]),
+        )
+        ol = _FakeOpenLine()
+        worker = CrmSyncWorker(repo=repo, b24sync=AsyncMock(), openline=ol)
+        await worker._process_once()
+
+        (msg,) = ol.send_calls[0][1]
+        assert "files" not in msg["message"]
+    finally:
+        get_settings.cache_clear()
 
 
 @pytest.mark.asyncio
