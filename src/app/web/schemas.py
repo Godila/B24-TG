@@ -81,6 +81,8 @@ class MessageOut(BaseModel):
     status: str
     external_message_id: str | None = None
     author_user_id: int | None = None
+    #: Системный автоответ — в UI помечается бейджем «автоответ».
+    is_autoreply: bool = False
     timeline_comment_id: int | None = None
     created_at: datetime | None = None
     #: Медиа-вложения; текст-плейсхолдер («[фото]») при наличии вложений

@@ -396,7 +396,7 @@
         <textarea class="line-add" id="ar-off-text" rows="2" placeholder="Текст для нерабочего времени"
           maxlength="255" style="max-width:520px;width:100%"></textarea>
         <div class="set-row" style="margin-top:8px;flex-wrap:wrap;gap:8px">
-          <span class="hint">Рабочие часы:</span>
+          <span class="hint">Рабочие часы (для ответа вне времени):</span>
           <span id="ar-days" style="display:inline-flex;gap:6px;font-size:var(--fs-sm)">
             <label><input type="checkbox" data-day="0">пн</label>
             <label><input type="checkbox" data-day="1">вт</label>
@@ -410,7 +410,7 @@
           <input type="time" class="line-add" id="ar-end" aria-label="Конец рабочего дня">
           <input class="line-add" id="ar-tz" placeholder="Europe/Moscow" maxlength="64"
             aria-label="Часовой пояс" style="max-width:140px">
-          <button class="btn btn--ghost" id="ar-save" type="button">Сохранить</button>
+          <button class="btn btn--ghost" id="ar-save" type="button" disabled>Сохранить</button>
         </div>
         <p class="hint" style="margin:10px 0 0">
           Вне рабочих часов клиенту уходит только текст «нерабочего времени» — не чаще
@@ -562,8 +562,17 @@
           }),
         });
         showToast("Автоответы сохранены");
+        document.getElementById("ar-save").disabled = true;
       } catch (e) { showToast("Не получилось: " + e.message); }
     });
+    // Автоответы сохраняются кнопкой (остальные настройки выше — мгновенно
+    // по клику): неактивная кнопка = нет несохранённых правок. loadSettings
+    // заполняет поля программно (событий нет) — состояние остаётся чистым.
+    const arDirty = () => { document.getElementById("ar-save").disabled = false; };
+    ["ar-first-on", "ar-first-text", "ar-off-on", "ar-off-text", "ar-start", "ar-end", "ar-tz"]
+      .forEach((id) => document.getElementById(id).addEventListener("input", arDirty));
+    document.querySelectorAll("#ar-days input[data-day]").forEach((c) =>
+      c.addEventListener("input", arDirty));
 
     // ---- Источники карточек CRM (справочник портала) ----
     function renderSourceSelect(selId, ch, d) {

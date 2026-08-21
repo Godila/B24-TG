@@ -96,6 +96,13 @@ html, body {
 .status-badge svg.i { width: 14px; height: 14px; vertical-align: -2px; }
 .status-badge .st-read { color: var(--accent); }
 .status-badge .st-err { color: var(--err); }
+/* Системный автоответ: бейдж в мете пузыря — отличим от сообщений менеджера */
+.auto-tag {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 0 5px;
+  color: var(--meta);
+}
 .empty { color: var(--meta); text-align: center; margin-top: 32px; }
 
 /* Догрузка старых сообщений */
@@ -145,6 +152,11 @@ html, body {
   cursor: pointer;
   font-size: var(--fs-xs);
   color: var(--accent);
+  /* Длинные названия не распирают панель: усечение + полный текст в title */
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .templates-list button:hover { background: var(--out-bg); }
 

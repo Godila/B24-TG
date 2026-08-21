@@ -212,11 +212,11 @@ async def put_settings(body: SettingsIn, supervisor: SupervisorDep) -> dict:
     stored_cfg = await get_auto_reply_config(async_session)
     _require_text(
         body.auto_reply_first_enabled, body.auto_reply_first_text,
-        stored_cfg.first_text, "первое входящее",
+        stored_cfg.first_text, "приветствие на первое сообщение клиента",
     )
     _require_text(
         body.auto_reply_offhours_enabled, body.auto_reply_offhours_text,
-        stored_cfg.offhours_text, "нерабочее время",
+        stored_cfg.offhours_text, "ответ вне рабочего времени",
     )
 
     fields: dict[str, str] = {}

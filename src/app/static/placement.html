@@ -67,6 +67,7 @@
           </template>
           <p class="bubble-text" x-show="msg.text" x-text="msg.text"></p>
           <span class="bubble-meta tnum">
+            <span x-show="msg.is_autoreply" class="auto-tag">автоответ</span>
             <span x-text="formatTime(msg.created_at)"></span>
             <!-- Иконки статусов — наши строки (не юзер-данные), x-html безопасен -->
             <span class="status-badge" x-html="statusLabel(msg.direction, msg.status)"></span>
@@ -93,7 +94,8 @@
       <ul class="templates-list" x-show="open">
         <template x-for="tpl in templates" :key="tpl.id">
           <li>
-            <button type="button" @click="useTemplate(tpl.body)" x-text="tpl.title" :title="tpl.body"></button>
+            <button type="button" @click="useTemplate(tpl.body)" x-text="tpl.title"
+              :title="tpl.title + ' — ' + tpl.body"></button>
           </li>
         </template>
       </ul>

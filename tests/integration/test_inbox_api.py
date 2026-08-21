@@ -494,3 +494,52 @@ async def test_inbox_autoreply_does_not_reset_unanswered(inbox_app):
     page = client.get("/api/inbox/dialogs").json()
     assert _all(page)[24]["unanswered_count"] == 0
     assert 24 not in [d["id"] for d in page["unanswered"]]
+
+
+async def test_messages_api_exposes_is_autoreply(inbox_app):
+    """Бейдж «автоответ» в пузыре: API отдаёт флаг системных исходящих."""
+    client, state, SessionLocal = inbox_app
+    state["manager_id"] = 1
+    from app.models import Dialog, Message, MessageDirection, MessageStatus, Messenger
+
+    async with SessionLocal() as s:
+        s.add(
+            Dialog(
+                id=25,
+                contact_id=10,
+                messenger=Messenger.tg,
+                external_chat_id="100500",
+                assigned_user_id=1,
+                last_msg_at=_at(7),
+            )
+        )
+        s.add(
+            Message(
+                id=74,
+                dialog_id=25,
+                direction=MessageDirection.inbound,
+                text="вопрос",
+                status=MessageStatus.delivered,
+                external_message_id="991",
+                created_at=_at(7),
+            )
+        )
+        s.add(
+            Message(
+                id=75,
+                dialog_id=25,
+                direction=MessageDirection.outbound,
+                text="Автоответ",
+                status=MessageStatus.sent,
+                external_message_id="992",
+                is_autoreply=True,
+                created_at=_at(7),
+            )
+        )
+        await s.commit()
+
+    r = client.get("/api/dialogs/25/messages?limit=50")
+    assert r.status_code == 200
+    by_id = {m["id"]: m for m in r.json()}
+    assert by_id[74]["is_autoreply"] is False
+    assert by_id[75]["is_autoreply"] is True

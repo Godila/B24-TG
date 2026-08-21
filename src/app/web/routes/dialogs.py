@@ -105,6 +105,7 @@ def _message_dto(msg: Message) -> MessageOut:
         status=status,
         external_message_id=msg.external_message_id,
         author_user_id=msg.author_user_id,
+        is_autoreply=bool(msg.is_autoreply),
         timeline_comment_id=msg.timeline_comment_id,
         created_at=msg.created_at,
         attachments=[
