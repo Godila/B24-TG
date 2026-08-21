@@ -444,3 +444,53 @@ async def test_owner_post_still_creates_message_and_outbox(inbox_app):
         assert outbox.message_id == msg.id
         assert outbox.tg_account_id == 8
         assert outbox.status == OutboxStatus.queued
+
+
+async def test_inbox_autoreply_does_not_reset_unanswered(inbox_app):
+    """Wazzup-семантика: автоответ не снимает «Ожидают ответа» — только
+    реальный ответ менеджера гасит счётчик."""
+    client, state, SessionLocal = inbox_app
+    state["manager_id"] = 1
+    from app.models import Dialog, Message, MessageDirection, MessageStatus, Messenger
+
+    async def _add(mid, direction, is_autoreply=False, author=None):
+        async with SessionLocal() as s:
+            s.add(
+                Message(
+                    id=mid,
+                    dialog_id=24,
+                    direction=direction,
+                    text="текст",
+                    status=MessageStatus.sent,
+                    is_autoreply=is_autoreply,
+                    author_user_id=author,
+                    created_at=_at(6),
+                )
+            )
+            await s.commit()
+
+    async with SessionLocal() as s:
+        s.add(
+            Dialog(
+                id=24,
+                contact_id=10,
+                messenger=Messenger.tg,
+                external_chat_id="100400",
+                assigned_user_id=1,
+                last_msg_at=_at(6),
+            )
+        )
+        await s.commit()
+    await _add(71, MessageDirection.inbound)
+    await _add(72, MessageDirection.outbound, is_autoreply=True)
+
+    page = client.get("/api/inbox/dialogs").json()
+    by_id = _all(page)
+    assert by_id[24]["unanswered_count"] == 1
+    assert 24 in [d["id"] for d in page["unanswered"]]
+
+    # Реальный ответ менеджера — счётчик снят.
+    await _add(73, MessageDirection.outbound, author=15)
+    page = client.get("/api/inbox/dialogs").json()
+    assert _all(page)[24]["unanswered_count"] == 0
+    assert 24 not in [d["id"] for d in page["unanswered"]]

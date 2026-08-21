@@ -549,3 +549,49 @@ async def test_device_outbound_media_attachment(db):
     assert len(attachments) == 1
     assert attachments[0].file_path == "out/pic.jpg"
     assert attachments[0].type.value == "photo"
+
+
+@pytest.mark.asyncio
+async def test_handle_autoreply_failure_does_not_lose_inbound(db):
+    """Хук автоответа упал — входящее сохранено, crm_sync-задача стоит
+    (fire-and-forget: исключение глушится логом)."""
+    enqueue = AsyncMock()
+    account = _make_account(manager_id=1)
+
+    class _Boom:
+        async def on_inbound(self, **_kw):
+            raise RuntimeError("autoreply boom")
+
+    handler = IncomingHandler(
+        crm_sync_enqueue=enqueue, db_session_factory=db, autoreply=_Boom()
+    )
+    await handler.handle(_make_msg(external_message_id="m1"), account=account)
+
+    enqueue.assert_awaited_once()
+    async with db() as s:
+        rows = list(
+            (await s.execute(select(Message).where(Message.direction == "in"))).scalars()
+        )
+        assert len(rows) == 1 and rows[0].text == "Привет"
+
+
+@pytest.mark.asyncio
+async def test_handle_device_outbound_does_not_trigger_autoreply(db):
+    """Хук автоответа — только для inbound; device-outbound его не зовёт."""
+    calls = []
+
+    class _Spy:
+        async def on_inbound(self, **kw):
+            calls.append(kw)
+
+    handler = IncomingHandler(
+        crm_sync_enqueue=AsyncMock(), db_session_factory=db, autoreply=_Spy()
+    )
+    from app.models import MessageDirection
+
+    msg = _make_msg(
+        external_message_id="m1", direction=MessageDirection.outbound
+    )
+
+    await handler.handle(msg, account=_make_account(manager_id=1))
+    assert calls == []

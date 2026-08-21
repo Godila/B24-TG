@@ -128,9 +128,19 @@ async def list_inbox_dialogs(
     last_out_sq = (
         select(
             Message.dialog_id.label("dialog_id"),
-            func.max(case((Message.direction == MessageDirection.outbound, Message.id))).label(
-                "last_out_id"
-            ),
+            func.max(
+                case(
+                    (
+                        and_(
+                            Message.direction == MessageDirection.outbound,
+                            # Автоответ — не ответ менеджера: не снимает
+                            # «Ожидают ответа» (семантика Wazzup).
+                            Message.is_autoreply.is_(False),
+                        ),
+                        Message.id,
+                    )
+                )
+            ).label("last_out_id"),
             func.max(Message.id).label("last_msg_id"),
         )
         .join(Dialog, Dialog.id == Message.dialog_id)

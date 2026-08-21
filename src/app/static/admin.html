@@ -296,6 +296,36 @@
       <div class="stack" id="managers-list"></div>
     </section>
 
+    <section id="sec-templates">
+      <div class="section-head">
+        <span class="section-title">Шаблоны</span>
+        <span class="section-count" id="templates-count" hidden></span>
+        <button class="btn" id="template-add" type="button">
+          <svg class="i" aria-hidden="true"><use href="/static/icons.svg#plus"/></svg>
+          Добавить
+        </button>
+      </div>
+      <p class="section-hint">Быстрые ответы: панель «Шаблоны» под полем ввода
+        в чатах. Тег — необязательная группировка.</p>
+      <div class="card" id="template-form" hidden>
+        <div class="stack">
+          <input class="line-add" id="template-title" placeholder="Название"
+            maxlength="255" style="max-width:360px;width:100%">
+          <textarea class="line-add" id="template-body" rows="3"
+            placeholder="Текст сообщения" maxlength="4096"
+            style="max-width:520px;width:100%"></textarea>
+          <div class="set-row">
+            <input class="line-add" id="template-category"
+              placeholder="Тег (необязательно)" maxlength="64" list="template-cats">
+            <datalist id="template-cats"></datalist>
+            <button class="btn" id="template-save" type="button">Сохранить</button>
+            <button class="btn btn--ghost" id="template-cancel" type="button">Отмена</button>
+          </div>
+        </div>
+      </div>
+      <div class="stack" id="templates-list"></div>
+    </section>
+
     <section id="sec-settings">
       <div class="section-head"><span class="section-title">Настройки</span></div>
       <p class="section-hint">Как переписка с клиентами попадает в CRM.</p>
@@ -348,6 +378,45 @@
           переписка живёт во вкладке чата. «Все сообщения» — полный аудит в таймлайне.
           Уведомления менеджеру о новых клиентах работают в любом режиме.
         </p>
+        <div class="set-row" style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px">
+          <strong>Автоответы</strong>
+        </div>
+        <div class="set-row" style="margin-top:8px">
+          <label style="display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-sm)">
+            <input type="checkbox" id="ar-first-on"> приветствие на первое сообщение клиента
+          </label>
+        </div>
+        <textarea class="line-add" id="ar-first-text" rows="2" placeholder="Текст приветствия"
+          maxlength="255" style="max-width:520px;width:100%"></textarea>
+        <div class="set-row" style="margin-top:8px">
+          <label style="display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-sm)">
+            <input type="checkbox" id="ar-off-on"> ответ вне рабочего времени
+          </label>
+        </div>
+        <textarea class="line-add" id="ar-off-text" rows="2" placeholder="Текст для нерабочего времени"
+          maxlength="255" style="max-width:520px;width:100%"></textarea>
+        <div class="set-row" style="margin-top:8px;flex-wrap:wrap;gap:8px">
+          <span class="hint">Рабочие часы:</span>
+          <span id="ar-days" style="display:inline-flex;gap:6px;font-size:var(--fs-sm)">
+            <label><input type="checkbox" data-day="0">пн</label>
+            <label><input type="checkbox" data-day="1">вт</label>
+            <label><input type="checkbox" data-day="2">ср</label>
+            <label><input type="checkbox" data-day="3">чт</label>
+            <label><input type="checkbox" data-day="4">пт</label>
+            <label><input type="checkbox" data-day="5">сб</label>
+            <label><input type="checkbox" data-day="6">вс</label>
+          </span>
+          <input type="time" class="line-add" id="ar-start" aria-label="Начало рабочего дня">
+          <input type="time" class="line-add" id="ar-end" aria-label="Конец рабочего дня">
+          <input class="line-add" id="ar-tz" placeholder="Europe/Moscow" maxlength="64"
+            aria-label="Часовой пояс" style="max-width:140px">
+          <button class="btn btn--ghost" id="ar-save" type="button">Сохранить</button>
+        </div>
+        <p class="hint" style="margin:10px 0 0">
+          Вне рабочих часов клиенту уходит только текст «нерабочего времени» — не чаще
+          раза в сутки на диалог и не после ответа менеджера. Автоответ не снимает
+          «Ожидают ответа». Часовой пояс — база IANA (Europe/Moscow).
+        </p>
       </div>
     </section>
   </div>
@@ -391,6 +460,24 @@
     function initials(name) {
       return (name || "?").trim().split(/\s+/).slice(0, 2)
         .map((w) => w[0]).join("").toUpperCase();
+    }
+
+    // Inline-подтверждение удаления вместо нативного confirm(): первый клик
+    // взводит кнопку, повторный в течение 4 с — выполняет действие.
+    function armConfirm(btn) {
+      if (!btn.classList.contains("is-confirming")) {
+        btn.classList.add("is-confirming");
+        btn.dataset.label = btn.innerHTML;
+        btn.innerHTML = "Точно удалить?";
+        setTimeout(() => {
+          if (btn.isConnected && btn.classList.contains("is-confirming")) {
+            btn.classList.remove("is-confirming");
+            btn.innerHTML = btn.dataset.label;
+          }
+        }, 4000);
+        return false;
+      }
+      return true;
     }
 
     // ---- Настройки ----
@@ -437,9 +524,46 @@
         renderSegment("#timeline-segment", s.timeline_mode);
         renderSegment("#crm-mode-segment", s.crm_mode);
         mediaToggle.checked = !!s.media_to_timeline;
+        if (s.auto_reply) {
+          const a = s.auto_reply;
+          document.getElementById("ar-first-on").checked = a.first_enabled;
+          document.getElementById("ar-first-text").value = a.first_text;
+          document.getElementById("ar-off-on").checked = a.offhours_enabled;
+          document.getElementById("ar-off-text").value = a.offhours_text;
+          document.querySelectorAll("#ar-days input[data-day]").forEach((c) => {
+            c.checked = a.days.includes(Number(c.dataset.day));
+          });
+          document.getElementById("ar-start").value = a.start;
+          document.getElementById("ar-end").value = a.end;
+          document.getElementById("ar-tz").value = a.tz;
+        }
       }
       catch { /* не supervisor — секция скрыта целиком */ }
     }
+    document.getElementById("ar-save").addEventListener("click", async () => {
+      const days = [...document.querySelectorAll("#ar-days input[data-day]:checked")]
+        .map((c) => Number(c.dataset.day));
+      if (!days.length) { showToast("Отметьте хотя бы один рабочий день"); return; }
+      try {
+        await api("/admin/api/settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            auto_reply_first_enabled: document.getElementById("ar-first-on").checked,
+            auto_reply_first_text: document.getElementById("ar-first-text").value.trim(),
+            auto_reply_offhours_enabled: document.getElementById("ar-off-on").checked,
+            auto_reply_offhours_text: document.getElementById("ar-off-text").value.trim(),
+            work_hours: {
+              days,
+              start: document.getElementById("ar-start").value || "09:00",
+              end: document.getElementById("ar-end").value || "18:00",
+            },
+            work_hours_tz: document.getElementById("ar-tz").value.trim() || "Europe/Moscow",
+          }),
+        });
+        showToast("Автоответы сохранены");
+      } catch (e) { showToast("Не получилось: " + e.message); }
+    });
 
     // ---- Источники карточек CRM (справочник портала) ----
     function renderSourceSelect(selId, ch, d) {
@@ -699,6 +823,77 @@
       } catch { /* не supervisor */ }
     }
 
+    // ---- Шаблоны ----
+    let tplCache = [];
+    let tplEditId = null;
+    function tplRow(t) {
+      return '<div class="card">' +
+        '<div class="set-row"><strong>' + esc(t.title) + "</strong>" +
+        (t.category ? '<span class="section-count">' + esc(t.category) + "</span>" : "") +
+        '<span style="margin-left:auto"></span>' +
+        '<button class="btn btn--ghost" data-tpl-edit="' + t.id + '">Изменить</button>' +
+        '<button class="btn btn--danger" data-tpl-del="' + t.id + '">Удалить</button>' +
+        "</div>" +
+        '<p class="hint" style="margin:8px 0 0">' + esc(t.body) + "</p></div>";
+    }
+    async function loadTemplates() {
+      try {
+        tplCache = await api("/api/templates");
+      } catch { return; /* не supervisor — секция скрыта */ }
+      document.getElementById("templates-list").innerHTML = tplCache.map(tplRow).join("");
+      const cnt = document.getElementById("templates-count");
+      cnt.hidden = !tplCache.length;
+      cnt.textContent = tplCache.length;
+      const cats = [...new Set(tplCache.map((t) => t.category).filter(Boolean))];
+      document.getElementById("template-cats").innerHTML =
+        cats.map((c) => '<option value="' + esc(c) + '">').join("");
+    }
+    function tplFormOpen(t) {
+      tplEditId = t ? t.id : null;
+      document.getElementById("template-title").value = t ? t.title : "";
+      document.getElementById("template-body").value = t ? t.body : "";
+      document.getElementById("template-category").value = t ? (t.category || "") : "";
+      document.getElementById("template-form").hidden = false;
+      document.getElementById("template-title").focus();
+    }
+    document.getElementById("template-add").addEventListener("click", () => tplFormOpen(null));
+    document.getElementById("template-cancel").addEventListener("click", () => {
+      document.getElementById("template-form").hidden = true;
+      tplEditId = null;
+    });
+    document.getElementById("template-save").addEventListener("click", async () => {
+      const body = {
+        title: document.getElementById("template-title").value.trim(),
+        body: document.getElementById("template-body").value.trim(),
+        category: document.getElementById("template-category").value.trim() || null,
+      };
+      if (!body.title || !body.body) { showToast("Заполните название и текст"); return; }
+      try {
+        await api(tplEditId ? "/api/templates/" + tplEditId : "/api/templates", {
+          method: tplEditId ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        document.getElementById("template-form").hidden = true;
+        loadTemplates();
+      } catch (e) { showToast("Не получилось: " + e.message); }
+    });
+    document.getElementById("templates-list").addEventListener("click", async (e) => {
+      const edit = e.target.closest("[data-tpl-edit]");
+      if (edit) {
+        const t = tplCache.find((x) => x.id === Number(edit.dataset.tplEdit));
+        if (t) tplFormOpen(t);
+        return;
+      }
+      const del = e.target.closest("[data-tpl-del]");
+      if (del) {
+        if (!armConfirm(del)) return;
+        try { await api("/api/templates/" + del.dataset.tplDel, { method: "DELETE" }); }
+        catch (err) { showToast("Не получилось: " + err.message); }
+        loadTemplates();
+      }
+    });
+
     async function loadSupervisor() {
       let me;
       try { me = await api("/admin/api/me"); } catch { return; }
@@ -707,6 +902,7 @@
       await loadManagers();
       await loadLines();
       loadSources(false); // тихо: прод без токена не должен спамить тостами
+      loadTemplates();
     }
 
     // ---- делегирование: один слушатель на список, строки перерисовываются ----
@@ -777,20 +973,7 @@
       }
       const del = e.target.closest("[data-del-line]");
       if (del) {
-        // Inline-подтверждение вместо нативного confirm(): первый клик
-        // «взводит» кнопку, повторный в течение 4 с — удаляет.
-        if (!del.classList.contains("is-confirming")) {
-          del.classList.add("is-confirming");
-          del.dataset.label = del.innerHTML;
-          del.innerHTML = "Точно удалить?";
-          setTimeout(() => {
-            if (del.isConnected && del.classList.contains("is-confirming")) {
-              del.classList.remove("is-confirming");
-              del.innerHTML = del.dataset.label;
-            }
-          }, 4000);
-          return;
-        }
+        if (!armConfirm(del)) return;
         try {
           await api("/admin/api/lines/" + del.dataset.delLine, { method: "DELETE" });
         } catch (err) { showToast("Не получилось: " + err.message); }

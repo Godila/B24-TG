@@ -6,11 +6,13 @@
 прикрыты verify_origin (прод-кука SameSite=none — см. deps).
 """
 
+import json
 import logging
 import secrets
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 
@@ -102,6 +104,31 @@ async def me(manager: ManagerDep) -> dict:
 # ---------------------------------------------------------------------- #
 # Панель администратора (SupervisorDep)
 # ---------------------------------------------------------------------- #
+class WorkHoursIn(BaseModel):
+    """Рабочие часы автоответов: дни (Пн=0..Вс=6), HH:MM.
+
+    Ночные интервалы через полночь (start ≥ end) не поддерживаем — честный 422.
+    """
+
+    days: list[int] = Field(min_length=1, max_length=7)
+    start: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    end: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+
+    @field_validator("days")
+    @classmethod
+    def _days_valid(cls, v):
+        if len(set(v)) != len(v) or any(d < 0 or d > 6 for d in v):
+            raise ValueError("дни: уникальные 0..6 (Пн=0)")
+        return v
+
+    @model_validator(mode="after")
+    def _span(self):
+        to_min = lambda s: int(s[:2]) * 60 + int(s[3:])
+        if to_min(self.start) >= to_min(self.end):
+            raise ValueError("начало должно быть раньше конца; ночные интервалы не поддерживаются")
+        return self
+
+
 class SettingsIn(BaseModel):
     # Списки режимов — единственный источник истины (TIMELINE_MODES /
     # CRM_MODES в b24/sync.py); regex собираем из них, чтобы не
@@ -111,11 +138,20 @@ class SettingsIn(BaseModel):
     media_to_timeline: bool | None = None
     crm_mode: str | None = Field(default=None, pattern="^(" + "|".join(CRM_MODES) + ")$")
     ol_panel_mirror: bool | None = None
+    # Автоответы («первое входящее»/«нерабочее время»): тексты ≤255 —
+    # колонка app_settings.value String(255).
+    auto_reply_first_enabled: bool | None = None
+    auto_reply_first_text: str | None = Field(default=None, max_length=255)
+    auto_reply_offhours_enabled: bool | None = None
+    auto_reply_offhours_text: str | None = Field(default=None, max_length=255)
+    work_hours: WorkHoursIn | None = None
+    work_hours_tz: str | None = None
 
 
 @router.get("/settings", response_model=None)
 async def get_settings(supervisor: SupervisorDep) -> dict:
     """Глобальные настройки приложения (для supervisor-панели)."""
+    from app.bridge.autoreply import get_auto_reply_config
     from app.bridge.crm_sync_repo import (
         get_crm_mode,
         get_media_to_timeline,
@@ -123,16 +159,38 @@ async def get_settings(supervisor: SupervisorDep) -> dict:
         get_timeline_mode,
     )
 
+    cfg = await get_auto_reply_config(async_session)
+    hhmm = lambda m: f"{m // 60:02d}:{m % 60:02d}"
     return {
         "timeline_mode": await get_timeline_mode(async_session),
         "media_to_timeline": await get_media_to_timeline(async_session),
         "crm_mode": await get_crm_mode(async_session),
         "ol_panel_mirror": await get_ol_panel_mirror(async_session),
+        "auto_reply": {
+            "first_enabled": cfg.first_enabled,
+            "first_text": cfg.first_text or "",
+            "offhours_enabled": cfg.offhours_enabled,
+            "offhours_text": cfg.offhours_text or "",
+            "days": sorted(cfg.days),
+            "start": hhmm(cfg.start_min),
+            "end": hhmm(cfg.end_min),
+            "tz": cfg.tz,
+        },
     }
 
 
 @router.put("/settings", response_model=None)
 async def put_settings(body: SettingsIn, supervisor: SupervisorDep) -> dict:
+    from app.bridge.autoreply import (
+        AUTO_REPLY_FIRST_ENABLED_KEY,
+        AUTO_REPLY_FIRST_TEXT_KEY,
+        AUTO_REPLY_OFFHOURS_ENABLED_KEY,
+        AUTO_REPLY_OFFHOURS_TEXT_KEY,
+        WORK_HOURS_KEY,
+        WORK_HOURS_TZ_KEY,
+        get_auto_reply_config,
+        save_auto_reply_fields,
+    )
     from app.bridge.crm_sync_repo import (
         set_crm_mode,
         set_media_to_timeline,
@@ -140,13 +198,49 @@ async def put_settings(body: SettingsIn, supervisor: SupervisorDep) -> dict:
         set_timeline_mode,
     )
 
-    if (
-        body.timeline_mode is None
-        and body.media_to_timeline is None
-        and body.crm_mode is None
-        and body.ol_panel_mirror is None
-    ):
+    provided = body.model_dump(exclude_none=True)
+    if not provided:
         raise HTTPException(status_code=422, detail="Нечего обновлять")
+
+    def _require_text(enabled: bool | None, new_text: str | None, stored: str | None, label: str) -> None:
+        """Включение триггера требует непустой текст (новый или сохранённый)."""
+        if enabled and not (new_text if new_text is not None else stored or "").strip():
+            raise HTTPException(
+                status_code=422, detail=f"Сначала задайте текст автоответа «{label}»"
+            )
+
+    stored_cfg = await get_auto_reply_config(async_session)
+    _require_text(
+        body.auto_reply_first_enabled, body.auto_reply_first_text,
+        stored_cfg.first_text, "первое входящее",
+    )
+    _require_text(
+        body.auto_reply_offhours_enabled, body.auto_reply_offhours_text,
+        stored_cfg.offhours_text, "нерабочее время",
+    )
+
+    fields: dict[str, str] = {}
+    if body.auto_reply_first_enabled is not None:
+        fields[AUTO_REPLY_FIRST_ENABLED_KEY] = "on" if body.auto_reply_first_enabled else "off"
+    if body.auto_reply_first_text is not None:
+        fields[AUTO_REPLY_FIRST_TEXT_KEY] = body.auto_reply_first_text
+    if body.auto_reply_offhours_enabled is not None:
+        fields[AUTO_REPLY_OFFHOURS_ENABLED_KEY] = (
+            "on" if body.auto_reply_offhours_enabled else "off"
+        )
+    if body.auto_reply_offhours_text is not None:
+        fields[AUTO_REPLY_OFFHOURS_TEXT_KEY] = body.auto_reply_offhours_text
+    if body.work_hours is not None:
+        fields[WORK_HOURS_KEY] = json.dumps(body.work_hours.model_dump())
+    if body.work_hours_tz is not None:
+        try:
+            ZoneInfo(body.work_hours_tz)
+        except Exception:  # noqa: BLE001 — валидация IANA-имени любым исходом
+            raise HTTPException(status_code=422, detail="Неизвестный часовой пояс") from None
+        fields[WORK_HOURS_TZ_KEY] = body.work_hours_tz
+    if fields:
+        await save_auto_reply_fields(async_session, fields)
+
     if body.timeline_mode is not None:
         await set_timeline_mode(async_session, body.timeline_mode)
     if body.media_to_timeline is not None:
@@ -155,12 +249,9 @@ async def put_settings(body: SettingsIn, supervisor: SupervisorDep) -> dict:
         await set_crm_mode(async_session, body.crm_mode)
     if body.ol_panel_mirror is not None:
         await set_ol_panel_mirror(async_session, body.ol_panel_mirror)
-    return {
-        "timeline_mode": body.timeline_mode,
-        "media_to_timeline": body.media_to_timeline,
-        "crm_mode": body.crm_mode,
-        "ol_panel_mirror": body.ol_panel_mirror,
-    }
+    # Тело ответа никто не читает (панель перечитывает GET) — отдаём эхо
+    # переданного для симметрии.
+    return provided
 
 
 def _manager_dto(m: Manager, accounts: list[TgAccount]) -> dict:

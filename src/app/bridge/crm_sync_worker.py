@@ -93,6 +93,8 @@ class CrmSyncData:
     # Автор исходящего (Manager.name по Message.author_user_id) — маркер
     # «↗️ Исходящее (ЧатМост, Иван)» в зеркале чата линии.
     author_name: str | None = None
+    # Системный автоответ — в зеркале линии честно маркируется «Автоответ».
+    is_autoreply: bool = False
 
 
 class CrmSyncRepository:
@@ -345,11 +347,16 @@ class CrmSyncWorker:
             return
 
         try:
+            # Классический таймлайн (не-OL): автоответ маркируем — иначе
+            # текст бота выглядит в карточке ответом менеджера.
+            text = data.message_text or ""
+            if data.is_autoreply:
+                text = f"[Автоответ] {text}"
             comment_id = await self._b24sync.process_outbound(
                 dialog_entity_id=data.crm_entity_id,
                 dialog_entity_type=data.crm_entity_type,
                 contact_id=data.crm_contact_id,
-                text=data.message_text or "",
+                text=text,
                 timeline_mode=timeline_mode,
                 files=self._timeline_files(data, media_to_timeline),
             )
@@ -425,13 +432,14 @@ class CrmSyncWorker:
             # клиент (тред сохраняется, ответ клиента придёт сюда же), а
             # автор-менеджер честно виден в префиксе текста.
             author = f", {data.author_name}" if data.author_name else ""
+            kind = "Автоответ" if data.is_autoreply else "Исходящее"
             message = build_send_message(
                 message_id=data.external_message_id or str(item.message_id),
                 dialog_id=data.dialog_id or 0,
                 date_unixsec=to_unixsec(
                     data.sent_at or data.message_created_at or datetime.now(UTC)
                 ),
-                text=f"↗️ Исходящее (ЧатМост{author}): {data.message_text or ''}",
+                text=f"↗️ {kind} (ЧатМост{author}): {data.message_text or ''}",
                 user_id=f"{data.messenger.value}_{data.contact_external_user_id or ''}",
                 user_name=data.sender_name,
                 files=self._ol_files(data),

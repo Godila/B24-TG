@@ -71,9 +71,12 @@ class IncomingHandler:
         self,
         crm_sync_enqueue: CrmSyncEnqueue,
         db_session_factory: Callable[[], AsyncSession],
+        autoreply=None,
     ):
         self._crm_sync_enqueue = crm_sync_enqueue
         self._db_factory = db_session_factory
+        # AutoReplier (опционально — тесты без автоответов передают None).
+        self._autoreply = autoreply
 
     async def handle(self, msg: IncomingMessage, *, account) -> None:
         # 1. Сохранение в нашей БД — всегда, независимо от состояния CRM.
@@ -94,6 +97,18 @@ class IncomingHandler:
                 message_id,
                 msg.external_message_id,
             )
+
+        # 3. Автоответ («первое входящее»/«нерабочее время») — fire-and-forget:
+        #    входящее уже закоммичено, исключение здесь его не касается.
+        if self._autoreply is not None and msg.direction == MessageDirection.inbound:
+            try:
+                await self._autoreply.on_inbound(
+                    message_id=message_id,
+                    account_id=account.id,
+                    msg_timestamp=msg.timestamp,
+                )
+            except Exception:
+                logger.exception("autoreply failed for message_id=%s", message_id)
 
     async def _persist(self, msg: IncomingMessage, *, account) -> int | None:
         """Сохранить сообщение; вернуть его id или None для дубля доставки."""

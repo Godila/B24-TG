@@ -257,6 +257,7 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
                 Message.b24_im_chat_id,
                 Message.b24_im_message_id,
                 Message.author_user_id,
+                Message.is_autoreply,
                 Contact.name,
                 Contact.phone,
                 Contact.first_name,
@@ -344,6 +345,7 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
             b24_im_chat_id=row.b24_im_chat_id,
             b24_im_message_id=row.b24_im_message_id,
             author_name=row.author_name,
+            is_autoreply=row.is_autoreply,
             attachments=[
                 AttachmentMeta(
                     file_path=a.file_path,

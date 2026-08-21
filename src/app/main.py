@@ -68,6 +68,7 @@ async def run_bridge() -> None:
     from app.b24.sync import Bitrix24Sync
     from app.b24.token_manager import TokenManager
     from app.bridge.account_sync import AccountSyncWorker, make_register_failure_hook
+    from app.bridge.autoreply import AutoReplier
     from app.bridge.bootstrap import (
         load_active_accounts,
         make_account_pump,
@@ -152,6 +153,9 @@ async def run_bridge() -> None:
     handler = IncomingHandler(
         crm_sync_enqueue=enqueue_crm_sync,
         db_session_factory=async_session,
+        # Автоответы «первое входящее»/«нерабочее время» (app_settings,
+        # выключены по умолчанию) — хук после коммита входящего.
+        autoreply=AutoReplier(async_session),
     )
     # Read-квитанции (✓✓): консьюмер + pump, объединяющий incoming и read
     # в одну forward-таску на аккаунт (см. bootstrap.make_account_pump).

@@ -225,7 +225,82 @@ async def test_settings_default_is_first(db):
         "media_to_timeline": False,
         "crm_mode": "deal",
         "ol_panel_mirror": True,
+        "auto_reply": {
+            "first_enabled": False,
+            "first_text": "",
+            "offhours_enabled": False,
+            "offhours_text": "",
+            "days": [0, 1, 2, 3, 4],
+            "start": "09:00",
+            "end": "18:00",
+            "tz": "Europe/Moscow",
+        },
     }
+
+
+@pytest.mark.asyncio
+async def test_settings_auto_reply_roundtrip(db):
+    supervisor = await _manager(db, 1)
+    await admin_api.put_settings(
+        admin_api.SettingsIn(
+            auto_reply_first_enabled=True,
+            auto_reply_first_text="Здравствуйте!",
+            auto_reply_offhours_enabled=True,
+            auto_reply_offhours_text="Мы закрыты",
+            work_hours=admin_api.WorkHoursIn(days=[0, 4], start="10:00", end="19:00"),
+            work_hours_tz="Asia/Vladivostok",
+        ),
+        supervisor,
+    )
+    ar = (await admin_api.get_settings(supervisor))["auto_reply"]
+    assert ar["first_enabled"] is True and ar["first_text"] == "Здравствуйте!"
+    assert ar["offhours_enabled"] is True and ar["offhours_text"] == "Мы закрыты"
+    assert ar["days"] == [0, 4]
+    assert ar["start"] == "10:00" and ar["end"] == "19:00"
+    assert ar["tz"] == "Asia/Vladivostok"
+    # Частичный PUT: другие настройки не тронуты
+    assert (await admin_api.get_settings(supervisor))["timeline_mode"] == "first"
+
+
+@pytest.mark.asyncio
+async def test_settings_auto_reply_enable_requires_text(db):
+    supervisor = await _manager(db, 1)
+    with pytest.raises(HTTPException) as ei:
+        await admin_api.put_settings(
+            admin_api.SettingsIn(auto_reply_first_enabled=True), supervisor
+        )
+    assert ei.value.status_code == 422
+    # Текст в том же запросе — включение проходит
+    await admin_api.put_settings(
+        admin_api.SettingsIn(
+            auto_reply_first_enabled=True, auto_reply_first_text="Привет"
+        ),
+        supervisor,
+    )
+    assert (await admin_api.get_settings(supervisor))["auto_reply"]["first_enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_settings_auto_reply_rejects_bad_tz(db):
+    supervisor = await _manager(db, 1)
+    with pytest.raises(HTTPException) as ei:
+        await admin_api.put_settings(
+            admin_api.SettingsIn(work_hours_tz="Mars/Olympus"), supervisor
+        )
+    assert ei.value.status_code == 422
+
+
+def test_work_hours_validation():
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
+        admin_api.WorkHoursIn(days=[7], start="09:00", end="18:00")
+    with pytest.raises(pydantic.ValidationError):
+        admin_api.WorkHoursIn(days=[0, 0], start="09:00", end="18:00")
+    with pytest.raises(pydantic.ValidationError):
+        admin_api.WorkHoursIn(days=[0], start="9:00", end="18:00")
+    with pytest.raises(pydantic.ValidationError):  # ночной span через полночь
+        admin_api.WorkHoursIn(days=[0], start="18:00", end="09:00")
 
 
 @pytest.mark.asyncio

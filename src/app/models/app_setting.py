@@ -20,6 +20,13 @@ class AppSetting(Base):
     - ``source_map`` — JSON маппинг канал→код записи справочника
       источников (``{"tg": "TELEGRAM", "max": ""}``; нет ключа — дефолт
       канала, пустая строка — источник не передавать).
+    - ``auto_reply_first_enabled``/``auto_reply_first_text`` — автоответ
+      «первое входящее» (``on``/``off`` + текст; пустой текст = выключен).
+    - ``auto_reply_offhours_enabled``/``auto_reply_offhours_text`` —
+      автоответ «нерабочее время» (те же правила).
+    - ``work_hours`` — JSON расписания автоответов
+      (``{"days": [0..6], "start": "09:00", "end": "18:00"}``, Пн=0).
+    - ``work_hours_tz`` — IANA-зона расписания (дефолт Europe/Moscow).
     """
 
     __tablename__ = "app_settings"

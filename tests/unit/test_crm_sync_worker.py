@@ -707,3 +707,38 @@ async def test_ol_outbound_not_active_line_loses_status_but_done():
 
     repo.mark_done.assert_awaited_once()
     repo.reschedule.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ol_outbound_autoreply_marked_in_mirror():
+    """Автоответ в зеркале линии — «↗️ Автоответ (ЧатМост): …» (без автора):
+    оператор видит, что диалог всё ещё ждёт живого ответа."""
+    repo = _make_repo(
+        [_make_item(kind=KIND_OUTBOUND)],
+        _ol_data(is_autoreply=True, sent_at=datetime(2026, 8, 20, 12, 0, tzinfo=UTC)),
+    )
+    ol = _FakeOpenLine()
+    worker = CrmSyncWorker(repo=repo, b24sync=AsyncMock(), openline=ol)
+    await worker._process_once()
+
+    assert len(ol.send_calls) == 1
+    _line, (m,) = ol.send_calls[0]
+    assert m["message"]["text"] == "↗️ Автоответ (ЧатМост): Привет из TG"
+    repo.mark_done.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_outbound_autoreply_marked_in_classic_timeline():
+    """Классический (не-OL) таймлайн: автоответ помечается «[Автоответ] » —
+    иначе текст бота выглядит в карточке ответом менеджера."""
+    repo = _make_repo(
+        [_make_item(kind=KIND_OUTBOUND)],
+        _make_data(message_text="Мы закрыты", is_autoreply=True),
+    )
+    sync = AsyncMock()
+    sync.process_outbound = AsyncMock(return_value=555)
+    worker = CrmSyncWorker(repo=repo, b24sync=sync, max_attempts=5)
+    await worker._process_once()
+
+    assert sync.process_outbound.await_args.kwargs["text"] == "[Автоответ] Мы закрыты"
+    repo.mark_done.assert_awaited_once()

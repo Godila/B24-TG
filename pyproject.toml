@@ -16,6 +16,7 @@ dependencies = [
     "httpx>=0.27",
     "anyio>=4.0",
     "websockets>=12",
+    "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]

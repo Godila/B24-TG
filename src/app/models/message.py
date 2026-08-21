@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     DateTime,
     Enum,
     ForeignKey,
@@ -13,6 +14,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    false,
     select,
     text,
 )
@@ -88,6 +90,14 @@ class Message(Base, TimestampMixin):
         DateTime(timezone=True), nullable=True
     )
     author_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Системный автоответ («первое входящее»/«нерабочее время»). Не считается
+    # ответом менеджера: счётчик «Ожидают ответа» такие исходящие игнорирует
+    # (семантика Wazzup — автоответ не снимает неотвеченность).
+    is_autoreply: Mapped[bool] = mapped_column(
+        # false() вместо text("false"): колонка `text` выше по телу класса
+        # затеняет sqlalchemy.text (грабля Initiation.text).
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     timeline_comment_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Открытые линии B24: im-пара события ONIMCONNECTORMESSAGEADD (id чата и
     # сообщения B24) — нужна для imconnector.send.status.delivery после

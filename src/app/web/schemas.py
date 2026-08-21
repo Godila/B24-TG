@@ -194,3 +194,19 @@ class TemplateOut(BaseModel):
     title: str
     body: str
     category: str | None = None
+
+
+class TemplateCreateIn(BaseModel):
+    """Создание шаблона (supervisor). Пустой тег = без тега.
+
+    PUT использует ту же схему — полная замена title/body/category.
+    """
+
+    title: str = Field(min_length=1, max_length=255)
+    body: str = Field(min_length=1, max_length=4096)
+    category: str | None = Field(default=None, min_length=1, max_length=64)
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def _empty_category_is_none(cls, v):
+        return v or None
