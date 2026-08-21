@@ -199,6 +199,27 @@ async def handle_operator_event(ev, session: AsyncSession) -> JSONResponse:
     return JSONResponse({"status": "queued", "queued": queued, "skipped": skipped})
 
 
+async def _capture_application_token(payload: dict, session: AsyncSession) -> None:
+    """Захват application_token из УЖЕ верифицированного события.
+
+    События B24 несут его всегда, а ONAPPINSTALL мог пройти мимо (живой
+    кейс 08-21: переустановка при старом коде — 422). Без него события
+    без access_token уходят в 401 fail-closed. Заполняем только NULL:
+    переустановка — авторитетный источник, чужое значение не перетираем.
+    """
+    auth = payload.get("auth")
+    if not isinstance(auth, dict):
+        return
+    app_token = auth.get("application_token")
+    if not isinstance(app_token, str) or not app_token:
+        return
+    token_row = (await session.execute(select(B24Token).limit(1))).scalar_one_or_none()
+    if token_row is not None and token_row.application_token is None:
+        token_row.application_token = app_token
+        await session.commit()
+        logger.info("IMCONNECTOR: application_token захвачен из события")
+
+
 @router.post("/imconnector")
 async def imconnector_event(request: Request) -> JSONResponse:
     """Приём событий коннектора (JSON или form-php; тело логируется redacted)."""
@@ -210,6 +231,7 @@ async def imconnector_event(request: Request) -> JSONResponse:
     async with async_session() as session:
         if not await _authorized(request.headers.get("X-Webhook-Secret"), payload, session):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
+        await _capture_application_token(payload, session)
         event = payload.get("event")
         if event in ("ONIMCONNECTORLINEDELETE", "ONIMCONNECTORSTATUSDELETE"):
             await _handle_line_delete(

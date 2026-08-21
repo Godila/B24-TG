@@ -386,3 +386,40 @@ async def test_operator_message_bumps_dialog_last_msg_at(db):
     async with db() as s:
         dialog = await s.get(Dialog, 11)
         assert dialog.last_msg_at is not None
+
+
+# ---------------------------------------------------------------------- #
+# Самозахват application_token из верифицированного события
+# ---------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_application_token_captured_when_null(db, monkeypatch):
+    monkeypatch.setattr(bizproc, "_token_alive", AsyncMock(return_value=True))
+    payload = {
+        "auth": {
+            "member_id": "m1",
+            "access_token": "tok",
+            "application_token": "apptok-live-XYZ",
+        }
+    }
+    async with db() as s:
+        token_row = (await s.execute(select(B24Token))).scalar_one()
+        token_row.application_token = None
+        await s.commit()
+        assert await openline._authorized(None, payload, s)
+        await openline._capture_application_token(payload, s)
+    async with db() as s:
+        token_row = (await s.execute(select(B24Token))).scalar_one()
+        assert token_row.application_token == "apptok-live-XYZ"
+
+
+@pytest.mark.asyncio
+async def test_application_token_not_overwritten(db):
+    """Существующий токен — авторитет установки, событие не перетирает."""
+    payload = {"auth": {"application_token": "новый-из-события"}}
+    async with db() as s:
+        await openline._capture_application_token(payload, s)
+    async with db() as s:
+        token_row = (await s.execute(select(B24Token))).scalar_one()
+        assert token_row.application_token == "apptok-123"
