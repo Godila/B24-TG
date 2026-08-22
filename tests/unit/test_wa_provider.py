@@ -417,3 +417,24 @@ async def test_supervise_poll_marks_dead_on_failed(tmp_path):
         await asyncio.sleep(0.02)
     assert provider.is_dead() is True
     await provider.disconnect()
+
+
+async def test_photo_without_media_gets_placeholder_text(tmp_path):
+    """Фото-событие без hasMedia/media (грабля 08-22: пустой пузырь в виджете):
+    текст = плейсхолдер «[фото]», не None; с media-метой — скачивание идёт."""
+    provider, api, _ = make_provider(tmp_path)
+    await provider.connect()
+    provider._on_event(received(type="image", body=None, hasMedia=False))
+    msg = await next_incoming(provider)
+    assert msg.content_type is ContentType.photo
+    assert msg.text == "[фото]"
+    assert msg.media is None
+    # media-мета без hasMedia тоже триггерит скачивание
+    api.downloads["m8"] = (b"jpg", "image/jpeg")
+    provider._on_event(
+        received(id="m8", type="image", body=None, hasMedia=False,
+                 media={"mimetype": "image/jpeg"})
+    )
+    msg2 = await next_incoming(provider)
+    assert msg2.media is not None
+    await provider.disconnect()

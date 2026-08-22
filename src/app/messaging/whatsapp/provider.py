@@ -21,6 +21,7 @@ from pathlib import Path
 from app.messaging.provider import MessengerProvider, SessionRevokedError
 from app.messaging.resolve import ParsedDest, ResolvedPeer
 from app.messaging.types import (
+    MEDIA_PLACEHOLDERS,
     ContentType,
     IncomingMessage,
     MediaPayload,
@@ -401,7 +402,10 @@ class WhatsAppProvider(MessengerProvider):
         )
         first, last = _name_parts(name)
         media: MediaPayload | None = None
-        if ctype is not ContentType.text and data.get("hasMedia") and self._media:
+        # Триггер: hasMedia ИЛИ media-мета (Baileys иногда шлёт без hasMedia —
+        # ловилось пустым пузырём без вложения, грабля 08-22).
+        has_media = bool(data.get("hasMedia") or data.get("media"))
+        if ctype is not ContentType.text and has_media and self._media:
             meta = data.get("media") or {}
             try:
                 media = await self._media.download(
@@ -414,6 +418,12 @@ class WhatsAppProvider(MessengerProvider):
                 )
             except Exception:
                 logger.warning("WA media download failed msg=%s", data.get("id"), exc_info=True)
+        # Плейсхолдер вместо пустого пузыря: медиа не скачалось/нет — текст
+        # несёт «[фото]»/«[голосовое сообщение]» (конвенция TG; таймлайн B24
+        # и превью его видят, UI-пузырь скрывает при вложении).
+        body = data.get("body") or None
+        if media is None and ctype is not ContentType.text:
+            body = body or MEDIA_PLACEHOLDERS[ctype]
         return IncomingMessage(
             messenger=Messenger.wa,
             external_chat_id=chat_id,
@@ -422,7 +432,7 @@ class WhatsAppProvider(MessengerProvider):
             sender_phone=sender_phone,
             sender_username=None,
             content_type=ctype,
-            text=data.get("body") or None,
+            text=body,
             media=media,
             external_message_id=str(data.get("id")) if data.get("id") else None,
             timestamp=(
