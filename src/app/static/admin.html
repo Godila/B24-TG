@@ -1193,7 +1193,16 @@
             if (st.qr_link !== wzState.qrLink) {
               wzState.qrLink = st.qr_link;
               qrbox.innerHTML = "";
-              new QRCode(qrbox, { text: st.qr_link, width: 180, height: 180 });
+              if (st.qr_link.indexOf("data:") === 0) {
+                // WA: готовый PNG из OpenWA — рендерить <img>, qrcode-либа
+                // base64-строку молча превращает в пустоту.
+                var img = document.createElement("img");
+                img.width = 180; img.height = 180; img.alt = "QR-код подключения";
+                img.src = st.qr_link;
+                qrbox.appendChild(img);
+              } else {
+                new QRCode(qrbox, { text: st.qr_link, width: 180, height: 180 });
+              }
             }
             state("Ожидание сканирования…");
           } else if (st.status === "waiting") {

@@ -701,6 +701,11 @@ async def line_connect_cancel(
     account_id: int, channel: Messenger, supervisor: SupervisorDep
 ) -> dict:
     """Отменить подключение: живой логин терминализируется, ссылка гасится."""
+    channel_impl = _channels.get(channel)
+    if channel_impl is not None:
+        # WA: гасит сессию OpenWA (иначе движок ~30-80МБ течёт); MAX/TG —
+        # идемпотентные no-op/терминация команд.
+        await channel_impl.cancel(account_id)
     async with async_session() as s:
         await terminate_active_commands(s, account_id=account_id, messenger=channel)
         await s.execute(
