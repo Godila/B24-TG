@@ -42,8 +42,10 @@ INLINE_MIME: frozenset[str] = frozenset(
         "video/mp4",
         "video/webm",
         "audio/ogg",
+        "audio/opus",  # WA PTT иногда шлёт голый opus без ogg-обёртки
         "audio/mpeg",
         "audio/mp4",
+        "audio/aac",
         "audio/wav",
     }
 )
