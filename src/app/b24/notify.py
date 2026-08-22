@@ -1,7 +1,7 @@
 """Сборка feed-уведомления менеджеру (Wazzup-паритет): текст, KEYBOARD,
 URL карточки CRM и подписанная ссылка «Отвечать не нужно».
 
-Формат KEYBOARD ({"BUTTONS": [[кнопка, …]]}, TYPE "link") сверен живым
+Формат KEYBOARD ({"BUTTONS": [кнопка, …]}, плоский; TYPE только NEWLINE) сверен живым
 спайком scripts/spike_im_notification.py.
 """
 
@@ -45,14 +45,17 @@ def crm_card_url(
 
 
 def build_keyboard(card_url: str | None, dismiss_url: str | None) -> dict | None:
-    """KEYBOARD для im.message.add: один ряд LINK-кнопок (LINK не требует
-    регистрации чат-бота). Нет ни одной — None (клавиатуры не будет)."""
-    row: list[dict] = []
+    """KEYBOARD для im.message.add: {"BUTTONS": [кнопка, …]} — плоский
+    массив, кнопка = TEXT+LINK (TYPE бывает только NEWLINE; формат сверен
+    живым спайком scripts/spike_im_notification.py — вложенные ряды [[…]]
+    дают KEYBOARD_ERROR). Каждая кнопка отдельной строкой (DISPLAY=BLOCK,
+    дефолт) — читабельнее на мобильном. Нет ни одной — None."""
+    buttons: list[dict] = []
     if card_url:
-        row.append({"TYPE": "link", "TEXT": "Открыть диалог", "LINK": card_url})
+        buttons.append({"TEXT": "Открыть диалог", "LINK": card_url})
     if dismiss_url:
-        row.append({"TYPE": "link", "TEXT": "Отвечать не нужно", "LINK": dismiss_url})
-    return {"BUTTONS": [row]} if row else None
+        buttons.append({"TEXT": "Отвечать не нужно", "LINK": dismiss_url})
+    return {"BUTTONS": buttons} if buttons else None
 
 
 def sign_dismiss_url(

@@ -6,7 +6,7 @@
 
 Проверяет три неизвестных, которые доки не фиксируют однозначно:
   1. Формат KEYBOARD для im.message.add от REST-приложения (ожидание:
-     {"BUTTONS": [[{"TYPE": "link", "TEXT": ..., "LINK": ...}]]}) — кнопка
+     {"BUTTONS": [{"TEXT": ..., "LINK": ...}]}) — кнопка
      «Отвечать не нужно» должна отрендериться в чате адресата.
   2. im.message.delete своего сообщения сразу после add.
   3. Повторный delete того же id (код «не найдено» — терпимый для деградации)
@@ -42,13 +42,11 @@ async def main() -> None:
         sys.exit(1)
     auth = token.access_token
 
-    # 1. add с KEYBOARD (проверяемый формат).
+    # 1. add с KEYBOARD (плоский BUTTONS — формат доков, живая проверка).
     keyboard = {
         "BUTTONS": [
-            [
-                {"TYPE": "link", "TEXT": "Открыть диалог", "LINK": settings.b24_portal},
-                {"TYPE": "link", "TEXT": "Отвечать не нужно", "LINK": settings.b24_portal},
-            ]
+            {"TEXT": "Открыть диалог", "LINK": settings.b24_portal},
+            {"TEXT": "Отвечать не нужно", "LINK": settings.b24_portal},
         ]
     }
     msg_id = await im.send_notification(

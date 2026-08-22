@@ -76,15 +76,15 @@ def test_crm_card_url_prefers_entity_then_contact():
 def test_keyboard_buttons_and_empty():
     kb = build_keyboard("https://card", "https://dismiss")
     assert kb == {
-        "BUTTONS": [[
-            {"TYPE": "link", "TEXT": "Открыть диалог", "LINK": "https://card"},
-            {"TYPE": "link", "TEXT": "Отвечать не нужно", "LINK": "https://dismiss"},
-        ]]
+        "BUTTONS": [
+            {"TEXT": "Открыть диалог", "LINK": "https://card"},
+            {"TEXT": "Отвечать не нужно", "LINK": "https://dismiss"},
+        ]
     }
     assert build_keyboard(None, None) is None
-    assert build_keyboard("https://card", None)["BUTTONS"] == [[
-        {"TYPE": "link", "TEXT": "Открыть диалог", "LINK": "https://card"}
-    ]]
+    assert build_keyboard("https://card", None) == {
+        "BUTTONS": [{"TEXT": "Открыть диалог", "LINK": "https://card"}]
+    }
 
 
 def test_dismiss_sign_roundtrip_and_expiry():
@@ -229,7 +229,7 @@ async def test_notify_renders_for_each_recipient():
     # из env теста: public_base_url может быть пуст — тогда только карточка).
     _, _, kb = im.sent[0]
     assert kb is not None
-    assert kb["BUTTONS"][0][0]["LINK"].endswith("/crm/deal/100/view/")
+    assert kb["BUTTONS"][0]["LINK"].endswith("/crm/deal/100/view/")
 
 
 @pytest.mark.asyncio
