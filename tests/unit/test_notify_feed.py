@@ -62,13 +62,13 @@ def test_notification_text_truncated_and_attachment_fallback():
 def test_crm_card_url_prefers_entity_then_contact():
     portal = "https://b24.example"
     assert crm_card_url(portal, entity_id=7, entity_type="deal", contact_id=9) == (
-        "https://b24.example/crm/deal/7/view/"
+        "https://b24.example/crm/deal/details/7/"
     )
     assert crm_card_url(portal, entity_id=7, entity_type="lead", contact_id=None) == (
-        "https://b24.example/crm/lead/7/view/"
+        "https://b24.example/crm/lead/details/7/"
     )
     assert crm_card_url(portal, entity_id=None, entity_type=None, contact_id=9) == (
-        "https://b24.example/crm/contact/9/view/"
+        "https://b24.example/crm/contact/details/9/"
     )
     assert crm_card_url(portal, entity_id=None, entity_type=None, contact_id=None) is None
 
@@ -229,7 +229,7 @@ async def test_notify_renders_for_each_recipient():
     # из env теста: public_base_url может быть пуст — тогда только карточка).
     _, _, kb = im.sent[0]
     assert kb is not None
-    assert kb["BUTTONS"][0]["LINK"].endswith("/crm/deal/100/view/")
+    assert kb["BUTTONS"][0]["LINK"].endswith("/crm/deal/details/100/")
 
 
 @pytest.mark.asyncio

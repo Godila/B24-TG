@@ -300,7 +300,7 @@ def test_inbox_last_message_preview_and_deal_url(inbox_app):
     assert by_id[22]["last_message_direction"] == "out"
     assert by_id[22]["last_message_text"] == "Держите"
     assert by_id[20]["crm_deal_id"] == 42
-    assert by_id[20]["deal_url"] == "https://test-portal.bitrix24.ru/crm/deal/42/view/"
+    assert by_id[20]["deal_url"] == "https://test-portal.bitrix24.ru/crm/deal/details/42/"
     assert by_id[22]["deal_url"] is None
 
 
@@ -318,7 +318,7 @@ async def test_inbox_lead_dialog_gets_lead_url(inbox_app):
 
     by_id = _all(client.get("/api/inbox/dialogs").json())
     assert by_id[20]["crm_entity_type"] == "lead"
-    assert by_id[20]["deal_url"] == "https://test-portal.bitrix24.ru/crm/lead/42/view/"
+    assert by_id[20]["deal_url"] == "https://test-portal.bitrix24.ru/crm/lead/details/42/"
 
 
 def test_supervisor_inbox_lists_all_with_owner_names(inbox_app):

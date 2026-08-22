@@ -34,13 +34,16 @@ def crm_card_url(
     contact_id: int | None,
 ) -> str | None:
     """Ссылка «Открыть диалог»: карточка сделки/лида (там живёт виджет
-    ЧатМоста), фолбэк — карточка контакта. Ничего нет — None (без кнопки)."""
+    ЧатМоста), фолбэк — карточка контакта. Ничего нет — None (без кнопки).
+
+    Формат /crm/{сущность}/details/{id}/ — живой прогон 08-22: прежний
+    /view/ редиректил на СПИСОК сущностей вместо карточки."""
     base = portal.rstrip("/")
     if entity_id is not None:
         kind = "lead" if entity_type == "lead" else "deal"
-        return f"{base}/crm/{kind}/{entity_id}/view/"
+        return f"{base}/crm/{kind}/details/{entity_id}/"
     if contact_id is not None:
-        return f"{base}/crm/contact/{contact_id}/view/"
+        return f"{base}/crm/contact/details/{contact_id}/"
     return None
 
 
