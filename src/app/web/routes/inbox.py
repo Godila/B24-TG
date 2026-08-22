@@ -14,6 +14,7 @@ from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.b24.notify import crm_card_url
 from app.config import get_settings
 from app.db import get_session
 from app.models import (
@@ -43,11 +44,12 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 def _crm_url(crm_entity_id: int | None, entity_type: str | None) -> str | None:
     """Ссылка на карточку CRM B24 (сделка/лид) — фронт не знает адрес портала."""
-    if crm_entity_id is None:
-        return None
-    portal = get_settings().b24_portal.rstrip("/")
-    kind = "lead" if entity_type == "lead" else "deal"
-    return f"{portal}/crm/{kind}/{crm_entity_id}/view/"
+    return crm_card_url(
+        get_settings().b24_portal,
+        entity_id=crm_entity_id,
+        entity_type=entity_type,
+        contact_id=None,
+    )
 
 
 def _enum_value(value) -> str:

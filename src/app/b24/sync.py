@@ -6,7 +6,6 @@ from typing import NamedTuple
 
 from app.b24.channels import channel_profile
 from app.b24.crm import CrmService
-from app.b24.im import ImService
 from app.b24.token_manager import TokenManager
 from app.models import Messenger
 
@@ -74,13 +73,13 @@ class _Entities(NamedTuple):
 class Bitrix24Sync:
     """Оркестрация: входящее сообщение → CRM.
 
-    Матчинг по номеру → создание/привязка сущностей → timeline → уведомление.
+    Матчинг по номеру → создание/привязка сущностей → timeline. Уведомления
+    менеджерам (Wazzup-паритет) — в CrmSyncWorker._handle_notify.
     """
 
-    def __init__(self, token_mgr: TokenManager, crm: CrmService, im: ImService):
+    def __init__(self, token_mgr: TokenManager, crm: CrmService):
         self._token_mgr = token_mgr
         self._crm = crm
-        self._im = im
 
     async def process_inbound(
         self,
@@ -90,7 +89,6 @@ class Bitrix24Sync:
         assigned_b24_user_id: int | None,
         *,
         messenger: Messenger = Messenger.tg,
-        notify_user_ids: list[int] | None = None,
         existing_contact_id: int | None = None,
         existing_entity_id: int | None = None,
         existing_entity_type: str | None = None,
@@ -108,12 +106,12 @@ class Bitrix24Sync:
     ) -> SyncResult | None:
         """Входящее сообщение → CRM.
 
-        ``messenger`` параметризует тексты (уведомление, источник SOURCE_ID)
-        по каналу. ``assigned_b24_user_id`` — ответственный CRM (None у
+        ``messenger`` параметризует источник SOURCE_ID и тексты по каналу.
+        ``assigned_b24_user_id`` — ответственный CRM (None у
         общего номера: карточка создаётся без ответственного, B24 применит
-        свои правила очереди). ``notify_user_ids`` — адресаты уведомления о
-        новом клиенте (дефолт: ответственный, у общих линий — все активные
-        участники, собирает crm_sync_repo.collect).
+        свои правила очереди). Уведомления менеджерам здесь больше НЕ
+        шлются (Wazzup-паритет переехал в CrmSyncWorker._handle_notify —
+        падение im-вызовов не должно ретраить CRM-синк).
         ``existing_contact_id``/``existing_entity_id``+``existing_entity_type``
         — уже известные CRM-связи диалога/контакта: живая привязка
         приоритетнее поиска по телефону (findbyComm по пустому телефону у
@@ -123,7 +121,7 @@ class Bitrix24Sync:
         режима; карточки удалены в B24 (связка протухла) — клиент
         фактически новый, карточку заводит режим.
         ``timeline_mode`` (app_settings): all/first/none — что писать в
-        таймлайн (уведомление менеджеру режимом не трогается).
+        таймлайн.
         ``source_map`` (app_settings, панель) подменяет источник карточек:
         нет канала — дефолт профиля канала, "" — источник не передавать.
         ``sender_first_name``/``sender_last_name``/``sender_username`` —
@@ -197,24 +195,6 @@ class Bitrix24Sync:
                     entity_id=entity.contact_id,
                     comment=comment_text,
                     files=files,
-                )
-
-        # 3. Уведомление — ТОЛЬКО первому сообщению нового клиента (is_new):
-        #    раньше слалось на каждое входящее (спам + расход REST-квоты).
-        #    Адресаты — ответственный, а у общего номера все активные
-        #    участники линии (список от collect).
-        if entity.is_new:
-            recipients = notify_user_ids if notify_user_ids is not None else (
-                [assigned_b24_user_id] if assigned_b24_user_id is not None else []
-            )
-            for user_id in recipients:
-                await self._im.notify_manager(
-                    auth,
-                    user_id=user_id,
-                    message=(
-                        f"💬 Новое сообщение в {profile.notify_label} от "
-                        f"{sender_name or sender_phone}:\n{message_text}"
-                    ),
                 )
 
         return SyncResult(

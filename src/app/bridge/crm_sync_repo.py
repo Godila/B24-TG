@@ -12,14 +12,20 @@ import re
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
 from app.b24.sources import SOURCE_ID_RE
 from app.b24.sync import CRM_MODE_DEFAULT, CRM_MODES, TIMELINE_MODE_DEFAULT, TIMELINE_MODES
-from app.bridge.crm_sync_worker import AttachmentMeta, CrmSyncData, CrmSyncRepository
+from app.bridge.crm_sync_worker import (
+    AttachmentMeta,
+    CrmSyncData,
+    CrmSyncRepository,
+    NotifyDialogStats,
+)
 from app.models import (
+    KIND_NOTIFY,
     AccountMember,
     AppSetting,
     Attachment,
@@ -27,8 +33,10 @@ from app.models import (
     CrmSyncItem,
     CrmSyncStatus,
     Dialog,
+    DialogNotification,
     Manager,
     Message,
+    MessageDirection,
     Messenger,
     TgAccount,
 )
@@ -409,6 +417,116 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
         )
         await self._session.commit()
 
+    # --- Feed-уведомления (Wazzup-паритет) ---
+
+    async def notify_dialog_stats(self, dialog_id: int) -> NotifyDialogStats:
+        """Предикат неотвеченности диалога — та же формулировка, что у
+        inbox-агрегата (inbound.id > max(id исходящих без is_autoreply));
+        рассинхрон двух мест = расползание semantics «ожидают ответа»."""
+        last_out = await self._session.scalar(
+            select(func.max(Message.id)).where(
+                Message.dialog_id == dialog_id,
+                Message.direction == MessageDirection.outbound,
+                Message.is_autoreply.is_(False),
+            )
+        )
+        last_in = (
+            await self._session.execute(
+                select(Message.id, Message.text)
+                .where(
+                    Message.dialog_id == dialog_id,
+                    Message.direction == MessageDirection.inbound,
+                )
+                .order_by(Message.id.desc())
+                .limit(1)
+            )
+        ).one_or_none()
+        if last_in is None:
+            return NotifyDialogStats(None, None, 0)
+        unanswered = await self._session.scalar(
+            select(func.count())
+            .select_from(Message)
+            .where(
+                Message.dialog_id == dialog_id,
+                Message.direction == MessageDirection.inbound,
+                Message.id > (last_out or 0),
+            )
+        )
+        return NotifyDialogStats(last_in.id, last_in.text, int(unanswered or 0))
+
+    async def notification_rows(self, dialog_id: int) -> list[DialogNotification]:
+        rows = await self._session.execute(
+            select(DialogNotification)
+            .where(DialogNotification.dialog_id == dialog_id)
+            .order_by(DialogNotification.id)
+        )
+        return list(rows.scalars().all())
+
+    async def upsert_notification_rows(
+        self, dialog_id: int, recipient_ids: list[int]
+    ) -> None:
+        existing = set(
+            (
+                await self._session.execute(
+                    select(DialogNotification.manager_b24_user_id).where(
+                        DialogNotification.dialog_id == dialog_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for uid in recipient_ids:
+            if uid not in existing:
+                self._session.add(
+                    DialogNotification(dialog_id=dialog_id, manager_b24_user_id=uid)
+                )
+        await self._session.commit()
+
+    async def remove_notification_row(self, row_id: int) -> None:
+        await self._session.execute(
+            delete(DialogNotification).where(DialogNotification.id == row_id)
+        )
+        await self._session.commit()
+
+    async def set_notification_message(
+        self, row_id: int, b24_message_id: int | None
+    ) -> None:
+        # dismissed_at сбрасываем всегда: свежий рендер после клика «Отвечать
+        # не нужно» легитимен, а погашенный слот (NULL) sweep всё равно не
+        # берёт (ему нужен живой b24_message_id).
+        await self._session.execute(
+            update(DialogNotification)
+            .where(DialogNotification.id == row_id)
+            .values(b24_message_id=b24_message_id, dismissed_at=None)
+        )
+        await self._session.commit()
+
+    async def pending_dismissed(self, limit: int = 20) -> list[DialogNotification]:
+        rows = await self._session.execute(
+            select(DialogNotification)
+            .where(
+                DialogNotification.dismissed_at.is_not(None),
+                DialogNotification.b24_message_id.is_not(None),
+            )
+            .limit(limit)
+        )
+        return list(rows.scalars().all())
+
+    async def has_newer_queued_notify(self, item_id: int, dialog_id: int) -> bool:
+        stmt = (
+            select(CrmSyncItem.id)
+            .join(Message, CrmSyncItem.message_id == Message.id)
+            .where(
+                CrmSyncItem.kind == KIND_NOTIFY,
+                CrmSyncItem.status.in_([CrmSyncStatus.queued, CrmSyncStatus.retrying]),
+                Message.dialog_id == dialog_id,
+                CrmSyncItem.id > item_id,
+            )
+            .limit(1)
+        )
+        return (await self._session.execute(stmt)).scalar_one_or_none() is not None
+
 
 class WorkerCrmSyncRepository(CrmSyncRepository):
     """CrmSyncRepository, открывающий новую сессию на каждый вызов.
@@ -497,3 +615,41 @@ class WorkerCrmSyncRepository(CrmSyncRepository):
     async def set_timeline_comment(self, message_id: int, comment_id: int) -> None:
         async with self._session_factory() as s:
             await SqlAlchemyCrmSyncRepository(s).set_timeline_comment(message_id, comment_id)
+
+    async def notify_dialog_stats(self, dialog_id: int) -> NotifyDialogStats:
+        async with self._session_factory() as s:
+            return await SqlAlchemyCrmSyncRepository(s).notify_dialog_stats(dialog_id)
+
+    async def notification_rows(self, dialog_id: int) -> list[DialogNotification]:
+        async with self._session_factory() as s:
+            return await SqlAlchemyCrmSyncRepository(s).notification_rows(dialog_id)
+
+    async def upsert_notification_rows(
+        self, dialog_id: int, recipient_ids: list[int]
+    ) -> None:
+        async with self._session_factory() as s:
+            await SqlAlchemyCrmSyncRepository(s).upsert_notification_rows(
+                dialog_id, recipient_ids
+            )
+
+    async def remove_notification_row(self, row_id: int) -> None:
+        async with self._session_factory() as s:
+            await SqlAlchemyCrmSyncRepository(s).remove_notification_row(row_id)
+
+    async def set_notification_message(
+        self, row_id: int, b24_message_id: int | None
+    ) -> None:
+        async with self._session_factory() as s:
+            await SqlAlchemyCrmSyncRepository(s).set_notification_message(
+                row_id, b24_message_id
+            )
+
+    async def pending_dismissed(self, limit: int = 20) -> list[DialogNotification]:
+        async with self._session_factory() as s:
+            return await SqlAlchemyCrmSyncRepository(s).pending_dismissed(limit)
+
+    async def has_newer_queued_notify(self, item_id: int, dialog_id: int) -> bool:
+        async with self._session_factory() as s:
+            return await SqlAlchemyCrmSyncRepository(s).has_newer_queued_notify(
+                item_id, dialog_id
+            )

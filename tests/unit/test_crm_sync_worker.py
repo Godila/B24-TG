@@ -194,8 +194,8 @@ async def test_inbound_message_not_found_is_terminal():
 
 @pytest.mark.asyncio
 async def test_inbound_no_assigned_manager_passes_none():
-    """Общий номер без ответственного: CRM без ASSIGNED_BY_ID, уведомления —
-    по списку участников (собирает collect); терминального фейла нет."""
+    """Общий номер без ответственного: CRM без ASSIGNED_BY_ID (список
+    адресатов уведомления собирает collect — потребитель теперь notify)."""
     repo = _make_repo(
         [_make_item()],
         _make_data(assigned_b24_user_id=None, notify_user_ids=[21, 22]),
@@ -207,7 +207,7 @@ async def test_inbound_no_assigned_manager_passes_none():
 
     call = sync.process_inbound.call_args.kwargs
     assert call["assigned_b24_user_id"] is None
-    assert call["notify_user_ids"] == [21, 22]
+    assert "notify_user_ids" not in call
     repo.mark_done.assert_awaited_once()
 
 

@@ -23,7 +23,7 @@ from app.models import TgAccount
 logger = logging.getLogger(__name__)
 
 # Колбэк алерта: async def admin_alert(user_id: int, text: str) -> None.
-# Реализуется в main.py (TokenManager → ImService.notify_manager).
+# Реализуется в main.py (TokenManager → ImService.send_notification).
 AlertNotifier = Callable[[int, str], Awaitable[None]]
 
 

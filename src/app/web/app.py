@@ -17,6 +17,7 @@ from app.web.routes import (
     dialogs,
     health,
     inbox,
+    notify_dismiss,
     openline,
     placement,
     public_media,
@@ -132,6 +133,8 @@ def create_app() -> FastAPI:
     app.include_router(connect.router)
     # Публичная раздача медиа по подписи (imconnector: B24 качает files[].url).
     app.include_router(public_media.router)
+    # Публичное гашение feed-уведомления («Отвечать не нужно», LINK-кнопка).
+    app.include_router(notify_dismiss.router)
     from app.models import Messenger
     from app.onboarding.max_channel import MaxOnboardingChannel
     from app.onboarding.tg_channel import TgOnboardingChannel

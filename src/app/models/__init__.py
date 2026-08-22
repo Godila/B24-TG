@@ -13,8 +13,9 @@ from app.models.b24_token import B24Token
 from app.models.base import Base, TimestampMixin
 from app.models.connect_token import ConnectToken, issue_connect_token, load_active_connect_token
 from app.models.contact import Contact
-from app.models.crm_sync import KIND_INBOUND, KIND_OUTBOUND, CrmSyncItem, CrmSyncStatus
+from app.models.crm_sync import KIND_INBOUND, KIND_NOTIFY, KIND_OUTBOUND, CrmSyncItem, CrmSyncStatus
 from app.models.dialog import Dialog, DialogStatus, Messenger
+from app.models.dialog_notification import DialogNotification
 from app.models.dialog_read import DialogRead
 from app.models.initiation import Initiation, InitiationStatus
 from app.models.login_command import (
@@ -33,6 +34,7 @@ from app.models.tg_account import TgAccount, TgAccountStatus
 __all__ = [
     "ACTIVE_STATUSES",
     "KIND_INBOUND",
+    "KIND_NOTIFY",
     "KIND_OUTBOUND",
     "AccountMember",
     "AppSetting",
@@ -45,6 +47,7 @@ __all__ = [
     "CrmSyncItem",
     "CrmSyncStatus",
     "Dialog",
+    "DialogNotification",
     "DialogRead",
     "DialogStatus",
     "Initiation",

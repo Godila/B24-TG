@@ -135,7 +135,7 @@ async def run_bridge() -> None:
         client_id=settings.b24_client_id,
         client_secret=settings.b24_client_secret,
     )
-    b24sync = Bitrix24Sync(token_mgr=token_mgr, crm=crm, im=im)
+    b24sync = Bitrix24Sync(token_mgr=token_mgr, crm=crm)
     # Открытые линии B24 (imconnector): входящие в чат линии, статусы доставки.
     openline = OpenLineService(token_mgr=token_mgr, client=b24_client)
 
@@ -146,7 +146,7 @@ async def run_bridge() -> None:
         if token is None:
             logger.warning("Admin alert skipped: no B24 token (integration not installed)")
             return
-        await im.notify_manager(token.access_token, user_id, text)
+        await im.send_notification(token.access_token, user_id, text)
 
     # CRM-очередь (план 006): handler ставит задачи, воркер выполняет.
     crm_repo = WorkerCrmSyncRepository(async_session)
@@ -199,6 +199,7 @@ async def run_bridge() -> None:
     # media_storage — чтение файлов вложений для FILES timeline-комментариев
     # (app_settings.media_to_timeline, выключено по умолчанию). openline —
     # ветка imconnector: сообщения OL-аккаунтов идут в чат линии, не в CRM.
+    # im+token_mgr — feed-уведомления менеджерам (Wazzup-паритет).
     crm_worker = CrmSyncWorker(
         repo=crm_repo,
         b24sync=b24sync,
@@ -207,6 +208,8 @@ async def run_bridge() -> None:
         media_storage=media_storage,
         media_timeline_max_bytes=settings.media_timeline_max_bytes,
         openline=openline,
+        im=im,
+        token_mgr=token_mgr,
     )
 
     # 5-6. Фоновые задачи: outbox + crm_sync + health + по задаче на входящий

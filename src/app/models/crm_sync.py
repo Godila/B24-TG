@@ -3,8 +3,9 @@
 Входящее/исходящее сообщение сначала сохраняется в нашей БД (Inbound /
 Outbox), а CRM-записи (контакт/сделка/timeline-комментарий/уведомление)
 делает CrmSyncWorker асинхронно отсюда — с ретраями и backoff, как outbox.
-``kind``: 'inbound' — синхронизация входящего (process_inbound),
-'outbound' — timeline-комментарий исходящего (process_outbound).
+``kind``: 'inbound' — синк входящего (process_inbound), 'outbound' —
+timeline-комментарий исходящего (process_outbound), 'notify' — feed-
+уведомление менеджерам (dialog_notifications).
 """
 
 import enum
@@ -27,6 +28,10 @@ from app.models.base import Base, TimestampMixin
 # kind-значения очереди (String-колонка, не Enum — по образцу external_chat_id).
 KIND_INBOUND = "inbound"
 KIND_OUTBOUND = "outbound"
+# Feed-уведомление менеджерам (Wazzup-паритет): рендер строки диалога в
+# чатах адресатов (delete старой + add новой), постановка — из воркера
+# после классического inbound-синка.
+KIND_NOTIFY = "notify"
 
 
 class CrmSyncStatus(str, enum.Enum):

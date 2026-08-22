@@ -26,7 +26,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from app.b24.channels import channel_profile
 from app.b24.client import Bitrix24Error
+from app.b24.im import ImService
+from app.b24.notify import (
+    build_keyboard,
+    build_notification_text,
+    crm_card_url,
+    sign_dismiss_url,
+)
 from app.b24.openlines import (
     OpenLineService,
     build_delivery_message,
@@ -34,9 +42,16 @@ from app.b24.openlines import (
     to_unixsec,
 )
 from app.b24.sync import CRM_MODE_DEFAULT, Bitrix24Sync
+from app.b24.token_manager import TokenManager
 from app.config import get_settings
 from app.media.public_url import sign_media_url
-from app.models import KIND_INBOUND, CrmSyncItem, Messenger
+from app.models import (
+    KIND_INBOUND,
+    KIND_NOTIFY,
+    CrmSyncItem,
+    DialogNotification,
+    Messenger,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - только для type-checker
     from app.media.storage import MediaStorage
@@ -46,6 +61,13 @@ logger = logging.getLogger(__name__)
 #: Значение по умолчанию для лимита файла в timeline-комментарий B24
 #: (переопределяется настройкой media_timeline_max_bytes из config).
 MEDIA_TIMELINE_MAX_BYTES_DEFAULT = 5 * 1024 * 1024
+
+#: Коды im.message.delete, на которых деградируем (сообщение осталось в
+#: чате, состояние нашей БД консистентно): не найдено (уже удалено) и
+#: истёкшее окно правки. Прочие Bitrix24Error (502→invalid_response,
+#: QUERY_LIMIT_EXCEEDED) — переходные: пробрасываем, item ретраится,
+#: иначе id сообщения теряется и строка висит в фиде навсегда.
+TOLERABLE_DELETE_CODES = frozenset({"MESSAGE_NOT_FOUND", "CANT_EDIT_MESSAGE"})
 
 
 @dataclass(slots=True)
@@ -57,6 +79,16 @@ class AttachmentMeta:
     mime_type: str | None = None
     size: int | None = None
     attachment_id: int | None = None  # для публичной подписанной ссылки
+
+
+@dataclass(slots=True)
+class NotifyDialogStats:
+    """Предикат неотвеченности одного диалога (зеркало inbox-агрегата:
+    неотвечен ⟺ есть inbound с id > max(id исходящих без is_autoreply))."""
+
+    last_inbound_id: int | None
+    last_inbound_text: str | None
+    unanswered_count: int
 
 
 @dataclass(slots=True)
@@ -164,6 +196,35 @@ class CrmSyncRepository:
         Дефолт {} — фейки в тестах наследуют дефолты каналов."""
         return {}
 
+    # --- Feed-уведомления (Wazzup-паритет) ---
+
+    async def notify_dialog_stats(self, dialog_id: int) -> NotifyDialogStats:
+        """Предикат неотвеченности диалога (см. NotifyDialogStats)."""
+
+    async def notification_rows(self, dialog_id: int) -> list[DialogNotification]:
+        """Слоты (диалог × адресат) с их b24_message_id."""
+
+    async def upsert_notification_rows(
+        self, dialog_id: int, recipient_ids: list[int]
+    ) -> None:
+        """Вставить слоты недостающих адресатов (UniqueConstraint — идемпо)."""
+
+    async def remove_notification_row(self, row_id: int) -> None:
+        """Удалить слот (адресат ушёл из линии)."""
+
+    async def set_notification_message(
+        self, row_id: int, b24_message_id: int | None
+    ) -> None:
+        """Записать id отправленного сообщения (None = погасить слот;
+        оба варианта сбрасывают dismissed_at — см. pending_dismissed)."""
+
+    async def pending_dismissed(self, limit: int = 20) -> list[DialogNotification]:
+        """Слоты с висящим сообщением и стоявшим dismissed_at (sweep)."""
+
+    async def has_newer_queued_notify(self, item_id: int, dialog_id: int) -> bool:
+        """Есть ли более новый queued/retrying notify-item этого диалога
+        (схлопывание бёрста входящих — REST-квота дороже лишнего рендера)."""
+
 
 class CrmSyncWorker:
     """Воркер очереди crm_sync: poll → CRM-вызовы → retry/backoff."""
@@ -178,6 +239,8 @@ class CrmSyncWorker:
         media_storage: "MediaStorage | None" = None,
         media_timeline_max_bytes: int = MEDIA_TIMELINE_MAX_BYTES_DEFAULT,
         openline: OpenLineService | None = None,
+        im: ImService | None = None,
+        token_mgr: TokenManager | None = None,
     ):
         self._repo = repo
         self._b24sync = b24sync
@@ -189,6 +252,9 @@ class CrmSyncWorker:
         self._media_timeline_max_bytes = media_timeline_max_bytes
         # Открытые линии B24: None = сервис не сконфигурирован (тесты без OL).
         self._openline = openline
+        # Feed-уведомления: None = ветка отключена (тесты без im-сервиса).
+        self._im = im
+        self._token_mgr = token_mgr
         self._running = False
 
     # ------------------------------------------------------------------ #
@@ -226,8 +292,16 @@ class CrmSyncWorker:
                 await self._handle_inbound(
                     item, timeline_mode, media_to_timeline, crm_mode, source_map
                 )
+            elif item.kind == KIND_NOTIFY:
+                await self._handle_notify(item)
             else:
                 await self._handle_outbound(item, timeline_mode, media_to_timeline)
+        # «Отвечать не нужно»: web ставит dismissed_at, сюда доезжает зачистка
+        # висящих сообщений (состояние-как-очередь, без REST из web-процесса).
+        try:
+            await self._sweep_dismissed()
+        except Exception:  # pragma: no cover - защитная сетка
+            logger.exception("dismissed-sweep failed; continuing")
 
     def _timeline_files(self, data: CrmSyncData, enabled: bool) -> list[tuple[str, str]]:
         """Вложения → [(имя, base64)] для FILES timeline-комментария B24.
@@ -298,7 +372,6 @@ class CrmSyncWorker:
                 sender_phone=data.sender_phone or "",
                 message_text=data.message_text or "",
                 assigned_b24_user_id=data.assigned_b24_user_id,
-                notify_user_ids=data.notify_user_ids,
                 messenger=data.messenger,
                 existing_contact_id=data.crm_contact_id,
                 existing_entity_id=data.crm_entity_id,
@@ -328,6 +401,13 @@ class CrmSyncWorker:
             return
 
         await self._repo.mark_done(item)
+        # Feed-уведомление (Wazzup-паритет) — ОТДЕЛЬНЫМ item: падение im-вызовов
+        # больше не ретраит CRM-синк (дефект дублей timeline-комментариев).
+        # CRM-поля уже применены → ссылка на карточку в уведомлении свежая.
+        try:
+            await self._repo.enqueue(kind=KIND_NOTIFY, message_id=item.message_id)
+        except Exception:
+            logger.exception("notify enqueue failed for message_id=%s", item.message_id)
 
     async def _handle_outbound(
         self, item: CrmSyncItem, timeline_mode: str, media_to_timeline: bool
@@ -347,6 +427,11 @@ class CrmSyncWorker:
             return
 
         try:
+            # Feed-уведомления гасим ДО timeline-комментария: падение clear
+            # ретраит item ещё до записи комментария (без дублей), а падение
+            # комментария повторит clear как no-op (слоты уже NULL).
+            if not data.is_autoreply:
+                await self._clear_dialog_notifications(data.dialog_id or 0)
             # Классический таймлайн (не-OL): автоответ маркируем — иначе
             # текст бота выглядит в карточке ответом менеджера.
             text = data.message_text or ""
@@ -369,6 +454,164 @@ class CrmSyncWorker:
             return
 
         await self._repo.mark_done(item)
+
+    # ------------------------------------------------------------------ #
+    # Feed-уведомления (Wazzup-паритет)
+    # ------------------------------------------------------------------ #
+
+    async def _handle_notify(self, item: CrmSyncItem) -> None:
+        """Рендер строки диалога в чатах адресатов: на каждое входящее
+        неотвеченного диалога — delete старой + add новой (чистый фид);
+        ответ менеджера и «Отвечать не нужно» гасят (clear/sweep)."""
+        data = await self._repo.collect(item.message_id)
+        if data is None:
+            logger.warning(
+                "crm_sync item %s: message_id=%s not found — terminal fail",
+                item.id,
+                item.message_id,
+            )
+            await self._repo.mark_failed(item, "message_not_found")
+            return
+        if data.ol_line_id or self._im is None or self._token_mgr is None:
+            # OL-диалоги живут в нативном чате линии (правило Wazzup); im-сервис
+            # не сконфигурирован — уведомления выключены (тесты без im).
+            await self._repo.mark_done(item)
+            return
+        dialog_id: int = data.dialog_id or 0
+        try:
+            if await self._repo.has_newer_queued_notify(item.id, dialog_id):
+                # Бёрст входящих: более новый item отрендерит свежее состояние.
+                await self._repo.mark_done(item)
+                return
+            stats = await self._repo.notify_dialog_stats(dialog_id)
+            if stats.last_inbound_id is None or stats.unanswered_count == 0:
+                # Ответ успел прийти до обработки — гасим висящие строки.
+                await self._clear_dialog_notifications(dialog_id)
+            else:
+                await self._render_notification(data, dialog_id, stats)
+        except Exception as exc:  # noqa: BLE001 — очередь обязана пережить любой сбой B24
+            await self._fail_or_retry(item, exc)
+            return
+        await self._repo.mark_done(item)
+
+    async def _render_notification(
+        self, data: CrmSyncData, dialog_id: int, stats: NotifyDialogStats
+    ) -> None:
+        settings = get_settings()
+        token = await self._token_mgr.get_token()
+        if token is None:
+            raise RuntimeError("no_b24_token")
+        auth = token.access_token
+        # Состав линии меняется — сводим слоты: ушедшим адресатам чистим
+        # сообщения и слоты, новых вставляем (UniqueConstraint — идемпо).
+        for row in await self._repo.notification_rows(dialog_id):
+            if row.manager_b24_user_id in data.notify_user_ids:
+                continue
+            if row.b24_message_id is not None:
+                await self._delete_im_quietly(auth, row.b24_message_id)
+            await self._repo.remove_notification_row(row.id)
+        await self._repo.upsert_notification_rows(dialog_id, data.notify_user_ids)
+
+        profile = channel_profile(data.messenger)
+        card_url = crm_card_url(
+            settings.b24_portal,
+            entity_id=data.crm_entity_id,
+            entity_type=data.crm_entity_type,
+            contact_id=data.crm_contact_id,
+        )
+        dismiss_url = None
+        if settings.public_base_url:
+            dismiss_url = sign_dismiss_url(
+                settings.public_base_url,
+                dialog_id,
+                secret=settings.session_secret,
+                ttl_sec=settings.notify_dismiss_ttl_sec,
+            )
+        else:
+            logger.warning("notify: public_base_url пуст — кнопки гашения не будет")
+        text = build_notification_text(
+            profile.notify_label,
+            data.sender_name or data.sender_phone or "Без имени",
+            stats.last_inbound_text,
+            stats.unanswered_count,
+        )
+        keyboard = build_keyboard(card_url, dismiss_url)
+
+        added: list[tuple[int, int]] = []
+        for row in await self._repo.notification_rows(dialog_id):
+            if row.b24_message_id is not None:
+                await self._delete_im_quietly(auth, row.b24_message_id)
+            new_id = await self._im.send_notification(
+                auth, row.manager_b24_user_id, text, keyboard
+            )
+            await self._repo.set_notification_message(row.id, new_id)
+            added.append((row.id, new_id))
+        # ponytail: краш между send_notification и записью id оставляет
+        # сироту-сообщение в чате адресата (ретрай добавит новое) — ручная
+        # чистка; апгрейд (im.message.list-сверка при ретрае) при повторных
+        # видимых дублях после крашей.
+        # Пост-проверка гонки: менеджер ответил между предикатом и add —
+        # гасим только что добавленные (clear-item тоже придёт, no-op).
+        fresh = await self._repo.notify_dialog_stats(dialog_id)
+        if fresh.unanswered_count == 0:
+            for row_id, msg_id in added:
+                await self._delete_im_quietly(auth, msg_id)
+                await self._repo.set_notification_message(row_id, None)
+
+    async def _clear_dialog_notifications(self, dialog_id: int) -> None:
+        """Погасить строки диалога у всех адресатов: удалить сообщения в
+        чатах, слоты обнулить. Идемпотентно (NULL-слоты = no-op).
+
+        ponytail: перевод аккаунта с классики на открытую линию оставляет
+        живые слоты (OL-ветки сюда не доходит) — гасятся кнопкой «Отвечать
+        не нужно» (sweep OL-фильтра не имеет); чистка при привязке линии —
+        при жалобах.
+        """
+        live = [
+            row
+            for row in await self._repo.notification_rows(dialog_id)
+            if row.b24_message_id is not None
+        ]
+        if not live:
+            return
+        token = await self._token_mgr.get_token()
+        if token is None:
+            raise RuntimeError("no_b24_token")
+        for row in live:
+            await self._delete_im_quietly(token.access_token, row.b24_message_id)
+            await self._repo.set_notification_message(row.id, None)
+
+    async def _delete_im_quietly(self, auth: str, message_id: int) -> None:
+        """Удаление сообщения фида. Перманентные B24-коды (TOLERANT_DELETE_
+        CODES) — осознанная деградация (сообщение остаётся висеть, состояние
+        нашей БД консистентно); переходные и сетевые — пробрасываются
+        вызывающему (ретрай item, id не теряется)."""
+        try:
+            await self._im.delete_message(auth, message_id)
+        except Bitrix24Error as exc:
+            if exc.code not in TOLERABLE_DELETE_CODES:
+                raise
+            logger.warning(
+                "notify: delete_message %s degraded (%s) — строка останется в чате",
+                message_id,
+                exc.code,
+            )
+
+    async def _sweep_dismissed(self) -> None:
+        """«Отвечать не нужно»: web ставит dismissed_at, сюда доезжают слоты
+        с висящим сообщением. Токена нет — тихо пропускаем (следующее
+        входящее/ответ всё равно сведёт состояние)."""
+        if self._im is None or self._token_mgr is None:
+            return
+        rows = await self._repo.pending_dismissed(20)
+        if not rows:
+            return
+        token = await self._token_mgr.get_token()
+        if token is None:
+            return
+        for row in rows:
+            await self._delete_im_quietly(token.access_token, row.b24_message_id)
+            await self._repo.set_notification_message(row.id, None)
 
     async def _handle_ol_inbound(self, item: CrmSyncItem, data: CrmSyncData) -> None:
         """Входящее → imconnector.send.messages (чат открытой линии)."""
