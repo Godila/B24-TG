@@ -146,7 +146,12 @@ async def run_bridge() -> None:
         if token is None:
             logger.warning("Admin alert skipped: no B24 token (integration not installed)")
             return
-        await im.send_notification(token.access_token, user_id, text)
+        await im.send_notification(
+            token.access_token,
+            user_id,
+            text,
+            bot_id=settings.imbot_bot_id or await crm_repo.get_imbot_bot_id(),
+        )
 
     # CRM-очередь (план 006): handler ставит задачи, воркер выполняет.
     crm_repo = WorkerCrmSyncRepository(async_session)

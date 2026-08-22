@@ -194,3 +194,61 @@ def test_onappinstall_form_encoded_body_saves(client):
     assert saved["access_token"] == "new_access"
     assert saved["member_id"] == "test_member_123"
     assert saved["user_id"] == 1  # строка приведена схемой к int
+
+
+# ---------------------------------------------------------------------- #
+# Авто-регистрация чат-бота при установке с правом imbot
+# ---------------------------------------------------------------------- #
+def test_onappinstall_registers_imbot_when_scope_present(client, monkeypatch):
+    """Право imbot в scope установки → бот регистрируется автоматически,
+    id сохраняется в app_settings (нулевое ручное сопровождение)."""
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://app.example")
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    calls = []
+
+    async def fake_ensure(client_, token_, *, webhook_url):
+        calls.append(webhook_url)
+        return 25
+
+    saved = []
+
+    async def fake_save(bot_id):
+        saved.append(bot_id)
+
+    async def fake_saved():
+        return False
+
+    with patch("app.web.routes.webhook.ensure_bot_registered", new=fake_ensure),          patch("app.web.routes.webhook._imbot_saved", new=fake_saved),          patch("app.web.routes.webhook._save_imbot_id", new=fake_save),          patch("app.web.routes.webhook.get_token_manager") as mock_get,          patch("app.web.routes.webhook._token_belongs_to_portal",
+               new=AsyncMock(return_value=True)):
+        tm = AsyncMock()
+        tm.save_install_data = AsyncMock()
+        mock_get.return_value = tm
+        payload = {**AUTH_PAYLOAD, "scope": "crm,im,imbot"}
+        response = client.post(
+            "/webhook/b24/onappinstall", json={"event": "ONAPPINSTALL", "auth": payload}
+        )
+
+    assert response.status_code == 200
+    assert calls == ["https://app.example/webhook/b24/imbot"]
+    assert saved == [25]
+
+
+def test_onappinstall_skips_imbot_without_scope(client, monkeypatch):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://app.example")
+
+    async def fake_ensure(client_, token_, *, webhook_url):  # pragma: no cover
+        raise AssertionError("не должен вызываться без imbot-права")
+
+    with patch("app.web.routes.webhook.ensure_bot_registered", new=fake_ensure),          patch("app.web.routes.webhook.get_token_manager") as mock_get,          patch("app.web.routes.webhook._token_belongs_to_portal",
+               new=AsyncMock(return_value=True)):
+        tm = AsyncMock()
+        tm.save_install_data = AsyncMock()
+        mock_get.return_value = tm
+        payload = {**AUTH_PAYLOAD, "scope": "crm,im"}
+        response = client.post(
+            "/webhook/b24/onappinstall", json={"event": "ONAPPINSTALL", "auth": payload}
+        )
+
+    assert response.status_code == 200

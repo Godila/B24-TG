@@ -16,6 +16,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
+from app.b24.imbot import KEY_IMBOT_BOT_ID
 from app.b24.sources import SOURCE_ID_RE
 from app.b24.sync import CRM_MODE_DEFAULT, CRM_MODES, TIMELINE_MODE_DEFAULT, TIMELINE_MODES
 from app.bridge.crm_sync_worker import (
@@ -513,6 +514,12 @@ class SqlAlchemyCrmSyncRepository(CrmSyncRepository):
         )
         return list(rows.scalars().all())
 
+    async def get_imbot_bot_id(self) -> int:
+        row = await self._session.scalar(
+            select(AppSetting.value).where(AppSetting.key == KEY_IMBOT_BOT_ID)
+        )
+        return int(row) if row and row.isdigit() else 0
+
     async def has_newer_queued_notify(self, item_id: int, dialog_id: int) -> bool:
         stmt = (
             select(CrmSyncItem.id)
@@ -653,3 +660,7 @@ class WorkerCrmSyncRepository(CrmSyncRepository):
             return await SqlAlchemyCrmSyncRepository(s).has_newer_queued_notify(
                 item_id, dialog_id
             )
+
+    async def get_imbot_bot_id(self) -> int:
+        async with self._session_factory() as s:
+            return await SqlAlchemyCrmSyncRepository(s).get_imbot_bot_id()

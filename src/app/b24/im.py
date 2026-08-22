@@ -1,16 +1,15 @@
 """IM-операции Bitrix24: уведомления менеджеру + подписки на события."""
 
 from app.b24.client import Bitrix24Client
-from app.config import get_settings
 
 
 class ImService:
     """IM-операции и event-подписки Bitrix24 поверх Bitrix24Client.
 
-    Уведомления ходят ОТ ЧАТ-БОТА «ЧатМост», когда он зарегистрирован
-    (settings.imbot_bot_id ≠ 0): сообщения живут в именованном диалоге с
-    ботом, а не в «Заметках» приложения, и кнопка гашения — COMMAND.
-    Без бота — фолбэк на im.message.* от приложения (LINK-кнопка).
+    Уведомления ходят ОТ ЧАТ-БОТА «ЧатМост» при ``bot_id`` ≠ 0: сообщения
+    живут в именованном диалоге с ботом, а не в «Заметках» приложения, и
+    кнопка гашения — COMMAND. bot_id ≠ 0 — фолбэк на im.message.* от
+    приложения (LINK-кнопка).
     """
 
     def __init__(self, client: Bitrix24Client):
@@ -22,9 +21,9 @@ class ImService:
         user_id: int,
         message: str,
         keyboard: dict | None = None,
+        bot_id: int = 0,
     ) -> int:
         """Уведомление с KEYBOARD; возвращает id сообщения (нужен для delete)."""
-        bot_id = get_settings().imbot_bot_id
         if bot_id:
             fields: dict = {"message": message}
             if keyboard is not None:
@@ -43,11 +42,12 @@ class ImService:
         )
         return int(result)
 
-    async def delete_message(self, auth_token: str, message_id: int) -> None:
+    async def delete_message(
+        self, auth_token: str, message_id: int, bot_id: int = 0
+    ) -> None:
         """«Чистый фид»: строка диалога исчезает из чата адресата при
         ответе/вытеснении. Ошибки — Bitrix24Error наружу (код трактует
         вызывающий, см. TOLERABLE_DELETE_CODES)."""
-        bot_id = get_settings().imbot_bot_id
         if bot_id:
             await self._client.call(
                 "imbot.v2.Chat.Message.delete",

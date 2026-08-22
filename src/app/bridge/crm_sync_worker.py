@@ -223,6 +223,10 @@ class CrmSyncRepository:
     async def pending_dismissed(self, limit: int = 20) -> list[DialogNotification]:
         """Слоты с висящим сообщением и стоявшим dismissed_at (sweep)."""
 
+    async def get_imbot_bot_id(self) -> int:
+        """id чат-бота «ЧатМост» из app_settings (0 = не зарегистрирован)."""
+        return 0
+
     async def has_newer_queued_notify(self, item_id: int, dialog_id: int) -> bool:
         """Есть ли более новый queued/retrying notify-item этого диалога
         (схлопывание бёрста входящих — REST-квота дороже лишнего рендера)."""
@@ -461,6 +465,11 @@ class CrmSyncWorker:
     # Feed-уведомления (Wazzup-паритет)
     # ------------------------------------------------------------------ #
 
+    async def _bot_id(self) -> int:
+        """Эффективный id чат-бота: app_settings (авто-регистрация при
+        установке) либо env-фолбэк IMBOT_BOT_ID."""
+        return get_settings().imbot_bot_id or await self._repo.get_imbot_bot_id()
+
     async def _handle_notify(self, item: CrmSyncItem) -> None:
         """Рендер строки диалога в чатах адресатов: на каждое входящее
         неотвеченного диалога — delete старой + add новой (чистый фид);
@@ -510,7 +519,7 @@ class CrmSyncWorker:
             if row.manager_b24_user_id in data.notify_user_ids:
                 continue
             if row.b24_message_id is not None:
-                await self._delete_im_quietly(auth, row.b24_message_id)
+                await self._delete_im_quietly(auth, row.b24_message_id, await self._bot_id())
             await self._repo.remove_notification_row(row.id)
         await self._repo.upsert_notification_rows(dialog_id, data.notify_user_ids)
 
@@ -522,7 +531,8 @@ class CrmSyncWorker:
             contact_id=data.crm_contact_id,
         )
         dismiss_button = None
-        if settings.imbot_bot_id:
+        bot_id = await self._bot_id()
+        if bot_id:
             # Чат-бот: COMMAND-кнопка — инлайн-гашение без вкладок.
             dismiss_button = dismiss_command_button(dialog_id)
         elif settings.public_base_url:
@@ -547,9 +557,9 @@ class CrmSyncWorker:
         added: list[tuple[int, int]] = []
         for row in await self._repo.notification_rows(dialog_id):
             if row.b24_message_id is not None:
-                await self._delete_im_quietly(auth, row.b24_message_id)
+                await self._delete_im_quietly(auth, row.b24_message_id, await self._bot_id())
             new_id = await self._im.send_notification(
-                auth, row.manager_b24_user_id, text, keyboard
+                auth, row.manager_b24_user_id, text, keyboard, bot_id=bot_id
             )
             await self._repo.set_notification_message(row.id, new_id)
             added.append((row.id, new_id))
@@ -562,7 +572,7 @@ class CrmSyncWorker:
         fresh = await self._repo.notify_dialog_stats(dialog_id)
         if fresh.unanswered_count == 0:
             for row_id, msg_id in added:
-                await self._delete_im_quietly(auth, msg_id)
+                await self._delete_im_quietly(auth, msg_id, bot_id)
                 await self._repo.set_notification_message(row_id, None)
 
     async def _clear_dialog_notifications(self, dialog_id: int) -> None:
@@ -585,16 +595,18 @@ class CrmSyncWorker:
         if token is None:
             raise RuntimeError("no_b24_token")
         for row in live:
-            await self._delete_im_quietly(token.access_token, row.b24_message_id)
+            await self._delete_im_quietly(
+                token.access_token, row.b24_message_id, await self._bot_id()
+            )
             await self._repo.set_notification_message(row.id, None)
 
-    async def _delete_im_quietly(self, auth: str, message_id: int) -> None:
+    async def _delete_im_quietly(self, auth: str, message_id: int, bot_id: int = 0) -> None:
         """Удаление сообщения фида. Перманентные B24-коды (TOLERANT_DELETE_
         CODES) — осознанная деградация (сообщение остаётся висеть, состояние
         нашей БД консистентно); переходные и сетевые — пробрасываются
         вызывающему (ретрай item, id не теряется)."""
         try:
-            await self._im.delete_message(auth, message_id)
+            await self._im.delete_message(auth, message_id, bot_id=bot_id)
         except Bitrix24Error as exc:
             if exc.code not in TOLERABLE_DELETE_CODES:
                 raise
@@ -617,7 +629,9 @@ class CrmSyncWorker:
         if token is None:
             return
         for row in rows:
-            await self._delete_im_quietly(token.access_token, row.b24_message_id)
+            await self._delete_im_quietly(
+                token.access_token, row.b24_message_id, await self._bot_id()
+            )
             await self._repo.set_notification_message(row.id, None)
 
     async def _handle_ol_inbound(self, item: CrmSyncItem, data: CrmSyncData) -> None:

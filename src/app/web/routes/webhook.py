@@ -7,9 +7,14 @@ import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
+from sqlalchemy import select
 
+from app.b24.client import Bitrix24Client
+from app.b24.imbot import KEY_IMBOT_BOT_ID, ensure_bot_registered
 from app.b24.token_manager import TokenManager
 from app.config import get_settings
+from app.db import async_session
+from app.models import AppSetting
 from app.web.schemas import OnAppInstallAuth
 
 logger = logging.getLogger(__name__)
@@ -43,6 +48,65 @@ async def _token_belongs_to_portal(auth: OnAppInstallAuth) -> bool:
         # Сетевой сбой или не-JSON ответ: самопроверка не прошла — 401.
         logger.warning("ONAPPINSTALL: token self-check failed (network/invalid)")
         return False
+
+
+async def _imbot_saved() -> bool:
+    """Бот уже зарегистрирован на этом портале (app_settings)?"""
+    async with async_session() as session:
+        row = (
+            await session.execute(
+                select(AppSetting).where(AppSetting.key == KEY_IMBOT_BOT_ID)
+            )
+        ).scalar_one_or_none()
+    return row is not None and (row.value or "").isdigit()
+
+
+async def _save_imbot_id(bot_id: int) -> None:
+    async with async_session() as session:
+        row = (
+            await session.execute(
+                select(AppSetting).where(AppSetting.key == KEY_IMBOT_BOT_ID)
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            session.add(AppSetting(key=KEY_IMBOT_BOT_ID, value=str(bot_id)))
+        else:
+            row.value = str(bot_id)
+        await session.commit()
+
+
+async def _ensure_imbot(auth: OnAppInstallAuth) -> None:
+    """Право «Чат-боты» выдано, бот не зарегистрирован → поднять самому.
+
+    Нулевое ручное сопровождение: установка с правом imbot сама создаёт
+    бота и запоминает id в app_settings. Best-effort целиком — сбой не
+    валит установку (токены уже сохранены): уведомления деградируют до
+    LINK-фолбэка до следующей переустановки.
+    """
+    if "imbot" not in (auth.scope or "").split(","):
+        return
+    settings = get_settings()
+    if not settings.public_base_url:
+        logger.warning(
+            "ONAPPINSTALL: imbot-право есть, но PUBLIC_BASE_URL пуст — бот не регистрируем"
+        )
+        return
+    client = Bitrix24Client(
+        client_endpoint=auth.client_endpoint, min_interval=settings.b24_min_call_interval
+    )
+    try:
+        if await _imbot_saved():
+            return  # уже зарегистрирован — REST не тратим (register идемпотентен)
+        bot_id = await ensure_bot_registered(
+            client,
+            auth.access_token,
+            webhook_url=settings.public_base_url.rstrip("/") + "/webhook/b24/imbot",
+        )
+        await _save_imbot_id(bot_id)
+    except Exception:  # установка важнее бота
+        logger.exception("ONAPPINSTALL: авто-регистрация бота не удалась")
+    finally:
+        await client.aclose()
 
 
 @router.post("/onappinstall")
@@ -92,5 +156,6 @@ async def on_app_install(request: Request) -> JSONResponse:
 
     tm = get_token_manager()
     await tm.save_install_data(auth.model_dump())
+    await _ensure_imbot(auth)
 
     return JSONResponse({"status": "ok"})

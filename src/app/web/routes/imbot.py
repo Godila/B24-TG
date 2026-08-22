@@ -15,8 +15,9 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select, update
 
 import app.db
+from app.b24.imbot import KEY_IMBOT_BOT_ID
 from app.config import get_settings
-from app.models import Dialog, DialogNotification
+from app.models import AppSetting, Dialog, DialogNotification
 from app.web.routes.openline import _authorized
 
 logger = logging.getLogger(__name__)
@@ -113,13 +114,24 @@ async def imbot_event(request: Request) -> JSONResponse:
 
 async def _reply_ok(auth_token: str, user_id: int) -> None:
     settings = get_settings()
+    bot_id = settings.imbot_bot_id
+    if not bot_id:
+        async with app.db.async_session() as s:
+            row = (
+                await s.execute(
+                    select(AppSetting.value).where(AppSetting.key == KEY_IMBOT_BOT_ID)
+                )
+            ).scalar_one_or_none()
+        bot_id = int(row) if row and row.isdigit() else 0
+    if not bot_id:
+        return  # бот не зарегистрирован — LINK-режим, ответ не нужен
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             await client.post(
                 settings.b24_portal.rstrip("/") + "/rest/imbot.v2.Chat.Message.send",
                 params={"auth": auth_token},
                 json={
-                    "botId": settings.imbot_bot_id,
+                    "botId": bot_id,
                     "dialogId": str(user_id),
                     "fields": {"message": _REPLY_OK},
                 },

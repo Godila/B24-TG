@@ -167,12 +167,12 @@ class _FakeIm:
         self._next_id = 500
         self.delete_errors: dict[int, Exception] = {}
 
-    async def send_notification(self, auth, user_id, message, keyboard=None):
+    async def send_notification(self, auth, user_id, message, keyboard=None, bot_id=0):
         self._next_id += 1
         self.sent.append((user_id, message, keyboard))
         return self._next_id
 
-    async def delete_message(self, auth, message_id):
+    async def delete_message(self, auth, message_id, bot_id=0):
         exc = self.delete_errors.get(message_id)
         if exc is not None:
             raise exc
@@ -207,6 +207,7 @@ def _notify_repo(items, data, stats_rows=None, stats=None):
     repo.remove_notification_row = AsyncMock()
     repo.set_notification_message = AsyncMock()
     repo.pending_dismissed = AsyncMock(return_value=[])
+    repo.get_imbot_bot_id = AsyncMock(return_value=0)
     return repo
 
 
