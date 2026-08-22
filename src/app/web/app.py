@@ -16,6 +16,7 @@ from app.web.routes import (
     bizproc,
     dialogs,
     health,
+    imbot,
     inbox,
     notify_dismiss,
     openline,
@@ -119,6 +120,8 @@ def create_app() -> FastAPI:
     app.include_router(bizproc.router)
     # События коннектора открытых линий (server-to-server, как webhook).
     app.include_router(openline.router)
+    # События чат-бота «ЧатМост» (команда «Отвечать не нужно»).
+    app.include_router(imbot.router)
     app.include_router(placement.router)
     app.include_router(dialogs.router)
     app.include_router(inbox.router)

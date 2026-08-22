@@ -47,18 +47,32 @@ def crm_card_url(
     return None
 
 
-def build_keyboard(card_url: str | None, dismiss_url: str | None) -> dict | None:
-    """KEYBOARD для im.message.add: {"BUTTONS": [кнопка, …]} — плоский
-    массив, кнопка = TEXT+LINK (TYPE бывает только NEWLINE; формат сверен
-    живым спайком scripts/spike_im_notification.py — вложенные ряды [[…]]
-    дают KEYBOARD_ERROR). Каждая кнопка отдельной строкой (DISPLAY=BLOCK,
-    дефолт) — читабельнее на мобильном. Нет ни одной — None."""
+def build_keyboard(card_url: str | None, dismiss_button: dict | None) -> dict | None:
+    """KEYBOARD: {"BUTTONS": [кнопка, …]} — плоский массив (формат сверен
+    живым спайком scripts/spike_im_notification.py). Каждая кнопка отдельной
+    строкой (DISPLAY=BLOCK, дефолт). Нет ни одной — None."""
     buttons: list[dict] = []
     if card_url:
         buttons.append({"TEXT": "Открыть диалог", "LINK": card_url})
-    if dismiss_url:
-        buttons.append({"TEXT": "Отвечать не нужно", "LINK": dismiss_url})
+    if dismiss_button:
+        buttons.append(dismiss_button)
     return {"BUTTONS": buttons} if buttons else None
+
+
+def dismiss_command_button(dialog_id: int) -> dict:
+    """COMMAND-кнопка гашения (чат-бот): клик инлайн, без вкладок; BLOCK —
+    гасить кнопку после нажатия (повторные клики не плодят события)."""
+    return {
+        "TEXT": "Отвечать не нужно",
+        "COMMAND": "dismiss",
+        "COMMAND_PARAMS": str(dialog_id),
+        "BLOCK": "Y",
+    }
+
+
+def dismiss_link_button(url: str) -> dict:
+    """LINK-фолбэк без бота: подписанная страница /notify/dismiss."""
+    return {"TEXT": "Отвечать не нужно", "LINK": url}
 
 
 def sign_dismiss_url(

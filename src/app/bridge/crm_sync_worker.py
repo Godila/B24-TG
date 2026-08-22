@@ -33,6 +33,8 @@ from app.b24.notify import (
     build_keyboard,
     build_notification_text,
     crm_card_url,
+    dismiss_command_button,
+    dismiss_link_button,
     sign_dismiss_url,
 )
 from app.b24.openlines import (
@@ -519,23 +521,28 @@ class CrmSyncWorker:
             entity_type=data.crm_entity_type,
             contact_id=data.crm_contact_id,
         )
-        dismiss_url = None
-        if settings.public_base_url:
-            dismiss_url = sign_dismiss_url(
-                settings.public_base_url,
-                dialog_id,
-                secret=settings.session_secret,
-                ttl_sec=settings.notify_dismiss_ttl_sec,
+        dismiss_button = None
+        if settings.imbot_bot_id:
+            # Чат-бот: COMMAND-кнопка — инлайн-гашение без вкладок.
+            dismiss_button = dismiss_command_button(dialog_id)
+        elif settings.public_base_url:
+            dismiss_button = dismiss_link_button(
+                sign_dismiss_url(
+                    settings.public_base_url,
+                    dialog_id,
+                    secret=settings.session_secret,
+                    ttl_sec=settings.notify_dismiss_ttl_sec,
+                )
             )
         else:
-            logger.warning("notify: public_base_url пуст — кнопки гашения не будет")
+            logger.warning("notify: ни бот, ни public_base_url — кнопки гашения не будет")
         text = build_notification_text(
             profile.notify_label,
             data.sender_name or data.sender_phone or "Без имени",
             stats.last_inbound_text,
             stats.unanswered_count,
         )
-        keyboard = build_keyboard(card_url, dismiss_url)
+        keyboard = build_keyboard(card_url, dismiss_button)
 
         added: list[tuple[int, int]] = []
         for row in await self._repo.notification_rows(dialog_id):

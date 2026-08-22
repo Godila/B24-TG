@@ -20,6 +20,8 @@ from app.b24.notify import (
     build_keyboard,
     build_notification_text,
     crm_card_url,
+    dismiss_command_button,
+    dismiss_link_button,
     sign_dismiss_url,
     verify_dismiss_sig,
 )
@@ -74,7 +76,8 @@ def test_crm_card_url_prefers_entity_then_contact():
 
 
 def test_keyboard_buttons_and_empty():
-    kb = build_keyboard("https://card", "https://dismiss")
+    dismiss = dismiss_link_button("https://dismiss")
+    kb = build_keyboard("https://card", dismiss)
     assert kb == {
         "BUTTONS": [
             {"TEXT": "Открыть диалог", "LINK": "https://card"},
@@ -84,6 +87,18 @@ def test_keyboard_buttons_and_empty():
     assert build_keyboard(None, None) is None
     assert build_keyboard("https://card", None) == {
         "BUTTONS": [{"TEXT": "Открыть диалог", "LINK": "https://card"}]
+    }
+
+
+def test_dismiss_command_button_inline():
+    """Бот-режим: COMMAND-кнопка без ссылки — клик инлайн (COMMAND_PARAMS
+    несёт dialog_id, BLOCK гасит кнопку после нажатия)."""
+    btn = dismiss_command_button(55)
+    assert btn == {
+        "TEXT": "Отвечать не нужно",
+        "COMMAND": "dismiss",
+        "COMMAND_PARAMS": "55",
+        "BLOCK": "Y",
     }
 
 
@@ -214,8 +229,17 @@ async def test_notify_renders_for_each_recipient():
     )
     repo.notification_rows = AsyncMock(side_effect=[[row], fresh_rows])
     im = _FakeIm()
-    worker = CrmSyncWorker(repo=repo, b24sync=AsyncMock(), im=im, token_mgr=_token_mgr())
-    await worker._process_once()
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://app.example")
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        worker = CrmSyncWorker(repo=repo, b24sync=AsyncMock(), im=im, token_mgr=_token_mgr())
+        await worker._process_once()
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()
 
     # Старая строка удалена в B24, новая добавлена каждому адресату.
     assert im.deleted == [777]
@@ -230,6 +254,8 @@ async def test_notify_renders_for_each_recipient():
     _, _, kb = im.sent[0]
     assert kb is not None
     assert kb["BUTTONS"][0]["LINK"].endswith("/crm/deal/details/100/")
+    # Без бота (env чист) — LINK-фолбэк гашения.
+    assert kb["BUTTONS"][1]["LINK"].startswith("https://")
 
 
 @pytest.mark.asyncio
@@ -625,3 +651,100 @@ def test_dismiss_route_expired_404(client):
 
 def test_dismiss_route_unknown_dialog_404(client):
     assert client.get(_dismiss_path(dialog_id=404)).status_code == 404
+
+
+# ---------------------------------------------------------------------- #
+# Вебхук чат-бота: команда dismiss («Отвечать не нужно», COMMAND-кнопка)
+# ---------------------------------------------------------------------- #
+@pytest.fixture
+def imbot_client(db, monkeypatch):
+    monkeypatch.setenv("B24_WEBHOOK_SECRET", "whs-test")
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setattr("app.db.async_session", db)
+    from app.web.app import create_app
+
+    yield TestClient(create_app())
+    get_settings.cache_clear()
+
+
+def _command_payload(dialog_id=55, token="app-token-x"):
+    return {
+        "event": "ONIMBOTV2COMMANDADD",
+        "data": {
+            "COMMAND": {
+                "42": {
+                    "BOT_ID": "999",
+                    "COMMAND": "dismiss",
+                    "COMMAND_PARAMS": str(dialog_id),
+                    "COMMAND_CONTEXT": "KEYBOARD",
+                }
+            },
+            "PARAMS": {"FROM_USER_ID": "1", "DIALOG_ID": "1"},
+        },
+        "auth": {"application_token": token, "user_id": "1"},
+    }
+
+
+def _seed_for_imbot(db):
+    import asyncio
+
+    async def seed():
+        async with db() as s:
+            s.add(Contact(id=10, messenger=Messenger.tg, external_user_id="u", name="И"))
+            s.add(Dialog(id=55, contact_id=10, messenger=Messenger.tg, external_chat_id="c"))
+            s.add(
+                DialogNotification(
+                    id=1, dialog_id=55, manager_b24_user_id=1, b24_message_id=777
+                )
+            )
+            await s.commit()
+
+    asyncio.run(seed())
+
+
+def test_imbot_dismiss_command_gauses_dialog(imbot_client, db):
+    _seed_for_imbot(db)
+    resp = imbot_client.post(
+        "/webhook/b24/imbot", json=_command_payload(), headers={"X-Webhook-Secret": "whs-test"}
+    )
+    assert resp.status_code == 200
+
+    async def check():
+        async with db() as s:
+            row = (
+                await s.execute(select(DialogNotification).where(DialogNotification.id == 1))
+            ).scalar_one()
+            assert row.dismissed_at is not None  # сообщения вычистит sweep
+
+    import asyncio
+
+    asyncio.run(check())
+
+
+def test_imbot_unauthorized_without_secret(imbot_client, db):
+    _seed_for_imbot(db)
+    resp = imbot_client.post("/webhook/b24/imbot", json=_command_payload())
+    assert resp.status_code == 401
+
+
+def test_imbot_foreign_command_ignored(imbot_client, db):
+    _seed_for_imbot(db)
+    payload = _command_payload()
+    payload["data"]["COMMAND"]["42"]["COMMAND"] = "other"
+    resp = imbot_client.post(
+        "/webhook/b24/imbot", json=payload, headers={"X-Webhook-Secret": "whs-test"}
+    )
+    assert resp.status_code == 200
+
+    async def check():
+        async with db() as s:
+            row = (
+                await s.execute(select(DialogNotification).where(DialogNotification.id == 1))
+            ).scalar_one()
+            assert row.dismissed_at is None
+
+    import asyncio
+
+    asyncio.run(check())
