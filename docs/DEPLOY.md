@@ -68,7 +68,7 @@ docker compose restart nginx
 > (больше не описан в compose). Приложение его не использовало, ничего не
 > сломается; `REDIS_URL` в `.env` можно убрать руками (Settings игнорирует
 > неизвестные переменные). Volume `redis_data` при желании удалить:
-> `docker volume rm bitrix-tg_redis_data`.
+> `docker volume rm chatmost_redis_data`.
 
 ### Runbook: сессия Telegram инвалидировалась (логаут/смена номера)
 ```bash
@@ -137,7 +137,7 @@ docker compose exec postgres pg_dump -U bitrix_tg bitrix_tg > backup_$(date +%F)
 
 # Автоматический ночной бэкап (установлен 2026-08-16)
 # Что кладёт: pg_dump (gzip) + tar docker-volume tg_sessions + tar media-тома + .env → /opt/bitrix-tg/backups/,
-# ротация старше 7 дней. Cron: /etc/cron.d/bitrix-tg-backup, 03:30 nightly, лог /var/log/bitrix-tg-backup.log.
+# ротация старше 7 дней. Cron: /etc/cron.d/chatmost-backup, 03:30 nightly, лог /var/log/chatmost-backup.log.
 # Выгрузка копии с VM (опционально): создать /etc/bitrix-tg-backup.env с
 #   BACKUP_UPLOAD_DST="user@host:/path/backups"
 # (ssh-ключ root'а должен иметь доступ туда; scp только свежих файлов).

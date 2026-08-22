@@ -2,6 +2,10 @@
 # (json-file умирал вместе с контейнером — инцидент 08-18 разбирали
 # вслепую) и ротируются самим журналом. Смотреть:
 #   journalctl -t chatmost.<имя-контейнера>   |   docker compose logs
+# Имя проекта: контейнеры chatmost-<svc>-1, сеть chatmost_default, образ
+# chatmost-web (тома после миграции 08-22 тоже chatmost_*).
+name: chatmost
+
 x-logging: &default-logging
   driver: journald
   options:
