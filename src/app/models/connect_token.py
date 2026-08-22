@@ -32,7 +32,7 @@ class ConnectToken(Base, TimestampMixin):
     account_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("tg_accounts.id"), nullable=False, index=True
     )
-    messenger: Mapped[Messenger] = mapped_column(Enum("tg", "max", name="messenger"))
+    messenger: Mapped[Messenger] = mapped_column(Enum(Messenger))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     #: Пополнено при authorized — ссылка одноразовая по смыслу.
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

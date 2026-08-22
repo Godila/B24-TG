@@ -286,7 +286,8 @@ function chatApp() {
 
     /** Подсказка ввода зависит от канала: MAX ищет только по телефону. */
     get initDestPlaceholder() {
-      return this.initMessenger === "max" ? "Телефон +7…" : "Телефон +7… или @username";
+      var phoneOnly = this.initMessenger === "max" || this.initMessenger === "wa";
+      return phoneOnly ? "Телефон +7…" : "Телефон +7… или @username";
     },
 
     async openInitiate() {
@@ -609,6 +610,7 @@ function chatApp() {
     channelLabel(messenger) {
       if (messenger === "max") return "MAX";
       if (messenger === "tg") return "TG";
+      if (messenger === "wa") return "WA";
       return "";
     },
 

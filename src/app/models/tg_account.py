@@ -4,14 +4,18 @@
 с добавлением MAX в ней живут аккаунты обоих каналов — колонка ``messenger``
 различает их, а уникальности составные: (messenger, manager_id) и
 (messenger, phone). TG-строки используют ``session_path`` (файл Telethon),
-MAX-строки — ``token``/``device_id`` (сессия web-клиента MAX).
+MAX-строки — ``token``/``device_id`` (сессия web-клиента MAX), WA-строки —
+``wa_session_id`` (сессия в OpenWA-сайдкаре) + ``restriction_*`` (ограничения
+WhatsApp, поллинг AccountSyncWorker).
 """
 
 import enum
+from datetime import datetime
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    DateTime,
     Enum,
     ForeignKey,
     Integer,
@@ -57,6 +61,14 @@ class TgAccount(Base, TimestampMixin):
     max_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     # Отображаемое имя владельца MAX-аккаунта (из профиля).
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # WA: id сессии в OpenWA-сайдкаре (QR-онбординг). TG/MAX: NULL.
+    wa_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # WA: ограничение, наложенное WhatsApp на аккаунт (из статуса OpenWA-сессии;
+    # kind: reachout_timelock | tos_block). NULL = нет. Поллинг AccountSyncWorker.
+    restriction_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    restriction_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     status: Mapped[TgAccountStatus] = mapped_column(
         Enum(TgAccountStatus), default=TgAccountStatus.offline
     )

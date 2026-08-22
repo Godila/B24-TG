@@ -89,6 +89,7 @@ async def run_bridge() -> None:
     from app.media.storage import MediaStorage
     from app.messaging.max.factory import build_max_provider
     from app.messaging.telegram.proxy import telethon_proxy
+    from app.messaging.whatsapp.factory import build_wa_provider
     from app.models import Messenger
 
     settings = get_settings()
@@ -111,7 +112,10 @@ async def run_bridge() -> None:
         proxy=telethon_proxy(settings),
         # partial совместим с ProviderBuilder (Callable[[TgAccount], …]) —
         # протокол SessionManager не меняется, хранилище замыкается здесь.
-        builders={Messenger.max: partial(build_max_provider, media_storage=media_storage)},
+        builders={
+            Messenger.max: partial(build_max_provider, media_storage=media_storage),
+            Messenger.wa: partial(build_wa_provider, media_storage=media_storage),
+        },
         register_timeout_sec=settings.register_timeout_sec,
         media_storage=media_storage,
         media_download_timeout_sec=settings.media_download_timeout_sec,

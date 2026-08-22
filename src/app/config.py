@@ -134,6 +134,19 @@ class Settings(BaseSettings):
     # файла/видео (по реверсу — до ~60с); выходит в общий бюджет
     # media_send_timeout_sec, невыполнение → send_timeout → ретрай outbox.
     max_upload_ready_timeout_sec: float = Field(60.0)
+
+    # WhatsApp (OpenWA-сайдкар: REST + Socket.IO «/events», движок Baileys).
+    # Пустой wa_api_key = канал не сконфигурирован (провайдер упадёт громко
+    # при попытке регистрации WA-аккаунта, остальные каналы не задеты).
+    wa_base_url: str = Field("http://openwa:2785")
+    wa_api_key: str = Field("")
+    # Egress WA-трафика сессии: WA блокирован в РФ-хостинге, OpenWA умеет
+    # per-session proxyUrl (socks5) — гоняем через тот же vless+Reality
+    # туннель, что и Telethon (xray-client).
+    wa_proxy_url: str = Field("socks5://xray-client:10808")
+    wa_request_timeout_sec: float = Field(20.0)
+    # QR-онбординг: окно всей сессии подключения (создание + QR + скан).
+    wa_onboarding_deadline_sec: float = Field(300.0)
     # Подхват новых active-аккаунтов bridge'ем (после QR-онбординга, без
     # рестарта) — период AccountSyncWorker.
     account_sync_interval_sec: float = Field(20.0)

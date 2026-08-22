@@ -61,6 +61,7 @@ async def fetch_sources(client: Bitrix24Client, auth_token: str) -> list[B24Sour
 _SOURCE_NAME_TOKENS: dict[Messenger, re.Pattern[str]] = {
     Messenger.tg: re.compile(r"\b(telegram|tg|телеграм|тг)\b", re.IGNORECASE),
     Messenger.max: re.compile(r"\b(max|макс)\b", re.IGNORECASE),
+    Messenger.wa: re.compile(r"\b(whatsapp|вотсап|ватсап|вацап)\b", re.IGNORECASE),
 }
 
 

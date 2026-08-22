@@ -135,11 +135,13 @@ def create_app() -> FastAPI:
     from app.models import Messenger
     from app.onboarding.max_channel import MaxOnboardingChannel
     from app.onboarding.tg_channel import TgOnboardingChannel
+    from app.onboarding.wa_channel import WaOnboardingChannel
 
     admin_api.register_channels(
         {
             Messenger.max: MaxOnboardingChannel(),
             Messenger.tg: TgOnboardingChannel(),
+            Messenger.wa: WaOnboardingChannel(),
         }
     )
 

@@ -55,6 +55,26 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # WhatsApp-шлюз (OpenWA, движок Baileys): REST :2785 + Socket.IO /events.
+  # Порт наружу НЕ публикуется (только docker-сеть); WA блокирован в РФ —
+  # сессии создаются с proxyUrl socks5://xray-client:10808 (vless+Reality,
+  # тот же туннель, что у Telethon). Дашборд оператору: ssh -L 2785:localhost:2785.
+  openwa:
+    logging: *default-logging
+    image: ghcr.io/rmyndharis/openwa@sha256:5683c4c2dcc259d45cbcaaa0e6b2e4ecf8f2ba0c4cdb38417c9d97a6f64559ac
+    container_name: openwa
+    environment:
+      - NODE_ENV=production
+      - ENGINE_TYPE=baileys
+      - RESOLVE_LID_TO_PHONE=true
+      - API_MASTER_KEY=${WA_API_KEY}
+    volumes:
+      - openwa_data:/app/data
+    expose:
+      - "2785"
+    mem_limit: 768m
+    restart: unless-stopped
+
   nginx:
     logging: *default-logging
     image: nginx:alpine
@@ -85,6 +105,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  openwa_data:
   pg_data:
   tg_sessions:
   media:

@@ -189,6 +189,44 @@ async def test_receipt_idempotent_and_unknown_dialog(db):
     )
 
 
+@pytest.mark.asyncio
+async def test_wa_exact_id_receipt_marks_only_that_message(db):
+    """WA (external_message_id, id нечисловой): прочитано ровно одно
+    сообщение; прочие sent не тронуты (закроются своими квитанциями)."""
+    await _seed(db, messenger=Messenger.wa)
+    async with db() as s:
+        s.add(_msg(50, MessageDirection.outbound, MessageStatus.sent, "true_7_3EB0AA"))
+        s.add(_msg(50, MessageDirection.outbound, MessageStatus.sent, "true_7_3EB0BB"))
+        s.add(_msg(50, MessageDirection.outbound, MessageStatus.pending))
+        await s.commit()
+
+    marker = ReadMarker(db)
+    count = await marker.apply(
+        ReadReceipt(
+            messenger=Messenger.wa,
+            external_chat_id="111",
+            external_message_id="true_7_3EB0AA",
+        ),
+        account=_account(1),
+    )
+    assert count == 1
+    rows = dict(await _statuses(db, 50))
+    assert rows["true_7_3EB0AA"] == MessageStatus.read
+    assert rows["true_7_3EB0BB"] == MessageStatus.sent
+    # Идемпотентность точной квитанции.
+    assert (
+        await marker.apply(
+            ReadReceipt(
+                messenger=Messenger.wa,
+                external_chat_id="111",
+                external_message_id="true_7_3EB0AA",
+            ),
+            account=_account(1),
+        )
+        == 0
+    )
+
+
 def test_matches_numeric_not_lexical():
     """Хелпер курсора: числовое сравнение, нечисловой/пустой id — False."""
     assert ReadMarker._matches(None, None) is True  # MAX: весь диалог

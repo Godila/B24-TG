@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.bridge.account_sync import AccountSyncWorker
+from app.bridge.account_sync import AccountSyncWorker, _account_credential
 from app.models import Messenger, TgAccount, TgAccountStatus
 
 
@@ -29,8 +29,8 @@ class FakeSm:
         provider = MagicMock()
         provider.is_connected.return_value = True
         provider.is_dead.return_value = False
-        # Провайдер «работает» на токене аккаунта, с которым зарегистрирован.
-        provider.credential_token.return_value = account.token
+        # Провайдер «работает» на креде своего канала (MAX token / WA session).
+        provider.credential_token.return_value = _account_credential(account)
         self._providers[account.id] = provider
         return provider
 
@@ -304,3 +304,94 @@ async def test_register_failure_hook_tg_revoked_session_terminal():
     assert "QR" in calls[0]
     # Оффлайн-запись в БД выполнена (аккаунт выпадает из ретраев).
     assert len(executed) == 2
+
+
+# --- WhatsApp: restriction-колонки + сверка кредов по wa_session_id ---
+
+@pytest.fixture
+async def wa_db():
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import StaticPool
+
+    from app.models import Base, Manager
+
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as s:
+        s.add(Manager(id=1, name="Менеджер 1", b24_user_id=15))
+        s.add(
+            TgAccount(
+                id=30,
+                messenger=Messenger.wa,
+                phone="+70000000030",
+                status=TgAccountStatus.active,
+                manager_id=1,
+                wa_session_id="s-30",
+            )
+        )
+        await s.commit()
+    yield factory
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_wa_restriction_persisted(wa_db):
+    from sqlalchemy import select
+
+    sm = FakeSm()
+    acc = TgAccount(
+        id=30,
+        messenger=Messenger.wa,
+        phone="+70000000030",
+        status=TgAccountStatus.active,
+        manager_id=1,
+        wa_session_id="s-30",
+    )
+    await sm.register(acc)
+    provider = sm._providers[30]
+    provider.credential_token.return_value = "s-30"
+    provider.restriction.return_value = {
+        "kind": "reachout_timelock",
+        "code": "BIZ_QUALITY",
+        "expiresAt": "2026-09-01T00:00:00Z",
+        "active": True,
+    }
+    worker = AccountSyncWorker(
+        sm=sm, handler=MagicMock(), session_factory=wa_db, interval_sec=0.01
+    )
+    await worker._sync_once()
+    assert sm.unregistered == []
+
+    async with wa_db() as s:
+        row = (await s.execute(select(TgAccount).where(TgAccount.id == 30))).scalar_one()
+        assert row.restriction_kind == "reachout_timelock"
+        assert row.restriction_until is not None
+    await worker.cancel_forwards()
+
+
+@pytest.mark.asyncio
+async def test_wa_rebind_detected_by_session_id(wa_db):
+    sm = FakeSm()
+    acc = TgAccount(
+        id=30,
+        messenger=Messenger.wa,
+        phone="+70000000030",
+        status=TgAccountStatus.active,
+        manager_id=1,
+        wa_session_id="s-30",
+    )
+    await sm.register(acc)
+    # Провайдер работает на старой сессии — строка перепривязана новым QR.
+    sm._providers[30].credential_token.return_value = "s-NEW"
+    worker = AccountSyncWorker(
+        sm=sm, handler=MagicMock(), session_factory=wa_db, interval_sec=0.01
+    )
+    await worker._sync_once()
+    assert sm.unregistered == [30]
+    await worker.cancel_forwards()

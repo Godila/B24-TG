@@ -106,3 +106,6 @@ class ReadReceipt:
     external_chat_id: str
     up_to_external_id: int | None = None
     read_at: datetime | None = None
+    #: Точное сообщение прочитано (WA message.ack: id нечисловой, курсорная
+    #: семантика неприменима). ReadMarker отмечает ровно его.
+    external_message_id: str | None = None

@@ -349,6 +349,7 @@ class SourceMappingIn(BaseModel):
 
     tg: str | None = Field(default=None, pattern="^" + SOURCE_ID_RE + "$")
     max: str | None = Field(default=None, pattern="^" + SOURCE_ID_RE + "$")
+    wa: str | None = Field(default=None, pattern="^" + SOURCE_ID_RE + "$")
 
 
 @router.get("/sources", response_model=None)
@@ -390,7 +391,7 @@ async def get_sources(supervisor: SupervisorDep) -> dict:
 
     mapping = await get_source_map(async_session)
     ids = {s.status_id.upper() for s in sources}
-    defaults = {m: channel_profile(m).source_id for m in (Messenger.tg, Messenger.max)}
+    defaults = {m: channel_profile(m).source_id for m in Messenger}
     # Равен дефолту канала — не «пропажа»: его отсутствие — отдельное
     # состояние (фолбэк+WARNING), бейдж должен подсвечивать только
     # явно выбранные записи.
@@ -411,13 +412,15 @@ async def put_sources_mapping(body: SourceMappingIn, supervisor: SupervisorDep) 
     """Сохранить маппинг канал→источник (частично: только переданные)."""
     from app.bridge.crm_sync_repo import get_source_map, set_source_map
 
-    if body.tg is None and body.max is None:
+    if body.tg is None and body.max is None and body.wa is None:
         raise HTTPException(status_code=422, detail="Нечего обновлять")
     current = await get_source_map(async_session)
     if body.tg is not None:
         current[Messenger.tg] = body.tg
     if body.max is not None:
         current[Messenger.max] = body.max
+    if body.wa is not None:
+        current[Messenger.wa] = body.wa
     await set_source_map(async_session, current)
     return {"mapping": {m.value: v for m, v in current.items()}}
 
@@ -470,6 +473,11 @@ async def list_lines(supervisor: SupervisorDep) -> list[dict]:
             "name": a.display_name,
             "status": a.status.value,
             "members": by_account.get(a.id, []),
+            # WA: ограничение WhatsApp (бейдж панели); None у прочих каналов.
+            "restriction_kind": a.restriction_kind,
+            "restriction_until": (
+                a.restriction_until.isoformat() if a.restriction_until else None
+            ),
         }
         for a in accounts
     ]
@@ -631,6 +639,13 @@ async def delete_line(account_id: int, supervisor: SupervisorDep) -> dict:
                     status=LoginCommandStatus.pending,
                 )
             )
+        elif account.messenger == Messenger.wa:
+            # Сессия живёт в OpenWA — гасим там, иначе движок держит RAM.
+            if account.wa_session_id:
+                from app.messaging.whatsapp.factory import cleanup_wa_session
+
+                await cleanup_wa_session(account.wa_session_id)
+            account.wa_session_id = None
         else:
             account.token = None
             account.device_id = None
@@ -822,6 +837,22 @@ async def unlink_account(account_id: int, supervisor: SupervisorDep) -> dict:
                 supervisor.id,
             )
             return {"status": "logout_scheduled"}
+        if account.messenger == Messenger.wa:
+            # Сессия в OpenWA: гасим там + локальная деактивация (AccountSync
+            # снимет провайдера по wa_session_id=None).
+            if account.wa_session_id:
+                from app.messaging.whatsapp.factory import cleanup_wa_session
+
+                await cleanup_wa_session(account.wa_session_id)
+            account.status = TgAccountStatus.offline
+            account.wa_session_id = None
+            await s.commit()
+            logger.info(
+                "WA аккаунт деактивирован: account_id=%s (by supervisor %s)",
+                account.id,
+                supervisor.id,
+            )
+            return {"status": "deactivated"}
         account.status = TgAccountStatus.offline
         account.token = None
         account.device_id = None

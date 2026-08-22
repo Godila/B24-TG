@@ -101,6 +101,12 @@ class MessengerProvider(ABC):
         TG: None (сессия в файле, перепривязку отслеживает путь файла)."""
         return None
 
+    def restriction(self) -> dict | None:
+        """Ограничение канала на аккаунте (прецедент — credential_token).
+        WA: restriction WhatsApp ({kind: tos_block|reachout_timelock, …}),
+        None = нет; AccountSync пишет его в строку линии для панели."""
+        return None
+
     # --- Резолв «написать первым»: ОПЦИОНАЛЬНАЯ возможность канала ---
     async def resolve_peer(self, dest: ParsedDest) -> ResolvedPeer | None:
         """Резолв телефона/@username → peer. None = не найден или скрыт

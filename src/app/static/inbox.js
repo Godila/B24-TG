@@ -748,6 +748,7 @@ function inboxApp() {
     channelLabel(messenger) {
       if (messenger === "max") return "MAX";
       if (messenger === "tg") return "TG";
+      if (messenger === "wa") return "WA";
       return "";
     },
 

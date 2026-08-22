@@ -54,6 +54,7 @@ html, body {
 }
 .channel-badge.tg { background: var(--tg-bg); color: var(--tg); }
 .channel-badge.max { background: var(--max-bg); color: var(--max); }
+.channel-badge.wa { background: var(--wa-bg); color: var(--wa); }
 .status { color: var(--meta); font-size: var(--fs-sm); }
 
 /* Лента сообщений */

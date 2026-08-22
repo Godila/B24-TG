@@ -31,6 +31,10 @@ CHANNEL_PROFILES: dict[Messenger, B24ChannelProfile] = {
         notify_label="MAX",
         source_id="MAX",
     ),
+    Messenger.wa: B24ChannelProfile(
+        notify_label="WhatsApp",
+        source_id="WHATSAPP",
+    ),
 }
 
 

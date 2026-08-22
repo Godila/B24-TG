@@ -68,7 +68,11 @@ class ReadMarker:
                     )
                 )
             ).all()
-            ids = [mid for mid, ext in rows if self._matches(ext, receipt.up_to_external_id)]
+            if receipt.external_message_id is not None:
+                # Точная квитанция (WA): id нечисловой, курсор неприменим.
+                ids = [mid for mid, ext in rows if ext == receipt.external_message_id]
+            else:
+                ids = [mid for mid, ext in rows if self._matches(ext, receipt.up_to_external_id)]
             if ids:
                 await session.execute(
                     update(Message).where(Message.id.in_(ids)).values(status=MessageStatus.read)

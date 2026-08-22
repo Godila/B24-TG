@@ -91,12 +91,20 @@
       var INSTRUCTIONS = {
         tg: "Откройте <b>Telegram → Настройки → Устройства → Подключить устройство</b> и наведите камеру на код.",
         max: "Откройте <b>MAX → Профиль → Устройства → Войти по QR-коду</b> и наведите камеру.",
+        wa: "Откройте <b>WhatsApp → Настройки → Связанные устройства → Связать устройство</b> и наведите камеру на код.",
       };
-      var CHANNEL = { tg: "Telegram", max: "MAX" };
+      var CHANNEL = { tg: "Telegram", max: "MAX", wa: "WhatsApp" };
       document.getElementById("steps").innerHTML =
         "<li>" + (INSTRUCTIONS[messenger] || INSTRUCTIONS.tg) + "</li>";
       document.getElementById("title").textContent =
         "Подключение номера" + (CHANNEL[messenger] ? " — " + CHANNEL[messenger] : "");
+      if (messenger === "wa") {
+        var warn = document.createElement("p");
+        warn.className = "hint";
+        warn.style.color = "var(--warn)";
+        warn.textContent = "Подключайте рабочий номер: WhatsApp может ограничить автоматизированные аккаунты.";
+        document.getElementById("steps").after(warn);
+      }
 
       var shownLink = null;
       function setState(text, cls) {
@@ -122,11 +130,19 @@
           if (login.qr_link !== shownLink) {
             shownLink = login.qr_link;
             qrbox.innerHTML = "";
-            new QRCode(qrbox, { text: login.qr_link, width: 220, height: 220 });
-            var lr = document.getElementById("linkrow");
-            lr.hidden = false;
-            lr.innerHTML = "Не получается сканировать? " +
-              '<a href="' + login.qr_link + '" >Открыть ссылку подтверждения</a>';
+            if (login.qr_link.indexOf("data:") === 0) {
+              // WA: готовый PNG из OpenWA — рендерить нечего, показываем как есть.
+              var img = document.createElement("img");
+              img.width = 220; img.height = 220; img.alt = "QR-код подключения";
+              img.src = login.qr_link;
+              qrbox.appendChild(img);
+            } else {
+              new QRCode(qrbox, { text: login.qr_link, width: 220, height: 220 });
+              var lr = document.getElementById("linkrow");
+              lr.hidden = false;
+              lr.innerHTML = "Не получается сканировать? " +
+                '<a href="' + login.qr_link + '" >Открыть ссылку подтверждения</a>';
+            }
           }
           setState("Ожидание подтверждения…");
         } else if (login.status === "waiting") {

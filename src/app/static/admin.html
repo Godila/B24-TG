@@ -70,9 +70,13 @@
     }
     .line-ico.tg { background: var(--tg-bg); color: var(--tg); }
     .line-ico.max { background: var(--max-bg); color: var(--max); }
+    .line-ico.wa { background: var(--wa-bg); color: var(--wa); }
     .line-title { flex: 1 1 220px; min-width: 0; }
     .line-name { font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .line-meta { color: var(--muted); font-size: var(--fs-xs); margin-top: 2px; font-variant-numeric: tabular-nums; }
+    .line-restriction { border-radius: var(--r-sm); padding: 1px 6px; font-size: var(--fs-2xs); white-space: nowrap; }
+    .line-restriction--warn { background: var(--warn-bg); color: var(--warn); }
+    .line-restriction--err { background: var(--err-bg); color: var(--err); }
     /* Провод моста (фирменный знак из лого): линия связи канала со статусом.
        Сплошная — подключён, пунктир — offline/ожидает; маячок = статус. */
     .line-status { display: flex; align-items: center; gap: 7px; flex: none; cursor: help; }
@@ -229,7 +233,8 @@
     .wz-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
     .wz h3 { margin: 0 0 4px; font-size: var(--fs-lg); display: flex; align-items: center; gap: 10px; }
     .wz .wz-sub { color: var(--muted); font-size: var(--fs-sm); margin: 0 0 16px; }
-    .wz-channels { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .wz-channels { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    @media (max-width: 480px) { .wz-channels { grid-template-columns: 1fr; } }
     .wz-channel {
       appearance: none; cursor: pointer; font-family: inherit;
       border: 1px solid var(--border); border-radius: var(--r-md);
@@ -241,6 +246,7 @@
     .wz-channel:hover { border-color: var(--accent); background: var(--accent-soft); }
     .wz-channel.tg svg.i { color: var(--tg); }
     .wz-channel.max svg.i { color: var(--max); }
+    .wz-channel.wa svg.i { color: var(--wa); }
     .wz-urlrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0 12px; }
     .wz-url {
       flex: 1 1 200px; min-width: 0; border: 1px solid var(--border); border-radius: var(--r-sm);
@@ -346,17 +352,20 @@
           <strong>Источник карточек CRM:</strong>
           <select class="line-add" id="source-tg" aria-label="Источник для Telegram"></select>
           <select class="line-add" id="source-max" aria-label="Источник для MAX"></select>
+          <select class="line-add" id="source-wa" aria-label="Источник для WhatsApp"></select>
           <button class="btn btn--ghost" id="sources-refresh" type="button">Обновить из CRM</button>
           <span id="sources-state" style="font-size:var(--fs-sm);color:var(--muted)"></span>
         </div>
         <p class="hint" style="margin:8px 0 0">
           Выбранная запись подставляется в поле «Источник» новых карточек
           (название в CRM — то, что у записи в справочнике). Новые записи
-          заводит scripts/add_max_source.py.
+          заводит scripts/add_max_source.py / add_wa_source.py.
           <span id="source-tg-missing" hidden style="color:var(--err)">
             Telegram: выбранного источника нет в CRM.</span>
           <span id="source-max-missing" hidden style="color:var(--err)">
             MAX: выбранного источника нет в CRM.</span>
+          <span id="source-wa-missing" hidden style="color:var(--err)">
+            WhatsApp: выбранного источника нет в CRM.</span>
         </p>
         <div class="set-row" style="margin-top:12px">
           <strong>Дублировать переписку в таймлайн CRM:</strong>
@@ -608,13 +617,14 @@
         const d = await api("/admin/api/sources");
         renderSourceSelect("source-tg", "tg", d);
         renderSourceSelect("source-max", "max", d);
+        renderSourceSelect("source-wa", "wa", d);
         return d;
       } catch (e) {
         if (showErrors) showToast("Не получилось загрузить источники: " + e.message);
         return null;
       }
     }
-    ["tg", "max"].forEach((ch) => {
+    ["tg", "max", "wa"].forEach((ch) => {
       document.getElementById("source-" + ch).addEventListener("change", async (ev) => {
         try {
           await api("/admin/api/sources/mapping", {
@@ -671,9 +681,20 @@
         : '<span class="badge warn">офлайн</span>';
     }
 
+    /** Ограничение WhatsApp на линии (WA): честный сурфейсинг бан-риска. */
+    function restrictionBadge(ln) {
+      if (!ln.restriction_kind) return "";
+      if (ln.restriction_kind === "tos_block") {
+        return ' <span class="line-restriction line-restriction--err">Номер заблокирован WhatsApp</span>';
+      }
+      var until = ln.restriction_until
+        ? " до " + new Date(ln.restriction_until).toLocaleDateString("ru-RU") : "";
+      return ' <span class="line-restriction line-restriction--warn">WhatsApp ограничил новые чаты' + until + "</span>";
+    }
+
     /** Строка линии. Плейсхолдер телефона (`TG-line-…`) наружу не показываем. */
     function lineRow(ln) {
-      const ico = ln.messenger === "tg" ? "send" : "message";
+      const ico = { tg: "send", max: "message", wa: "wa" }[ln.messenger] || "message";
       const isBlank = /-line-/.test(ln.phone || "");
       const meta = CHANNEL[ln.messenger] || ln.messenger.toUpperCase();
       const metaTail = isBlank ? "номер ещё не подключён" : esc(ln.phone);
@@ -709,7 +730,7 @@
           '<span class="line-ico ' + ln.messenger + '">' + ic(ico, "i--18") + "</span>" +
           '<div class="line-title">' +
             '<div class="line-name">' + esc(ln.name || (isBlank ? "Новый номер" : ln.phone)) + "</div>" +
-            '<div class="line-meta">' + meta + " · " + metaTail + "</div>" +
+            '<div class="line-meta">' + meta + " · " + metaTail + restrictionBadge(ln) + "</div>" +
           "</div>" +
           '<div class="line-status" title="Связь мессенджера с ЧатМост:' +
             ' сплошная линия — подключён, пунктир — offline или ожидает подключения">' +
@@ -777,7 +798,7 @@
 
     // Офлайн/заблокированные линии — первыми: это то, что требует внимания.
     const LINE_ORDER = { banned: 0, offline: 1, active: 2 };
-    const CHANNEL = { tg: "Telegram", max: "MAX" };
+    const CHANNEL = { tg: "Telegram", max: "MAX", wa: "WhatsApp" };
 
     async function loadManagers() {
       let rows;
@@ -1094,6 +1115,7 @@
         '<div class="wz-channels">' +
           '<button class="wz-channel tg" data-channel="tg" type="button">' + ic("send") + "Telegram</button>" +
           '<button class="wz-channel max" data-channel="max" type="button">' + ic("message") + "MAX</button>" +
+          '<button class="wz-channel wa" data-channel="wa" type="button">' + ic("wa") + "WhatsApp</button>" +
         "</div>"
       );
       wzBody.querySelectorAll(".wz-channel").forEach((b) => {

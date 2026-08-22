@@ -361,7 +361,7 @@ async def test_get_sources_lists_flags_and_mapping(db, monkeypatch):
     await admin_api.put_sources_mapping(admin_api.SourceMappingIn(tg="GONE"), supervisor)
 
     result = await admin_api.get_sources(supervisor)
-    assert result["defaults"] == {"tg": "telegram", "max": "MAX"}
+    assert result["defaults"] == {"tg": "telegram", "max": "MAX", "wa": "WHATSAPP"}
     assert result["sources"] == [
         {"status_id": "TELEGRAM", "name": "Telegram (мессенджер)"},
         {"status_id": "CALL", "name": "Звонок"},

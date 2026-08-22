@@ -22,6 +22,7 @@
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -36,6 +37,27 @@ logger = logging.getLogger(__name__)
 
 ForwardFn = Callable[..., Awaitable[None]]
 RegisterFailureHook = Callable[[TgAccount, Exception], Awaitable[None]]
+
+
+def _account_credential(account: TgAccount) -> str | None:
+    """Кред-токен строки аккаунта для сверки с провайдером (перепривязка):
+    MAX — token, WA — wa_session_id, TG — сессия в файле (None)."""
+    if account.messenger is Messenger.max:
+        return account.token
+    if account.messenger is Messenger.wa:
+        return account.wa_session_id
+    return None
+
+
+def _restriction_until(restriction: dict | None) -> datetime | None:
+    """expiresAt ISO → datetime (информационный тултип бейджа)."""
+    expires = restriction.get("expiresAt") if restriction else None
+    if not expires:
+        return None
+    try:
+        return datetime.fromisoformat(str(expires))
+    except ValueError:
+        return None
 
 
 class AccountSyncWorker:
@@ -119,12 +141,14 @@ class AccountSyncWorker:
             account = active_by_id[account_id]
             if provider is None or account is None:
                 continue
-            if provider.credential_token() != account.token:
+            if _account_credential(account) != provider.credential_token():
                 await self._unregister(account_id, reason="credentials rotated")
                 continue
             if provider.is_dead():
                 await self._unregister(account_id, reason="provider dead")
                 continue
+            if account.messenger is Messenger.wa:
+                await self._sync_restriction(account_id, provider)
             # Оживление: провайдер зарегистрирован, но соединения нет
             # N тиков подряд (TG с auto_reconnect=False сам не лечится;
             # MAX обычно укладывается в грейс своим backoff 2..32с).
@@ -180,7 +204,33 @@ class AccountSyncWorker:
             account = (
                 await s.execute(select(TgAccount).where(TgAccount.id == account_id))
             ).scalar_one_or_none()
-        return account is not None and account.token is None and account.messenger == Messenger.max
+        if account is None:
+            return False
+        if account.messenger == Messenger.max:
+            return account.token is None
+        if account.messenger == Messenger.wa:
+            return account.wa_session_id is None
+        return False
+
+    async def _sync_restriction(self, account_id: int, provider) -> None:
+        """WA: restriction провайдера → колонки строки линии (бейдж панели).
+        Пишем только при смене kind (каденс тика 20с — без лишних UPDATE).
+        # ponytail: B24-алерт при появлении restriction — add when юзер попросит
+        """
+        restriction = provider.restriction()
+        kind = restriction.get("kind") if restriction else None
+        async with self._session_factory() as s:
+            account = (
+                await s.execute(select(TgAccount).where(TgAccount.id == account_id))
+            ).scalar_one_or_none()
+            if account is None or account.restriction_kind == kind:
+                return
+            account.restriction_kind = kind
+            account.restriction_until = _restriction_until(restriction)
+            await s.commit()
+        logger.warning(
+            "AccountSync: WA restriction account_id=%s kind=%s", account_id, kind
+        )
 
     def _start_forward(self, account_id: int, provider, account) -> None:
         if account_id in self._forward_tasks and not self._forward_tasks[account_id].done():

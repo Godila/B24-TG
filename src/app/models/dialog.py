@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 class Messenger(str, enum.Enum):
     tg = "tg"
     max = "max"
+    wa = "wa"
 
 
 class DialogStatus(str, enum.Enum):

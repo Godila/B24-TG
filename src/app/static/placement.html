@@ -142,7 +142,7 @@
         <div class="initiate-row" x-show="initMessengers.length > 1">
           <template x-for="m in initMessengers" :key="m">
             <button type="button" class="initiate-chip" :class="{active: initMessenger === m}"
-              @click="setInitMessenger(m)" x-text="m === 'tg' ? 'Telegram' : 'MAX'"></button>
+              @click="setInitMessenger(m)" x-text="{ tg: 'Telegram', max: 'MAX', wa: 'WhatsApp' }[m]"></button>
           </template>
         </div>
         <label class="initiate-label" x-show="initAccounts.length > 1">Аккаунт отправки
