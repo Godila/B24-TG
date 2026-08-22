@@ -25,9 +25,14 @@ class OnAppInstallAuth(BaseModel):
     обязательны там жёстко (KeyError), остальные приходят в реальном payload B24.
     ``user_id``/``expires_in`` B24 может присылать строками — pydantic v2 lax-mode
     приводит их к int.
+
+    extra="ignore": живой кейс 08-22 — переустановка после выдачи новых прав
+    прислала в auth незнакомое поле, forbid завалил установку 422 и токен
+    с новыми scope не сохранился. Лишние поля не несут доверия — его
+    закрывает самопроверка токена (user.current).
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     access_token: str
     refresh_token: str

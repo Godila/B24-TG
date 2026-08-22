@@ -70,8 +70,12 @@ async def on_app_install(request: Request) -> JSONResponse:
     auth_raw = payload.get("auth", {}) if isinstance(payload, dict) else {}
     try:
         auth = OnAppInstallAuth.model_validate(auth_raw)
-    except ValidationError:
-        logger.warning("ONAPPINSTALL: invalid auth payload rejected")
+    except ValidationError as exc:
+        # Только имена полей (missing/типы) — без значений: в auth лежат токены.
+        problems = [
+            f"{'.'.join(str(l) for l in e['loc'])}: {e['type']}" for e in exc.errors()
+        ]
+        logger.warning("ONAPPINSTALL: invalid auth payload rejected: %s", problems)
         return JSONResponse({"error": "validation error"}, status_code=422)
 
     settings = get_settings()

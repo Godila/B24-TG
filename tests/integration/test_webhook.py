@@ -62,6 +62,24 @@ def test_onappinstall_without_header_selfcheck_ok_saves(client):
     tm.save_install_data.assert_awaited_once()
 
 
+def test_onappinstall_unknown_auth_fields_tolerated(client):
+    """Живой кейс 08-22: переустановка после выдачи новых прав прислала в auth
+    незнакомое поле — forbid валил установку 422, токен с новыми scope
+    терялся. Лишние поля игнорируем."""
+    payload = {**AUTH_PAYLOAD, "some_new_b24_field": "value"}
+    with patch("app.web.routes.webhook.get_token_manager") as mock_get,          patch("app.web.routes.webhook._token_belongs_to_portal",
+               new=AsyncMock(return_value=True)):
+        tm = AsyncMock()
+        tm.save_install_data = AsyncMock()
+        mock_get.return_value = tm
+        response = client.post(
+            "/webhook/b24/onappinstall", json={"event": "ONAPPINSTALL", "auth": payload},
+        )
+
+    assert response.status_code == 200
+    tm.save_install_data.assert_awaited_once()
+
+
 def test_onappinstall_with_wrong_secret_returns_401(client):
     """Неверное значение секрета и битый токен (self-check fail) — тоже 401."""
     with patch("app.web.routes.webhook._token_belongs_to_portal",
